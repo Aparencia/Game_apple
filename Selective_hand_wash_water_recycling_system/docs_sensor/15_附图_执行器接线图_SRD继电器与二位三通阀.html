@@ -1,0 +1,377 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>附-15 执行器接线图：P104 → SRD-05VDC-SL-C 继电器模块 → 12V 二位三通电磁阀</title>
+<style>
+  :root{
+    --ink:#0f172a; --muted:#475569; --line:#94a3b8; --bg:#f8fafc; --card:#ffffff;
+    --blue:#1d4ed8; --blue-bg:#dbeafe; --green:#047857; --green-bg:#d1fae5;
+    --orange:#b45309; --orange-bg:#fef3c7; --red:#b91c1c; --red-bg:#fee2e2;
+    --purple:#6d28d9; --purple-bg:#ede9fe; --gray-bg:#e2e8f0;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;padding:28px 18px 60px;background:var(--bg);color:var(--ink);
+       font-family:"Microsoft YaHei","PingFang SC","Noto Sans CJK SC",system-ui,sans-serif;line-height:1.65}
+  .wrap{max-width:1180px;margin:0 auto}
+  header{background:linear-gradient(135deg,#0f172a,#1e3a8a);color:#fff;border-radius:14px;padding:22px 26px;margin-bottom:20px}
+  header h1{margin:0 0 6px;font-size:24px;letter-spacing:.5px}
+  header .sub{margin:0;color:#c7d2fe;font-size:14px}
+  header .warn{margin:12px 0 0;background:rgba(254,226,226,.14);border-left:4px solid #fca5a5;
+               padding:8px 12px;border-radius:6px;font-size:14px;color:#fee2e2}
+  h2{font-size:19px;margin:30px 0 10px;padding-left:10px;border-left:5px solid var(--blue)}
+  .card{background:var(--card);border:1px solid #e2e8f0;border-radius:12px;padding:18px 20px;margin:14px 0;
+        box-shadow:0 1px 2px rgba(15,23,42,.05)}
+  .two{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  @media(max-width:900px){.two{grid-template-columns:1fr}}
+  table{border-collapse:collapse;width:100%;font-size:14px;margin:8px 0}
+  th,td{border:1px solid #cbd5e1;padding:7px 9px;text-align:left;vertical-align:top}
+  th{background:#eef2ff;font-weight:600}
+  tbody tr:nth-child(even){background:#f8fafc}
+  code,.mono{font-family:Consolas,"Cascadia Mono",monospace;font-size:13px}
+  .chip{display:inline-block;border-radius:999px;padding:1px 9px;font-size:12px;font-weight:600;margin-right:4px}
+  .c-blue{background:var(--blue-bg);color:var(--blue)}
+  .c-green{background:var(--green-bg);color:var(--green)}
+  .c-orange{background:var(--orange-bg);color:var(--orange)}
+  .c-red{background:var(--red-bg);color:var(--red)}
+  .c-purple{background:var(--purple-bg);color:var(--purple)}
+  .c-gray{background:var(--gray-bg);color:var(--muted)}
+  .box{border-radius:10px;padding:12px 14px;font-size:14px;margin:10px 0}
+  .box-red{background:var(--red-bg);border:1px solid #fca5a5}
+  .box-orange{background:var(--orange-bg);border:1px solid #fcd34d}
+  .box-blue{background:var(--blue-bg);border:1px solid #93c5fd}
+  .box-green{background:var(--green-bg);border:1px solid #6ee7b7}
+  ul,ol{margin:8px 0 8px 22px;padding:0}
+  li{margin:4px 0}
+  .legend{display:flex;flex-wrap:wrap;gap:14px;font-size:13px;color:var(--muted);margin:6px 0 0}
+  .legend span::before{content:"";display:inline-block;width:18px;height:4px;border-radius:2px;margin-right:6px;vertical-align:middle;background:var(--line)}
+  .l-red::before{background:#dc2626!important}
+  .l-blue::before{background:#2563eb!important}
+  .l-green::before{background:#059669!important}
+  .l-black::before{background:#111827!important}
+  .l-orange::before{background:#ea580c!important}
+  footer{margin-top:34px;color:var(--muted);font-size:13px;text-align:center}
+  svg{width:100%;height:auto;display:block}
+  .cap{font-size:13px;color:var(--muted);margin-top:8px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <h1>执行器接线图：P104 → SRD-05VDC-SL-C 单路继电器模块 → 12V 二位三通电磁阀</h1>
+  <p class="sub">工程 Selective_hand_wash_water_recycling_system ｜ 主控 RA4M2_MINI（R7FA4M2AD3CFL）｜ 固件 v1.2.0-VALVE ｜ 2026-11-13</p>
+  <p class="warn">⚠ 断电接线、先量后通、先判定极性再接 12V。开发板是借的：只接排针/端子，禁止割线、焊死、拆焊板载器件。本页是《15_执行器_二位三通电磁阀_SRD-05VDC-SL-C继电器模块.txt》的附图，施工以 15 文档正文为准。</p>
+</header>
+
+<section class="card">
+  <h2 id="overview">0. 一句话与安全边界</h2>
+  <p><b>控制链：</b>RA4M2 的 <span class="chip c-blue">P104 / U2-8</span> → 继电器模块 <span class="chip c-purple">IN</span>；模块常开触点 <span class="chip c-orange">COM–NO</span> 把独立 12V 接到二位三通阀的<b>单线圈</b>。<b>断电 = 线圈失电 = 弹簧复位 = 排空口通（fail-safe）</b>；通电才换向到回收口。</p>
+  <div class="two">
+    <div class="box box-red">
+      <b>绝对不做</b>
+      <ul>
+        <li>不从开发板 5V/3V3 给 12V 阀取电（阀 0.4~1.1 A，会把 MCU 拉复位）；</li>
+        <li>不在没做极性判定（本页 §4）时接 12V 上电；</li>
+        <li>不把阀串在主排水路上（只切回收/排空支路，主排水路永远通）；</li>
+        <li>不把 5V 模块的模拟/数字输出直连 3.3V 引脚（本页只涉及 IN，属 3.3V 逻辑，安全）。</li>
+      </ul>
+    </div>
+    <div class="box box-green">
+      <b>三道保险（缺一不可）</b>
+      <ul>
+        <li><b>10 kΩ 下拉</b>（高触发模块）或 <b>10 kΩ 上拉 3.3V</b>（低触发模块）——覆盖复位高阻期；</li>
+        <li>软件最早把 P104 锁在“继电器释放”电平（固件 v1.2.0 第一步）；</li>
+        <li><b>12V 船型开关</b>装在继电器触点上游——触点粘连/阀卡死时现场断电兜底。</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<section class="card">
+  <h2 id="control">1. 控制侧接线（3.3V 逻辑，与模块共地）</h2>
+  <p>模块类型先认清（详见 15 文档 §3）：<span class="chip c-purple">A = 带 JD-VCC 跳线的光耦隔离型</span> <span class="chip c-gray">B = 三针 VCC/GND/IN（可能带高/低触发跳线）</span>。默认固件按 <b>高电平触发</b> 构建（回收=HIGH、排空=LOW）；模块实测为低电平触发时，换低触发 hex 或改宏重编，并把下拉改上拉。</p>
+
+  <svg viewBox="0 0 1100 500" role="img" aria-label="控制侧接线图：RA4M2 P104 经 10k 下拉接继电器 IN，模块 VCC 接 VIN，GND 共地，VCC-GND 就近去耦">
+    <defs>
+      <marker id="arr" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto">
+        <path d="M0,0 L9,4.5 L0,9 z" fill="#334155"/>
+      </marker>
+    </defs>
+
+    <!-- ===== 开发板 ===== -->
+    <rect x="30" y="30" width="300" height="440" rx="14" fill="#eef2ff" stroke="#312e81" stroke-width="2"/>
+    <text x="180" y="60" text-anchor="middle" font-size="17" font-weight="700" fill="#312e81">RA4M2_MINI 开发板</text>
+    <text x="180" y="82" text-anchor="middle" font-size="12" fill="#64748b">孔序：从板子下端往 Type-C 方向数</text>
+
+    <rect x="55" y="115" width="250" height="46" rx="6" fill="#fff" stroke="#1d4ed8" stroke-width="2"/>
+    <text x="68" y="136" font-size="14" font-weight="700" fill="#1d4ed8">P104（U2-8）</text>
+    <text x="68" y="154" font-size="12" fill="#475569">GPIO 输出 → 继电器 IN（唯一执行器）</text>
+
+    <rect x="55" y="172" width="250" height="46" rx="6" fill="#fff" stroke="#b45309" stroke-width="2"/>
+    <text x="68" y="193" font-size="14" font-weight="700" fill="#b45309">VIN（U2-19 / U2-20）</text>
+    <text x="68" y="211" font-size="12" fill="#475569">≈4.5~4.7 V → 模块 VCC</text>
+
+    <rect x="55" y="229" width="250" height="46" rx="6" fill="#fff" stroke="#111827" stroke-width="2"/>
+    <text x="68" y="250" font-size="14" font-weight="700" fill="#111827">GND（U2-18 / 地排）</text>
+    <text x="68" y="268" font-size="12" fill="#475569">与模块 GND、12V(−) 单点汇合</text>
+
+    <rect x="55" y="286" width="250" height="46" rx="6" fill="#fff" stroke="#64748b" stroke-width="2" stroke-dasharray="5 3"/>
+    <text x="68" y="307" font-size="14" font-weight="700" fill="#475569">3V3（U1-12，可选）</text>
+    <text x="68" y="325" font-size="12" fill="#475569">仅低触发的 10k 上拉 / 拆 JD-VCC 时用</text>
+
+    <text x="180" y="378" text-anchor="middle" font-size="12" fill="#b91c1c">禁止：把外部 5V 灌进 VIN 排针；</text>
+    <text x="180" y="398" text-anchor="middle" font-size="12" fill="#b91c1c">禁止同时用电脑 USB 与外部 5V 给板供电</text>
+    <text x="180" y="432" text-anchor="middle" font-size="11.5" fill="#64748b">上电顺序：先板、后外设；断电先外设、后板</text>
+
+    <!-- ===== 三根控制线 ===== -->
+    <line x1="305" y1="138" x2="800" y2="138" stroke="#dc2626" stroke-width="3" marker-end="url(#arr)"/>
+    <text x="520" y="128" text-anchor="middle" font-size="12.5" font-weight="700" fill="#b91c1c">IN（红）</text>
+    <line x1="305" y1="195" x2="800" y2="195" stroke="#ea580c" stroke-width="3" marker-end="url(#arr)"/>
+    <text x="520" y="185" text-anchor="middle" font-size="12.5" font-weight="700" fill="#b45309">VCC（橙）</text>
+    <line x1="305" y1="252" x2="800" y2="252" stroke="#111827" stroke-width="3" marker-end="url(#arr)"/>
+    <text x="520" y="242" text-anchor="middle" font-size="12.5" font-weight="700" fill="#111827">GND（黑，必须共地）</text>
+
+    <!-- ===== 10k 下拉（高触发；低触发改上拉） ===== -->
+    <line x1="470" y1="138" x2="470" y2="330" stroke="#dc2626" stroke-width="2" stroke-dasharray="6 4"/>
+    <rect x="450" y="330" width="40" height="52" rx="4" fill="#fff" stroke="#dc2626" stroke-width="2"/>
+    <text x="470" y="362" text-anchor="middle" font-size="12" font-weight="700" fill="#b91c1c">10k</text>
+    <line x1="470" y1="382" x2="470" y2="420" stroke="#111827" stroke-width="2"/>
+    <line x1="452" y1="420" x2="488" y2="420" stroke="#111827" stroke-width="3"/>
+    <line x1="458" y1="428" x2="482" y2="428" stroke="#111827" stroke-width="3"/>
+    <line x1="464" y1="436" x2="476" y2="436" stroke="#111827" stroke-width="3"/>
+    <text x="470" y="462" text-anchor="middle" font-size="12.5" font-weight="700" fill="#b91c1c">P104 下拉到 GND（高触发模块）</text>
+    <text x="470" y="480" text-anchor="middle" font-size="11.5" fill="#475569">低触发模块：改为 10k 上拉到 3.3V</text>
+    <text x="470" y="118" text-anchor="middle" font-size="11.5" fill="#64748b">★ 必须焊，覆盖复位高阻期</text>
+
+    <!-- ===== 去耦（就近并到模块 VCC-GND） ===== -->
+    <rect x="580" y="300" width="200" height="120" rx="10" fill="#fffbeb" stroke="#b45309" stroke-width="2" stroke-dasharray="6 3"/>
+    <text x="680" y="324" text-anchor="middle" font-size="12.5" font-weight="700" fill="#b45309">去耦（就近并到 VCC–GND）</text>
+    <!-- cap symbol 100uF -->
+    <line x1="640" y1="340" x2="640" y2="366" stroke="#b45309" stroke-width="2"/>
+    <line x1="624" y1="366" x2="656" y2="366" stroke="#b45309" stroke-width="3"/>
+    <line x1="624" y1="374" x2="656" y2="374" stroke="#b45309" stroke-width="3"/>
+    <line x1="640" y1="374" x2="640" y2="400" stroke="#b45309" stroke-width="2"/>
+    <text x="664" y="374" font-size="11.5" fill="#b45309">100 µF 电解</text>
+    <!-- cap symbol 0.1uF -->
+    <line x1="640" y1="340" x2="740" y2="340" stroke="#b45309" stroke-width="2"/>
+    <line x1="740" y1="340" x2="740" y2="358" stroke="#b45309" stroke-width="2"/>
+    <line x1="726" y1="358" x2="754" y2="358" stroke="#b45309" stroke-width="3"/>
+    <line x1="726" y1="366" x2="754" y2="366" stroke="#b45309" stroke-width="3"/>
+    <line x1="740" y1="366" x2="740" y2="400" stroke="#b45309" stroke-width="2"/>
+    <line x1="640" y1="400" x2="740" y2="400" stroke="#b45309" stroke-width="2"/>
+    <text x="756" y="386" font-size="11.5" fill="#b45309">0.1 µF 瓷片</text>
+    <text x="680" y="415" text-anchor="middle" font-size="11" fill="#64748b">吸合瞬间电流大，防 VIN 被拉跌</text>
+
+    <!-- ===== 继电器模块 ===== -->
+    <rect x="800" y="30" width="280" height="440" rx="14" fill="#ede9fe" stroke="#6d28d9" stroke-width="2"/>
+    <text x="940" y="60" text-anchor="middle" font-size="16.5" font-weight="700" fill="#4c1d95">SRD-05VDC-SL-C 模块</text>
+    <text x="940" y="82" text-anchor="middle" font-size="12" fill="#64748b">5V 线圈 ｜ 光耦输入 ｜ 触点 10A</text>
+
+    <rect x="820" y="112" width="240" height="38" rx="5" fill="#fff" stroke="#1d4ed8" stroke-width="2"/>
+    <text x="940" y="137" text-anchor="middle" font-size="13" font-weight="700" fill="#1d4ed8">IN ← P104（3.3V）</text>
+    <rect x="820" y="169" width="240" height="38" rx="5" fill="#fff" stroke="#b45309" stroke-width="2"/>
+    <text x="940" y="194" text-anchor="middle" font-size="13" font-weight="700" fill="#b45309">VCC ← VIN（4.5~4.7 V）</text>
+    <rect x="820" y="226" width="240" height="38" rx="5" fill="#fff" stroke="#111827" stroke-width="2"/>
+    <text x="940" y="251" text-anchor="middle" font-size="13" font-weight="700" fill="#111827">GND ← 地排（共地）</text>
+
+    <rect x="820" y="280" width="240" height="46" rx="5" fill="#f5f3ff" stroke="#6d28d9" stroke-width="1.5" stroke-dasharray="5 3"/>
+    <text x="940" y="299" text-anchor="middle" font-size="11.5" fill="#6d28d9">JD-VCC 跳线（A 型才有）：</text>
+    <text x="940" y="316" text-anchor="middle" font-size="11.5" fill="#6d28d9">可拆 → VCC 接 3.3V、JD-VCC 接 VIN</text>
+
+    <text x="940" y="352" text-anchor="middle" font-size="13" font-weight="700" fill="#4c1d95">触点侧（SPDT，接 12V 回路）</text>
+    <rect x="820" y="364" width="70" height="38" rx="4" fill="#fff" stroke="#ea580c" stroke-width="2"/>
+    <text x="855" y="389" text-anchor="middle" font-size="13" font-weight="700" fill="#b45309">COM</text>
+    <rect x="900" y="364" width="70" height="38" rx="4" fill="#fff" stroke="#059669" stroke-width="2"/>
+    <text x="935" y="389" text-anchor="middle" font-size="13" font-weight="700" fill="#047857">NO</text>
+    <rect x="980" y="364" width="80" height="38" rx="4" fill="#f8fafc" stroke="#94a3b8" stroke-width="2" stroke-dasharray="5 3"/>
+    <text x="1020" y="389" text-anchor="middle" font-size="13" font-weight="700" fill="#64748b">NC 不接</text>
+    <text x="940" y="428" text-anchor="middle" font-size="11.5" fill="#475569">吸合：COM–NO 导通（回收）</text>
+    <text x="940" y="447" text-anchor="middle" font-size="11.5" fill="#475569">释放：COM–NO 断开（排空 = fail-safe）</text>
+  </svg>
+  <p class="cap"><b>图 1</b> 控制侧：P104 → IN；模块 VCC 从 U2-19/20（VIN≈4.5~4.7 V）取电；GND 与板共地；P104 对 GND 加 10 kΩ 下拉（高触发，默认）或对 3.3V 加 10 kΩ 上拉（低触发）；模块 VCC–GND 就近并 100 µF 电解 + 0.1 µF 瓷片。触点侧接线见下图。</p>
+
+  <div class="box box-blue">
+    <b>模块类型与 3.3V 触发可靠性（决定默认用 high 还是 low 版）</b>
+    <ul>
+      <li><b>A 型（带 JD-VCC 跳线，推荐）</b>：跳线保留时 VCC=JD-VCC=4.5~4.7 V，输入 LED 侧参考 VCC，3.3V 高电平可能“关不断/半开”。最稳接法：<b>拆掉 JD-VCC 跳线</b>，VCC → 3.3V（U1-12）、JD-VCC → VIN（U2-19/20）、GND 仍共地；控制侧电流仅几 mA，线圈仍由 5V 侧供电（约 62~68mA）。拆跳线后光耦两侧不再共电源，但 GND 仍相连，<b>不提供电气隔离</b>。</li>
+      <li><b>B 型（三针）</b>：VCC 只能接 VIN。高触发光耦型一般可由 3.3V 驱动；低触发光耦型在 VCC=5V、IN=3.3V 时可能无法可靠关断（残余 0.1~0.2mA）→ 换 low 版 + 10 kΩ 上拉仍不稳时，改用 A 型/加三极管电平转换，不要硬凑。</li>
+      <li><b>❌ 三针且无光耦的 PNP 低触发款：禁止直连 P104。</b>IN 悬空/高阻时会被 PNP 抬到约 4.3 V，而 P104 不是 5V 容忍脚（绝对最大 3.6V），可能打坏 MCU。必须加 NPN/MOS/ULN2003 电平转换或更换模块。</li>
+      <li>判定标准：<b>V1/V0 连续 10 次全部动作、复位/上电 10 次全部不动作</b>，才算触发可靠（15 文档 §4.3）。</li>
+    </ul>
+  </div>
+</section>
+
+<section class="card">
+  <h2 id="power">2. 功率侧接线（独立 12V，只给阀）</h2>
+  <svg viewBox="0 0 1100 430" role="img" aria-label="功率侧接线图：12V 适配器经 2A 保险丝与船型开关到继电器 COM，NO 到阀线圈，线圈并 1N4007，单点共地">
+    <defs>
+      <marker id="arr2" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto">
+        <path d="M0,0 L9,4.5 L0,9 z" fill="#334155"/>
+      </marker>
+      <marker id="dot" markerWidth="6" markerHeight="6" refX="3" refY="3">
+        <circle cx="3" cy="3" r="2.4" fill="#0f172a"/>
+      </marker>
+    </defs>
+
+    <!-- 顶部 12V+ 回路 -->
+    <line x1="150" y1="120" x2="1100" y2="120" stroke="#dc2626" stroke-width="3"/>
+    <!-- adapter -->
+    <rect x="20" y="70" width="150" height="100" rx="10" fill="#f1f5f9" stroke="#0f172a" stroke-width="2"/>
+    <text x="95" y="96" text-anchor="middle" font-size="13.5" font-weight="700" fill="#0f172a">220V → 12V/3A</text>
+    <text x="95" y="116" text-anchor="middle" font-size="12" fill="#475569">适配器（内正外负）</text>
+    <text x="95" y="136" text-anchor="middle" font-size="12" fill="#b91c1c">12V 只供阀</text>
+    <text x="95" y="154" text-anchor="middle" font-size="11.5" fill="#b91c1c">不接开发板</text>
+    <line x1="170" y1="120" x2="205" y2="120" stroke="#dc2626" stroke-width="3" marker-end="url(#arr2)"/>
+
+    <!-- fuse -->
+    <rect x="205" y="96" width="110" height="48" rx="7" fill="#fef3c7" stroke="#b45309" stroke-width="2"/>
+    <text x="260" y="118" text-anchor="middle" font-size="13" font-weight="700" fill="#b45309">2A 保险丝</text>
+    <text x="260" y="135" text-anchor="middle" font-size="11" fill="#b45309">慢熔</text>
+    <line x1="315" y1="120" x2="350" y2="120" stroke="#dc2626" stroke-width="3" marker-end="url(#arr2)"/>
+
+    <!-- switch -->
+    <rect x="350" y="96" width="130" height="48" rx="7" fill="#fee2e2" stroke="#b91c1c" stroke-width="2"/>
+    <text x="415" y="118" text-anchor="middle" font-size="13" font-weight="700" fill="#b91c1c">船型开关</text>
+    <text x="415" y="135" text-anchor="middle" font-size="11" fill="#b91c1c">在触点上游</text>
+    <line x1="480" y1="120" x2="540" y2="120" stroke="#dc2626" stroke-width="3" marker-end="url(#arr2)"/>
+
+    <!-- relay contacts -->
+    <rect x="540" y="60" width="300" height="200" rx="12" fill="#ede9fe" stroke="#6d28d9" stroke-width="2"/>
+    <text x="690" y="86" text-anchor="middle" font-size="14" font-weight="700" fill="#4c1d95">继电器触点（模块内）</text>
+    <text x="690" y="104" text-anchor="middle" font-size="11.5" fill="#64748b">SRD-05VDC-SL-C：SPDT COM/NO/NC</text>
+    <!-- COM -->
+    <circle cx="600" cy="150" r="6" fill="#b45309"/>
+    <text x="600" y="132" text-anchor="middle" font-size="12.5" font-weight="700" fill="#b45309">COM</text>
+    <line x1="540" y1="120" x2="540" y2="150" stroke="#dc2626" stroke-width="3"/>
+    <line x1="540" y1="150" x2="594" y2="150" stroke="#dc2626" stroke-width="3"/>
+    <!-- NO -->
+    <circle cx="700" cy="190" r="6" fill="#047857"/>
+    <text x="700" y="212" text-anchor="middle" font-size="12.5" font-weight="700" fill="#047857">NO</text>
+    <!-- arm (energized) -->
+    <line x1="606" y1="150" x2="694" y2="188" stroke="#6d28d9" stroke-width="4"/>
+    <text x="650" y="164" font-size="11" fill="#6d28d9">吸合闭合</text>
+    <!-- NC -->
+    <circle cx="700" cy="250" r="6" fill="#94a3b8"/>
+    <line x1="700" y1="240" x2="700" y2="256" stroke="#94a3b8" stroke-width="2"/>
+    <text x="700" y="272" text-anchor="middle" font-size="12" font-weight="700" fill="#64748b">NC（不接）</text>
+    <text x="800" y="272" text-anchor="end" font-size="11" fill="#b91c1c">接 NC = 断电反而通电，禁止</text>
+    <!-- wire NO -> coil+ -->
+    <line x1="706" y1="190" x2="800" y2="190" stroke="#dc2626" stroke-width="3" marker-end="url(#arr2)"/>
+
+    <!-- valve coil -->
+    <rect x="800" y="120" width="180" height="170" rx="10" fill="#d1fae5" stroke="#047857" stroke-width="2"/>
+    <text x="890" y="146" text-anchor="middle" font-size="13.5" font-weight="700" fill="#065f46">12V 二位三通阀</text>
+    <text x="890" y="164" text-anchor="middle" font-size="11.5" fill="#065f46">单线圈·弹簧复位·直动式</text>
+    <rect x="820" y="176" width="140" height="44" rx="5" fill="#fff" stroke="#dc2626" stroke-width="2"/>
+    <text x="890" y="203" text-anchor="middle" font-size="13" font-weight="700" fill="#b91c1c">线圈（+）</text>
+    <rect x="820" y="232" width="140" height="44" rx="5" fill="#fff" stroke="#111827" stroke-width="2"/>
+    <text x="890" y="259" text-anchor="middle" font-size="13" font-weight="700" fill="#111827">线圈（−）</text>
+    <line x1="890" y1="190" x2="890" y2="176" stroke="#dc2626" stroke-width="0"/>
+    <line x1="890" y1="232" x2="890" y2="276" stroke="#111827" stroke-width="3"/>
+    <line x1="890" y1="276" x2="890" y2="300" stroke="#111827" stroke-width="3"/>
+
+    <!-- flyback diode across coil -->
+    <polyline points="820,190 760,190 760,222" fill="none" stroke="#6d28d9" stroke-width="2.5"/>
+    <line x1="746" y1="222" x2="774" y2="222" stroke="#6d28d9" stroke-width="4"/>
+    <polygon points="748,242 772,242 760,222" fill="#6d28d9"/>
+    <line x1="760" y1="242" x2="760" y2="258" stroke="#6d28d9" stroke-width="2.5"/>
+    <polyline points="760,258 820,258" fill="none" stroke="#6d28d9" stroke-width="2.5"/>
+    <text x="742" y="206" text-anchor="end" font-size="12" font-weight="700" fill="#6d28d9">1N4007</text>
+    <text x="742" y="266" text-anchor="end" font-size="11" fill="#6d28d9">阴极（色环）→ 线圈 +</text>
+
+    <!-- 底部 12V- 回路 -->
+    <line x1="95" y1="170" x2="95" y2="340" stroke="#111827" stroke-width="3"/>
+    <line x1="95" y1="340" x2="1060" y2="340" stroke="#111827" stroke-width="3"/>
+    <line x1="890" y1="300" x2="890" y2="340" stroke="#111827" stroke-width="3"/>
+    <text x="1020" y="330" text-anchor="end" font-size="12" font-weight="700" fill="#111827">12V(−)</text>
+
+    <!-- 星形地 -->
+    <line x1="520" y1="340" x2="520" y2="372" stroke="#111827" stroke-width="3"/>
+    <circle cx="520" cy="340" r="5" fill="#0f172a"/>
+    <rect x="350" y="372" width="340" height="44" rx="8" fill="#e2e8f0" stroke="#0f172a" stroke-width="2"/>
+    <text x="520" y="390" text-anchor="middle" font-size="12.5" font-weight="700" fill="#0f172a">接线端子排（星形单点 GND）</text>
+    <text x="520" y="407" text-anchor="middle" font-size="11" fill="#475569">12V(−) / 5V(−) / 板 GND / 模块 GND 只在此汇合</text>
+    <line x1="760" y1="340" x2="760" y2="372" stroke="#111827" stroke-width="2" stroke-dasharray="4 3"/>
+    <line x1="280" y1="340" x2="280" y2="372" stroke="#111827" stroke-width="2" stroke-dasharray="4 3"/>
+
+    <text x="200" y="300" font-size="11.5" fill="#b91c1c">阀/继电器大电流地</text>
+    <text x="200" y="316" font-size="11.5" fill="#b91c1c">单独走线到端子排，</text>
+    <text x="200" y="332" font-size="11.5" fill="#b91c1c">不经过开发板地线</text>
+  </svg>
+  <p class="cap"><b>图 2</b> 12V 回路：适配器（内正外负）→ 2A 保险丝 → 船型开关 → 继电器 COM；吸合时 COM–NO 导通 → 阀线圈（+）；线圈（−）→ 12V（−）；1N4007 并在线圈两端，<b>阴极（色环）接线圈 +</b>；NC 悬空不接。12V(−)、5V(−)、开发板 GND、模块 GND 只在端子排单点汇合（星形共地），阀的大电流地不经过开发板地线。</p>
+</section>
+
+<section class="card">
+  <h2 id="table">3. 端子/线色对照表（贴到接线盒盖内侧）</h2>
+  <table>
+    <thead><tr><th>信号</th><th>从</th><th>到</th><th>建议线色</th><th>要点</th></tr></thead>
+    <tbody>
+      <tr><td>阀控制 IN</td><td>U2-8（P104）</td><td>模块 IN</td><td><span class="chip c-red">红</span></td><td>3.3V 逻辑；P104–GND 10 kΩ 下拉（高触发）</td></tr>
+      <tr><td>模块电源</td><td>A 型：VCC→U1-12(3V3)、JD-VCC→U2-19/20(VIN)；B 型：VCC→U2-19/20</td><td>模块 VCC / JD-VCC</td><td><span class="chip c-orange">橙</span></td><td>A 型拆 JD-VCC（推荐）；就近并 100 µF + 0.1 µF</td></tr>
+      <tr><td>模块地</td><td>U2-18 或地排</td><td>模块 GND</td><td><span class="chip c-gray">黑</span></td><td>必须共地；与 12V(−) 在端子排单点汇合</td></tr>
+      <tr><td>12V 正</td><td>适配器 + → 2A 保险丝 → 船型开关</td><td>继电器 COM</td><td><span class="chip c-red">红</span></td><td>保险丝在适配器之后、开关之前；开关在触点上游</td></tr>
+      <tr><td>阀正</td><td>继电器 NO</td><td>阀线圈（+）</td><td><span class="chip c-orange">橙</span></td><td>只接 NO；NC 悬空（禁用）</td></tr>
+      <tr><td>阀负/12V 负</td><td>阀线圈（−）</td><td>端子排 12V(−)</td><td><span class="chip c-gray">黑</span></td><td>单独一根到端子排，不经过开发板地</td></tr>
+      <tr><td>续流二极管</td><td>1N4007 阳极 → 线圈（−）</td><td>阴极 → 线圈（+）</td><td><span class="chip c-purple">紫</span></td><td>必须装；反接会短路 12V</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<section class="card">
+  <h2 id="polarity">4. 极性判定速查（先不接 12V/阀！）</h2>
+  <table>
+    <thead><tr><th>现象</th><th>结论</th><th>处理</th></tr></thead>
+    <tbody>
+      <tr><td>上电/复位继电器不动；V1 吸合、V0 释放</td><td><span class="chip c-green">高电平触发（默认）</span></td><td>烧 high 版；P104 用 10 kΩ 下拉；按 15 文档 §4.3 做 10 次复测</td></tr>
+      <tr><td>上电/复位就吸合；V1 释放、V0 吸合</td><td><span class="chip c-red">低电平触发</span></td><td>烧 low 版（或改宏重编）；P104 的 10 kΩ 改成上拉到 3.3V；重做全部判定</td></tr>
+      <tr><td>V1/V0 有时动作有时不动作</td><td><span class="chip c-orange">3.3V 触发不可靠</span></td><td>先查 VIN≥4.5 V、100 µF、共地；A 型拆 JD-VCC（VCC=3.3V、JD-VCC=VIN）；否则换 3.3V 可触发模块</td></tr>
+      <tr><td>完全不动作</td><td><span class="chip c-gray">先看软件告警</span></td><td>串口查 <code># WARN: valve GPIO init FAILED</code> / <code># WARN: valve pin fault</code>；再查 IN 线、共地、VCC</td></tr>
+    </tbody>
+  </table>
+  <div class="box box-orange">
+    <b>标准判定步骤（30 秒 + 复位 10 次）</b>
+    <ol>
+      <li>12V 适配器拔掉、船型开关断开、阀不接；只接 VCC/GND/IN + 10 kΩ + 去耦。</li>
+      <li>烧 high 版 → 上电：LED1 快闪 3 下、串口出 <code># actuator: valve ready (P104 locked at relay-OFF/drain, on_level=HIGH)</code>，继电器全程不动作。</li>
+      <li>发 <code>V1</code>：咔哒吸合、模块 LED 亮、万用表 COM–NO 导通；发 <code>V0</code>：释放、COM–NO 断开。重复 10 次全对。</li>
+      <li>连续复位/拔插 USB 重新上电 10 次，每次继电器都不动。</li>
+      <li>以上全过才允许按图 2 接 12V 与阀；先空载听触点动作 10 次，再装水。</li>
+    </ol>
+  </div>
+</section>
+
+<section class="card">
+  <h2 id="checklist">5. 上电前 10 项检查（逐项打勾，缺一不上电）</h2>
+  <table>
+    <thead><tr><th>#</th><th>检查项</th><th>通过判据</th></tr></thead>
+    <tbody>
+      <tr><td>1</td><td>断电接线，所有接头重新拧紧</td><td>目视无铜丝外露、无短路、卡箍齐全</td></tr>
+      <tr><td>2</td><td>P104 下拉/上拉电阻</td><td>10 kΩ 焊在 P104 与 GND（高触发）或 3.3V（低触发）之间</td></tr>
+      <tr><td>3</td><td>模块 VCC 电压（12V 未接时）</td><td>万用表量 VCC–GND = 4.5~4.7 V</td></tr>
+      <tr><td>4</td><td>12V 适配器空载</td><td>11.4~12.6 V，内正外负</td></tr>
+      <tr><td>5</td><td>1N4007 方向</td><td>阴极（色环）→ 线圈 +；万用表二极管档确认</td></tr>
+      <tr><td>6</td><td>COM/NO/NC 接线</td><td>COM=12V+（保险丝后）、NO→线圈+、NC 悬空</td></tr>
+      <tr><td>7</td><td>星形共地</td><td>12V(−)、5V(−)、板 GND、模块 GND 仅在端子排一点汇合；阀地线不经过开发板</td></tr>
+      <tr><td>8</td><td>湿电分离</td><td>继电器/保险丝/端子排都在防水盒内，离水面 ≥30 cm</td></tr>
+      <tr><td>9</td><td>船型开关位置</td><td>装在 12V 进线、继电器触点上游；手能随时按到</td></tr>
+      <tr><td>10</td><td>固件版本与指纹</td><td>串口 boot 行 = <code># [BOOT] SENSOR-NODE v1.2.0-VALVE ...</code>，与所烧 hex 一致</td></tr>
+    </tbody>
+  </table>
+  <div class="legend">
+    <span class="l-red">红 = P104/IN/12V+</span>
+    <span class="l-orange">橙 = 模块 VCC/阀+</span>
+    <span class="l-black">黑 = GND/12V−</span>
+    <span class="l-blue">蓝 = 回收水软管（非饮用）</span>
+    <span class="l-green">灰 = 排空软管</span>
+  </div>
+</section>
+
+<footer>
+  本图为《15_执行器_二位三通电磁阀_SRD-05VDC-SL-C继电器模块.txt》附图（2026-11-13）｜数值与判据以 15 文档正文与现场实测为准 ｜ 禁止把"判定为含皂液特征"写成"识别污染物"
+</footer>
+
+</div>
+</body>
+</html>

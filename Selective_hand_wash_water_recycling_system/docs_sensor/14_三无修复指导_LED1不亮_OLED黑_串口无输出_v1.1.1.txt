@@ -1,0 +1,521 @@
+================================================================================
+ 14 "三无"修复指导：LED1 不亮 + OLED 黑 + 串口无输出（固件 v1.1.1 / fix1）
+ --------------------------------------------------------------------------------
+ 工程：Selective_hand_wash_water_recycling_system
+ 板卡：RA4M2_MINI（R7FA4M2AD3CFL）
+ 编写：2026-11-01
+ 适用故障：烧完 Debug\Selective_hand_wash_water_recycling_system.hex（v1.1）
+           上电后 LED1 不闪、OLED 全黑、串口助手一个字都收不到
+ 修复固件：Debug\..._fix1.hex（v1.1.1）；更新的 fix2.hex 也包含全部修复
+ 源码落点：src\app_main.c、ra_cfg\fsp_cfg\bsp\bsp_cfg.h、configuration.xml
+ 说明：本文档是"三无"专项；OLED 文字左右镜像属于修好三无之后才暴露的第二层
+       问题，见 docs_sensor\13_运行修复与OLED镜像修复指导_v1.1.2.txt
+================================================================================
+
+
+0. 先看结论（TL;DR）
+--------------------------------------------------------------------------------
+0.1 一句话结论：
+    "三无"不是板子坏、不是接线错、不是传感器问题，而是固件里 3 个缺陷叠加
+    （另有 1 项防御性修复，见 §6）：
+      ① 主栈只有 1 KB，而最深调用链需要 1144 B —— 栈必溢出；
+      ② printf 的第一行会永久卡死（忙等永远不会来的 TX_COMPLETE 中断）；
+      ③ 闪灯被排在 printf 之后 —— 串口一卡，连"CPU 到底跑没跑"都看不出来。
+    修复后：上电 0.72 s 内 3 连闪 → 约 0.75 s 串口吐 boot 行 → 约 0.9 s OLED 亮开机页。
+
+0.2 要修复自己的工程（你的情况），只需要两件事：
+      (1) 改 3 个文件（本文档 §7 有改动总表，逐行 diff 在 §3~§6）；
+      (2) 重新 Build（e2 studio）或直接烧现成的 hex：
+            Debug\Selective_hand_wash_water_recycling_system_fix1.hex
+              - 141765 字节
+              - SHA-256 096e40b6713b64ef8ff3d75b17ff23f9c2ca62d0bd3ce7becad9c955c758d28c
+              - 串口指纹：# [BOOT] SENSOR-NODE v1.1.1-DBG build Nov  1 2026 14:17:24
+          若还想顺手把 OLED 左右镜像也修掉，烧 fix2：
+            Debug\Selective_hand_wash_water_recycling_system_fix2.hex
+              - 141765 字节
+              - SHA-256 f4da1b16a841313a1a1f59bf054020306e4460017cfa851dda6fc252c3d1fc14
+              - 串口指纹：# [BOOT] SENSOR-NODE v1.1.2-DBG build Nov  1 2026 14:31:33
+          （fix2 = fix1 + 1 行 OLED 列重映射改动，三无修复完全一致，推荐直接烧 fix2）
+
+0.3 绝对不要再烧：
+    Debug\Selective_hand_wash_water_recycling_system.hex（137294 字节，v1.1 原始）
+    —— 这就是"三无"版本；它的 SHA-256 是
+       63351f88ff47980f6ab1d08b26a63083f3b349408ea5a68abaff669c0589fcd4
+
+
+1. 现场记录：从哪里开始出问题
+--------------------------------------------------------------------------------
+1.1 现象（你反馈的原话整理）
+    - 第一次烧 v1.1 原始 hex：Led1 不亮、OLED 不亮、串口无输出 → "三无"
+    - 中间排查：怀疑板子/mini 工程 → 烧 RA4M2_MINI 官方 demo hex，
+      官方 demo 的 LED1 正常闪烁 → 证明板子、晶振、下载器、供电都正常
+    - 烧修复后的 hex（fix1）：LED1 闪烁、串口有输出、OLED 亮 → 三无消失
+    - 之后再反馈：屏亮但整屏文字左右反了 → 属于第二次修复（见文档 13）
+
+1.2 关键判断：为什么"mini 官方 demo 灯闪"能证明是固件问题
+    同一块板、同一个下载器、同一路供电：
+        demo hex   → 灯闪               （板级硬件 OK）
+        v1.1 hex   → 灯不闪、屏黑、无串口（固件没跑起来，或跑起来卡死）
+    LED1（P111）和串口（UART9）都不是"接上才工作"的外设，它们只依赖 CPU 在
+    正常执行代码。灯都不闪 = CPU 没走到我们写的第一行有效代码，或在那里卡死。
+    所以排查方向应是：启动/时钟/向量/栈/串口初始化——不用再查传感器接线。
+
+1.3 一个小细节：你早先看到的"修复前的版本 OLED 也不亮"
+    OLED（I2C0 @0x3C）在代码里排在 UART 之后（启动步骤 2b）。
+    只要 printf 在步骤 2 卡死，OLED 的初始化根本轮不到执行——所以"屏黑"是
+    连带现象，不是 OLED 自己的问题。这也解释了为什么一修好串口，屏就亮了。
+
+
+2. 排查方法论：用"灯 / 串口 / 屏"做三证据二分（以后照这个走）
+--------------------------------------------------------------------------------
+2.1 三个证据的含金量（从强到弱）
+    证据 A：LED1 闪不闪  → "CPU 是否在执行我们的代码"。不依赖任何外设，
+                           上电 0.7 s 内就能看出来，最强证据。
+    证据 B：串口有输出吗 → "代码是否走过 UART 初始化 + printf"。依赖时钟精度、
+                           TX 通路、中断/轮询实现。
+    证据 C：OLED 亮不亮  → "代码是否走过 I2C 初始化 + 显示层"。排在最后，
+                           前面的步骤卡住时它一定不亮。
+    记住顺序：灯 → 串口 → 屏。后两者出问题，先回头确认前一个证据。
+
+2.2 分诊表（照第一列对号入座）
+    现象                        结论                                  下一步
+    --------------------------  ------------------------------------  --------------------
+    灯完全不闪                   CPU 没跑到 LED 初始化 / 卡在更早期     §10.1
+    灯闪（3 连闪或连续闪），     CPU 在跑，问题在 UART 段              §10.2
+    但串口无输出
+    灯闪 + 串口有输出 + 屏黑     UART OK，问题在 I2C/OLED               §10.3
+    灯闪 + 串口有输出 + 屏亮     三无已修复，进入功能验证               §9
+
+2.3 你的故障落在哪一行
+    "灯不闪 + 串口无 + 屏黑" → 第 1 行（CPU 没跑到 LED 初始化）。
+    再往下挖就是本文档 §3（栈溢出）和 §4（printf 卡死）。这两个一起表现成
+    "灯不闪"，因为旧的闪灯代码在 printf 之后。
+
+2.4 为什么不用先怀疑硬件（这次已经验证过了）
+    demo hex 灯闪 = MCU、时钟、供电、调试口、P111 这条 LED 线路全好。
+    剩下能出问题的只有：.text 入口、向量表、栈、外设初始化顺序、printf 实现。
+    这些都在固件里，改代码就能解决。
+
+
+3. 根因一：主栈只有 1 KB（必炸隐患）
+--------------------------------------------------------------------------------
+3.1 事实
+    文件：ra_cfg\fsp_cfg\bsp\bsp_cfg.h 第 31 行
+        改前：#define BSP_CFG_STACK_MAIN_BYTES (0x400)      // 1024 字节
+        改后：#define BSP_CFG_STACK_MAIN_BYTES (0x2000)     // 8192 字节
+    同源配置：configuration.xml 第 103 行
+        <property id="config.bsp.common.main" value="0x2000"/>
+        （这一条是给 RASC 用的；不一起改，下次 Generate Project Content
+          会把 bsp_cfg.h 里的 8 KB 重新覆盖回 1 KB。我已经同步好了。）
+
+3.2 证据（在修复前的 elf 上实测，可复现）
+    命令：arm-none-eabi-nm -S -n Selective_hand_wash_water_recycling_system.elf
+          | grep -i "g_main_stack\|impure_data"
+
+    修复前（v1.1 elf）：
+        20000194 0000004c D _impure_data
+        200001e0 00000400 B g_main_stack        <-- 只有 0x400 = 1 KB
+    修复后（fix1/fix2 elf）：
+        20000194 0000004c D _impure_data
+        200001e0 00002000 B g_main_stack        <-- 0x2000 = 8 KB
+
+    内存布局的含义（ARM Cortex-M：栈向下生长）：
+        0x20000194  _impure_data  （0x4C 字节，newlib 的 FILE 结构等内部状态）
+        0x200001E0  g_main_stack 起点 = 栈顶（栈从这里向低地址生长）
+    也就是说：栈一旦溢出，往低地址踩下去，第一个踩坏的就是 _impure_data
+    —— newlib 里 printf/sniprintf 用的内部状态。踩坏之后 printf 会给出各种
+    莫名其妙的行为：不输出、死循环、返回但没有字符，而且从外部完全看不出。
+
+3.3 这 1 KB 到底不够到什么程度（静态深调用分析）
+    工具：对 fix2 elf 做 objdump 反汇编，按 push/sub sp 累计每帧大小，求最深路径
+    命令：python stackdepth2.py（脚本在 %TEMP%\dsh_sensor_work\）
+
+    最深路径 = 1144 字节：
+        app_main(576) -> display_task(152) -> sniprintf(136)
+        -> _svfiprintf_r(152) -> __ssputs_r(32) -> _realloc_r(24)
+        -> _malloc_r(32) -> sbrk_aligned(16) -> _sbrk_r(16) -> _sbrk(8)
+
+    1144 B > 1024 B —— 也就是说：只要主循环里走到一次 display_task 的
+    snprintf，栈就不够。而 display_task 每 200 ms 就会格式化一次数值行，
+    上电后几秒内必然发生。结论：旧栈不是"可能溢出"，是"迟早必溢出"。
+
+    修复后：8192 - 1144 = 7048 字节余量。
+
+3.4 诚实说明
+    没有 SWD 在线调试抓栈，所以不能 100% 断言"你那次三无就是栈溢出踩坏的"；
+    但静态分析已经证明 1 KB 装不下 1144 B，这个隐患必须修，不能留。
+    它和 §4 的 printf 卡死是同一条链上的两个问题（一个"会踩坏"，一个"踩坏/
+    没中断都会卡死"），两个都修了才彻底稳。
+
+3.5 校验方法（改完自己验一下）
+    arm-none-eabi-nm -S xxx.elf | grep g_main_stack
+    期望输出里有：00002000
+
+
+4. 根因二：printf 的第一行会永久卡死
+--------------------------------------------------------------------------------
+4.1 旧实现（v1.1，src\app_main.c 的 __io_putchar）
+    APP_PUTCHAR_PROTOTYPE
+    {
+        g_uart_tx_done = false;
+        if (FSP_SUCCESS != R_SCI_UART_Write(&g_uart9_ctrl, (uint8_t *)&ch, 1U))
+        {
+            g_uart_tx_done = true;
+            return ch;
+        }
+        while (!g_uart_tx_done)      /* <-- 等 TX_COMPLETE 事件 */
+        {
+            ;
+        }
+        return ch;
+    }
+    而 g_uart_tx_done 只在中断回调 user_uart_callback() 里被置 true：
+        if (UART_EVENT_TX_COMPLETE == p_args->event) { g_uart_tx_done = true; }
+
+4.2 为什么这会永久卡死
+    这条路径要求"发送完成中断确实会进来"。只要下列任一情况发生，
+    g_uart_tx_done 永远不会变 true，while 就是死循环 —— 而且是在
+    printf 的第一行、串口还没吐出任何完整信息的时候：
+      - TXI/TEI 中断没被使能 / 向量没注册 / 全局中断没开
+      - 中断优先级配置异常，被别的事件压住
+      - 栈已溢出（§3），踩坏了 newlib/中断相关状态
+    表现出来恰好就是："灯不闪（因为闪灯在 printf 后面）、屏黑（OLED 更在后面）、
+    串口最多漏一两个字节后彻底安静"。
+
+4.3 新实现（v1.1.1 起）
+    - 不再依赖任何中断：轮询 SCI9 的 SSR.TDRE（bit7，0x80）后直接写 TDR；
+    - 带自旋上限 APP_UART_TX_WAIT_LOOPS = 300000 次，超时就丢掉这一字节继续跑；
+    - 连续失败 8 次（APP_UART_TX_FAIL_LIMIT）→ 判定该通道异常，后续 printf
+      直接丢字符，绝不让串口拖死主循环；
+    - 失败计数 g_uart_tx_timeouts 会打印在启动摘要行里（tx_poll_fail 字段）。
+
+4.4 代码（src\app_main.c 第 101~106 行新增常量）
+    #define APP_UART_TX_WAIT_LOOPS  300000U   /* 单字节自旋上限（≈1~7 ms） */
+    #define APP_UART_TX_FAIL_LIMIT  8U        /* 连续超时 8 次 → 后续直丢 */
+
+    src\app_main.c 第 182 行（新增计数器）
+    static volatile uint32_t g_uart_tx_timeouts = 0U;
+
+    src\app_main.c 第 259~293 行（__io_putchar 全量新实现）
+    APP_PUTCHAR_PROTOTYPE
+    {
+        uint32_t spin = 0U;
+
+        if (g_uart_tx_timeouts >= APP_UART_TX_FAIL_LIMIT)
+        {
+            return ch;
+        }
+
+        while (0U == (R_SCI9->SSR & 0x80U))   /* 0x80 = SSR.TDRE */
+        {
+            spin++;
+            if (spin >= APP_UART_TX_WAIT_LOOPS)
+            {
+                g_uart_tx_timeouts++;
+                return ch;                    /* 通道异常：丢字符，继续跑 */
+            }
+        }
+
+        R_SCI9->TDR = (uint8_t) ch;
+        g_uart_tx_timeouts = 0U;
+        return ch;
+    }
+
+    src\app_main.c 第 1366~1367 行（启动摘要里新增自检行）
+    printf("# uart: 115200 8N1 polled-TX | tx_poll_fail=%lu (0=正常, >0=发送异常)\r\n",
+           (unsigned long)g_uart_tx_timeouts);
+
+4.5 tx_poll_fail 怎么读
+    0   ：发送通道正常（目标是 0）
+    >0  ：曾经等不到 TDRE，说明 TX 通路有问题（先查 P112/P113 接线、
+          CH340E 方向、共地，再看 baud）
+    只看这个数字，不用示波器就能判断"串口到底通不通"。
+
+4.6 代价
+    轮询比中断略慢，但 115200 下 1 字节 = 87 µs，一行 200 字节 ≈ 17 ms，
+    远小于 CSV 的 200 ms 周期。用 0.5% 的 CPU 换"永不卡死"，非常值。
+
+4.7 诚实说明
+    旧固件里 TX_COMPLETE 中断到底进没进，现场没有调试器，无法直接证；
+    但改成轮询 + 上限之后，无论中断是否正常都不会再卡死 —— 这是把
+    "必须依赖中断"降级为"不依赖"，从根上消掉这一类故障。
+
+
+5. 根因三：闪灯被排在 printf 之后（让故障无法定位）
+--------------------------------------------------------------------------------
+5.1 旧顺序（src\app_main.c，v1.1）
+    app_led_init();
+    app_uart_init();
+    printf("# [BOOT] ...");
+    app_led_boot_blink();     <-- 闪灯在最后
+    串口一卡，闪灯永远执行不到 → 现象退化成"灯也不闪"，看起来像板子死了。
+
+5.2 新顺序（v1.1.1 起，第 1544~1560 行）
+    app_valve_init();         /* fail-safe：P104=排空 */
+    app_led_init();
+    app_led_boot_blink();     /* ★ 先闪 3 下，再碰串口 */
+    app_uart_init();          /* 失败 → app_fatal_led_forever() 10 Hz 报警 */
+    printf("# [BOOT] ...");
+
+    闪灯实现（app_led_boot_blink）：亮 120 ms / 灭 120 ms，循环 3 次，
+    总耗时 720 ms。上电 0.7 s 内一定看得见。
+    串口都打不开时：app_fatal_led_forever() 用 10 Hz 快闪报警，不静默死等。
+
+5.3 这个改动的意义（不是"好看"，是诊断能力）
+    灯闪了但没串口  → 问题锁定在 UART 段（时钟/接线/波特率），不用怀疑启动
+    灯 10 Hz 快闪    → UART 根本没 Open（走 fatal 分支）
+    灯完全不闪       → 更底层（供电/复位/时钟/向量），看 §10.1
+    从此"三无"被拆成"单无"，一次只查一段。
+
+
+6. 根因四（防御性）：115200 波特率偏差 +1.725%，已贴 ±2% 容差边缘
+--------------------------------------------------------------------------------
+6.1 事实
+    文件：ra_gen\hal_data.c 第 56~59 行（RASC 生成的固定波特率参数）
+        g_uart9_baud_setting = { ... .brr = 47, .mddr = (uint8_t) 256, ... }
+    注意 .mddr 写的是 256，强转 uint8 后 = 0，即"不调制"。
+    （生成文件自己的注释写着 "calculated with 1.725% error"。）
+
+6.2 推算（可以按计算器复现）
+    时钟：XTAL 12 MHz -> PLL /2 *30 = 180 MHz（SCK）
+          ICLK = SCK/2 = 90 MHz；PCLKA = SCK/2 = 90 MHz（SCI 用的就是 PCLKA）
+    用 brr=47、不调制： 90e6 / (16 * (47+1)) = 117187.5 baud
+    相对 115200 的偏差： (117187.5 - 115200) / 115200 = +1.725%
+    UART 异步通信的常规容差是 ±2%~±3%，1.725% 已经很贴边：
+    不同芯片/不同 USB 转串口（CH340E）/线材偏长时，可能出现"偶发乱码/丢字节"，
+    看上去又像"串口没输出"。
+
+6.3 修复（不依赖 RASC 重新生成）
+    src\app_main.c 第 1384~1413 行：打开串口之前，用 FSP 自带算法按当前真实
+    时钟复算一遍，并只在成功时替换配置：
+        if (FSP_SUCCESS == R_SCI_UART_BaudCalculate(115200U, true, 15000U, &s_baud))
+        {
+            s_ext                = g_uart9_cfg_extend;
+            s_ext.p_baud_setting = &s_baud;
+            s_cfg                = g_uart9_cfg;
+            s_cfg.p_extend       = &s_ext;
+            p_cfg                = &s_cfg;
+        }
+        ...
+        err = R_SCI_UART_Open(&g_uart9_ctrl, p_cfg);
+    15000 = 可接受误差门限（单位 x1000，即 15%，FSP 允许的最大值），算法内部仍会
+    遍历所有分频/BRR 取误差最小者，所以拿到的是最优解。
+    复算失败就退回 ra_gen 原配置，不会影响启动。
+
+    按 90 MHz 复算的期望结果（已用 FSP 算法逐行复刻验证）：
+        brr = 32, mddr = 173  ->  实际 115190 baud，误差 0.009%
+    对比原来的 +1.725%，误差缩小约 190 倍。
+
+6.4 为什么这项要留着
+    以后任何人改时钟（RASC 里改 PLL/PCLKA 分频）却忘了重新 Generate，
+    ra_gen 里的旧参数就会失配（偏差可能远大于 2%，直接不通）。
+    运行时复算让固件"跟着真实时钟走"，是防这种事故的保险。
+
+
+7. 改动清单总表（照着核对，一个都别漏）
+--------------------------------------------------------------------------------
+  #  文件                                位置            改动
+  -- ----------------------------------- --------------- ---------------------------
+  1  ra_cfg\fsp_cfg\bsp\bsp_cfg.h        第 31 行        0x400 -> 0x2000（主栈 8 KB）
+  2  configuration.xml                   第 103 行       main stack 0x400 -> 0x2000
+                                                        （防止 RASC Generate 覆盖）
+  3  src\app_main.c                      第 101~106 行   新增 TX 自旋上限/失败上限常量
+  4  src\app_main.c                      第 182 行       新增 g_uart_tx_timeouts 计数
+  5  src\app_main.c                      第 259~293 行   __io_putchar 改轮询 TDRE
+  6  src\app_main.c                      第 1366~1367 行 启动摘要新增 tx_poll_fail 自检行
+  7  src\app_main.c                      第 1384~1413 行 app_uart_init 运行时复算波特率
+  8  src\app_main.c                      第 1544~1560 行 启动顺序：闪灯提到 printf 之前
+  9  src\app_main.c                      第 90 行        版本号 -> v1.1.1-DBG（仅标识用）
+
+  注：行号按当前源码（v1.1.2，含 fix2 改动）标注；如果你在 fix1 源码树上对照，
+      行号可能差 1~2 行，按函数名/内容对即可。
+      src\oled.c / src\oled.h 的三无修复：零改动（那是 fix2 的事，见文档 13）。
+
+  是否需要动 RASC（e2 studio 的配置界面）？
+      不需要生成代码，但要把 BSP 的 Main stack size 改成 8192（或 0x2000），
+      否则下次点 "Generate Project Content" 会覆盖 bsp_cfg.h 打回 1 KB。
+      这一步已经在 configuration.xml 里改好了。
+
+
+8. 重新构建
+--------------------------------------------------------------------------------
+8.1 方式一：e2 studio（推荐，最省事）
+    - 打开工程 -> Project -> Build Project（或锤子图标）
+    - 若之前 RASC 生成过，确认 ra_cfg\fsp_cfg\bsp\bsp_cfg.h 里是 0x2000
+      （被改回 0x400 就说明 configuration.xml 那条没生效，回去检查 §7 第 2 项）
+    - 产物：Debug\Selective_hand_wash_water_recycling_system.hex
+    - 烧录：RFP -> Erase + Program + Verify -> 复位
+
+8.2 方式二：命令行只重编改动的文件（我修复时用的是这个）
+    脚本：%TEMP%\dsh_sensor_work\build_fix1.py
+    思路：读 Debug\compile_commands.json，只重编与 v1.1 相比改动过的源文件
+          （startup.c 因栈宏变化需重编、app_main.c 有代码改动），link 用工程
+          自己的 Debug\*.elf.in，再用 objcopy 出 hex。
+    工具链：C:\Program Files (x86)\Arm GNU Toolchain arm-none-eabi\13.2 Rel1
+          （与 e2 studio 里配置的编译器同版本，保证产物可比）
+    这种方式适合"工程能构建但 e2 studio 不在手边"的场合；正常开发直接用 8.1。
+
+8.3 三个坑（都踩过）
+    (1) RASC Generate 会把主栈改回 1 KB —— 必须同时改 configuration.xml。
+    (2) OLED 开机页第 5 行写的是硬编码 "SENSOR-NODE v1.1"（src\display.c 第 571 行），
+        不随版本号宏变。判断烧的哪个版本请看串口 boot 行，不要看屏。
+    (3) 别烧混文件：Debug 目录里现在有 3 个 hex，见 §0.3。
+
+
+9. 验收：不接任何传感器时的"理想状态"
+--------------------------------------------------------------------------------
+9.1 上电时间轴（按 1 步步进看；时间以实测约为准，±0.2 s 属正常）
+      时刻          现象
+      ------------  --------------------------------------------------------------
+      0 ~ 120 ms    灯亮（第 1 闪）
+      0.72 s        3 连闪结束（亮120/灭120 ×3）
+      ~0.75 s       串口出现两行空行 + "# [BOOT] SENSOR-NODE v1.1.1-DBG build ..."
+                    接着 "# board: RA4M2_MINI (R7FA4M2AD3CFL) | tick base: SysTick 1 ms"
+                    （串口助手：115200 8N1，CH340E；若用 USB-TTL 记得共地）
+      ~0.9 s        OLED 出现开机页 5 行，同时串口打 "# display: OLED OK ..."：
+                    RA4M2 WATER JUDGE / OLED OK / SSD1306 128x64 /
+                    I2C0 0x3C 400kHz / SENSOR-NODE v1.1
+      0.9~1.7 s     开机页保持 800 ms 后切换到状态页（大字 + 两行数值）
+      ~1.7 s        DS18B20 自检结束（没接就是 NOT USABLE -> fallback 25.0 C）
+      ~1.7 s        打印参数摘要 / 帮助命令 / CSV 表头，之后每 200 ms 一行 CSV
+                    启动摘要里能看到 tx_poll_fail=0
+
+9.2 串口必须看到的 3 行（缺一不可）
+      # [BOOT] SENSOR-NODE v1.1.1-DBG build ...
+      # display: OLED OK (SSD1306 128x64, I2C0 @0x3C)
+      # uart: 115200 8N1 polled-TX | tx_poll_fail=0 (0=正常, >0=发送异常)
+
+9.3 关于 LED 之后"灭着"是不是故障 —— 不是
+    灯不是"电源指示灯"，它是阀状态的假执行器（约定：回收=亮、排空=灭）：
+        WAIT（待机，无事件）      1 Hz 闪（亮 0.5 s / 灭 0.5 s）
+        CLEAR（可回收，清水）     常亮
+        FLUSH（事件开头强制排空）  5 Hz 闪
+        SOAP / UNCERTAIN（污水）   灭
+    不接传感器时，ADC 悬空读到的电压是假值，判别器很可能判成"污水/不确定"，
+    于是灯就是灭的 —— 这是状态机的正常输出，不是三无。
+    判断"三无是否修好"的唯一标准是：上电有没有过 3 连闪 + 串口有没有 boot 行。
+
+9.4 勾选清单（全打勾才算过）
+    [ ] ① 上电 0.72 s 内 LED1 有 3 连闪（不是常亮、不是 10 Hz 快闪）
+    [ ] ② 串口助手能看到 "# [BOOT] SENSOR-NODE v1.1.1-DBG build ..."
+    [ ] ③ 能看到 "# display: OLED OK ..."
+    [ ] ④ 启动摘要里 tx_poll_fail=0
+    [ ] ⑤ 之后每 200 ms 稳定一行 CSV（有 t_ms 列在跑 = 主循环在跑）
+    [ ] ⑥ OLED 亮且能读出文字（若文字左右反 -> 属文档 13 的镜像问题）
+
+
+10. 如果还是三无：逐段分诊
+--------------------------------------------------------------------------------
+10.1 灯完全不闪
+    a. 确认烧的是 v1.1.1/fix1 及以上的 hex（对比 §0 的 SHA-256），RFP 里
+       Erase+Program+Verify 三步都成功
+    b. 确认复位正常、供电 3.3 V/5 V 都在范围内；SWD 口接好，先试"复位后运行"
+    c. 用 e2 studio Debug 停在 hal_entry，看是否到了 app_main；若到不了 ->
+       时钟/启动文件/向量表问题（这属于 BSP，不是应用层）
+    d. 若 debugger 显示 HardFault：先确认主栈已是 0x2000（§3.5），
+       再单步 __io_putchar 看是否卡在 while
+10.2 灯闪 3 下 + 之后常闪，但串口无输出
+    a. 串口助手：115200 8N1、正确 COM 口、CH340E 驱动正常
+    b. 线：板载 CH340E 走的是 P109 = TXD9、P110 = RXD9（不是 P112/P113），
+       USB Type-C 直连即可；若用外置 USB-TTL，必须 GND 共地、TX/RX 交叉
+    c. ★ 引脚归属检查（很隐蔽的一个坑）：P109/P110 同时也是 Debug0 的
+       TDO/TDI。如果 RASC 里 Debug0 选的是 JTAG 而不是 SWD，这两个脚会被
+       调试口占住，UART9 就没有引脚可用 —— 现象正是"灯闪、串口一个字没有"。
+       本工程已确认无误：Debug0 = SWD（SWDIO=P108，SWCLK=P300），
+       ra_gen\pin_data.c 里 P109/P110 已配成 IOPORT_PERIPHERAL_SCI1_3_5_7_9。
+       若你改过 RASC 配置，按 docs_sensor\00_总览_接线与FSP配置.txt 的
+       §4.4 重新把 P109/P110 分配到 SCI9。
+    e. 若指示灯 10 Hz 快闪 -> app_uart_init() 失败（fatal 分支）：
+       R_SCI_UART_Open 返回错误，查 ra_gen 里 UART9 的引脚/通道配置
+    f. 若灯是 1 Hz 闪（WAIT）但串口一个字没有 -> 基本可判定 TX 物理层
+       （接线/电平/模块）；此时 tx_poll_fail 已经无从看到，只能查硬件
+10.3 灯闪 + 串口有输出 + 屏黑
+    a. 看串口有没有 "# WARN: OLED not usable"：
+       有 -> I2C 打不开（ADR0/ADR1 电平、上拉 4.7 kΩ、SDA/SCL 接反）
+       无 -> 屏初始化成功但首帧 flush 失败（查模块供电/地址 0x3C）
+    b. 常见坑：模块 4 脚模块要 3.3 V；有些模块 I2C 需要 4.7 kΩ 上拉到 3.3 V
+    c. 屏不是安全路径，屏坏不影响数据通路：先看 CSV 是否正常
+
+
+11. 备份与回滚
+--------------------------------------------------------------------------------
+11.1 修复过程的原始备份（在 %TEMP%\dsh_sensor_work\，可长期保留）
+     fix2_backup\    ：v1.1 原始 elf/hex/map/app_main.c/bsp_cfg.h
+     fix2_backup1\   ：fix1 的 elf/hex/app_main.c/oled.c/oled.h
+     备份属于临时目录，重启清理工具可能删掉；重要的话自己复制到工程里。
+
+11.2 回滚到 v1.1（不推荐，三无会回来）
+     烧 Debug\Selective_hand_wash_water_recycling_system.hex（137294 字节，
+     SHA-256 63351f88...）；源码层面把 §7 表里 9 项全部反向改回。
+
+11.3 版本对照（别烧混）
+     构建            时间          状态
+     --------------  ------------  ----------------------------------------------
+     v1.1 原始       10-31 23:38   三无（137294 B）——不要烧
+     v1.1.1 fix1     11-01 14:17   三无已修（141765 B）——三无修复基准
+     v1.1.2 fix2     11-01 14:31   三无已修 + OLED 镜像已修（141765 B）——推荐
+
+
+12. 附录
+--------------------------------------------------------------------------------
+12.1 附录 A：关键数值速查
+     主栈           0x400 -> 0x2000（1024 -> 8192 B）
+     最深调用链     1144 B（app_main 576 + display_task 链 568）
+     栈余量         7048 B
+     TX 自旋上限    300000 次（≈1~7 ms/字节）
+     TX 失败上限    8 次（之后丢弃字符）
+     单字节发送     115200 下 ≈87 µs
+     一行 200 B     ≈17 ms（CSV 周期 200 ms，占 8.5%）
+     波特率         原：117187.5（+1.725%）
+                    新：115190（0.009%，brr=32/mddr=173）
+     时钟           XTAL 12 MHz -> PLL 180 MHz；ICLK/PCLKA 90 MHz；PCLKB 45 MHz
+     版本标识       APP_FW_VERSION（src\app_main.c 第 90 行）
+     OLED 开机页    src\display.c 第 568~571 行（保持 800 ms）
+     串口自检字段   tx_poll_fail（启动摘要行，src\app_main.c 第 1366 行）
+     关键引脚       LED1 = P111（高电平点亮）
+                    UART9 = P109(TXD9) / P110(RXD9)，板载 CH340E
+                    Debug0 = SWD：SWDIO=P108、SWCLK=P300（所以 P109/P110 空闲）
+                    K2 = P000（板上拉，按下为低）；DS18B20 DQ = P500
+
+12.2 附录 B：命令速查
+     查栈大小：  arm-none-eabi-nm -S -n xxx.elf | grep g_main_stack
+     查栈深度：  python %TEMP%\dsh_sensor_work\stackdepth2.py
+     查波特率：  python %TEMP%\dsh_sensor_work\fsp_baud_sim.py
+                 （脚本默认算 45 MHz；本工程要把 for freq in (45000000,)
+                   改成 (90000000,)，结果应为 brr=32/mddr=173/误差 0.009%）
+     校验 hex：  certutil -hashfile <hex> SHA256
+     烧录：      RFP：Erase -> Program -> Verify -> 复位
+
+12.3 附录 C：文件与校验值
+     Debug\Selective_hand_wash_water_recycling_system.hex       137294 B  v1.1
+       SHA-256 63351f88ff47980f6ab1d08b26a63083f3b349408ea5a68abaff669c0589fcd4
+     Debug\Selective_hand_wash_water_recycling_system_fix1.hex  141765 B  v1.1.1
+       SHA-256 096e40b6713b64ef8ff3d75b17ff23f9c2ca62d0bd3ce7becad9c955c758d28c
+     Debug\Selective_hand_wash_water_recycling_system_fix2.hex  141765 B  v1.1.2
+       SHA-256 f4da1b16a841313a1a1f59bf054020306e4460017cfa851dda6fc252c3d1fc14
+     串口指纹：
+       fix1: # [BOOT] SENSOR-NODE v1.1.1-DBG build Nov  1 2026 14:17:24
+       fix2: # [BOOT] SENSOR-NODE v1.1.2-DBG build Nov  1 2026 14:31:33
+     fix2 的初始 SP = 0x200021E0，复位向量 = 0x0000608D（都在正常范围）
+
+12.4 附录 D：术语
+     "三无"        本项目现场俗称：灯不闪 + 屏黑 + 串口无输出
+     TDRE          SCI 的"发送数据寄存器空"标志（SSR bit7），1=可以写下一个字节
+     TX_COMPLETE   FSP UART 的"整次发送完成"事件，需中断回调才能收到
+     mddr          波特率调制寄存器值；0 = 不调制，直接按 BRR 整数分频
+     fail-safe     本工程约定：复位/异常时阀回排空位（P104 低），主排水路永远通
+     _impure_data  newlib 的全局可重入状态（FILE 结构等），紧贴主栈下方
+
+
+13. 变更记录
+--------------------------------------------------------------------------------
+    2026-11-01  建立本文档。整理 v1.1 -> v1.1.1 的"三无"修复全过程：
+                现场现象、mini 官方 hex 对照证据、三证据排查法、
+                4 个根因（主栈 1 KB / printf 卡死 / 闪灯顺序 / 波特率偏差）、
+                逐行改动与校验命令、无传感器验收标准、三无分诊表、备份回滚。
+                相关文档：11_编译报错修复指引.txt（编译期问题）、
+                         13_运行修复与OLED镜像修复指导_v1.1.2.txt（镜像问题）
+
+================================================================================
+ 完
+================================================================================

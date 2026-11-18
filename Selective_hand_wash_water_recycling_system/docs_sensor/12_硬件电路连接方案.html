@@ -1,0 +1,1573 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>12 · 硬件电路连接方案（可视化）｜RA4M2_MINI 洗手水在线判别</title>
+<style>
+:root{--ink:#0f172a;--muted:#475569;--line:#e2e8f0;--bg:#f5f7fb;--card:#fff;
+  --red:#dc2626;--orange:#ea580c;--green:#16a34a;--blue:#2563eb;--purple:#9333ea;--amber:#ca8a04;--cyan:#0891b2}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth;scroll-padding-top:64px}
+body{margin:0;background:var(--bg);color:var(--ink);
+  font:15px/1.78 "Microsoft YaHei","PingFang SC","Noto Sans CJK SC",system-ui,sans-serif}
+.wrap{max-width:1200px;margin:0 auto;padding:0 20px 90px}
+
+/* ---------- hero ---------- */
+.hero{background:radial-gradient(1100px 380px at 8% -20%,#1d4ed8 0%,#0b1220 62%),#0b1220;
+  color:#e2e8f0;padding:44px 0 36px}
+.hero .wrap{padding-bottom:0}
+.hero .kicker{color:#93c5fd;font-size:13px;letter-spacing:2px;font-weight:600}
+.hero h1{font-size:clamp(24px,3vw,34px);margin:8px 0 10px;line-height:1.3;letter-spacing:.5px}
+.hero .sub{color:#94a3b8;font-size:14.5px;max-width:900px}
+.badges{display:flex;gap:8px;flex-wrap:wrap;margin-top:18px}
+.badge{background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.18);color:#cbd5e1;
+  padding:3px 11px;border-radius:999px;font-size:12.5px}
+.hero .meta{color:#64748b;font-size:12.5px;margin-top:16px}
+.hero .meta a{color:#93c5fd;text-decoration:none}
+
+/* ---------- nav ---------- */
+nav.toc{position:sticky;top:0;z-index:50;background:rgba(255,255,255,.94);
+  -webkit-backdrop-filter:blur(8px);backdrop-filter:blur(8px);border-bottom:1px solid var(--line);
+  padding:7px 0}
+nav.toc .wrap{padding-bottom:0;display:flex;align-items:center;gap:2px;flex-wrap:wrap;row-gap:2px}
+nav.toc a{padding:5px 9px;border-radius:8px;color:#334155;text-decoration:none;font-size:12.6px;flex:none}
+nav.toc a:hover{background:#eef2ff;color:#1e40af}
+nav.toc .tt{color:#94a3b8;font-size:12px;margin-right:6px;flex:none}
+
+/* ---------- sections ---------- */
+section{background:var(--card);border:1px solid var(--line);border-radius:16px;
+  padding:24px 28px 26px;margin-top:26px;box-shadow:0 1px 2px rgba(15,23,42,.04)}
+h2{font-size:21px;margin:0 0 4px;display:flex;align-items:center;gap:11px;line-height:1.4}
+h2 .num{flex:none;display:inline-flex;align-items:center;justify-content:center;width:34px;height:34px;
+  border-radius:10px;background:#1e293b;color:#fff;font-size:14.5px;letter-spacing:0}
+h2 .en{color:#94a3b8;font-size:12.5px;font-weight:400;margin-left:auto}
+h3{font-size:15.5px;margin:26px 0 10px;padding-left:11px;border-left:4px solid #1d4ed8;color:#0f172a}
+h4{font-size:13.8px;margin:18px 0 8px;color:#334155}
+p{margin:9px 0}
+.lead{color:var(--muted);font-size:14px;margin:2px 0 6px}
+a{color:#1d4ed8}
+hr.sep{border:0;border-top:1px dashed var(--line);margin:22px 0}
+
+/* ---------- tables ---------- */
+.tw{overflow-x:auto;margin:12px 0;border-radius:10px;border:1px solid var(--line)}
+table{width:100%;border-collapse:collapse;font-size:13.3px}
+th,td{border-bottom:1px solid var(--line);border-right:1px solid #eef2f7;padding:7px 9px;
+  text-align:left;vertical-align:top}
+th:last-child,td:last-child{border-right:0}
+thead th{background:#f1f5f9;color:#334155;font-weight:600;position:sticky;top:0}
+tbody tr:nth-child(even){background:#fafbfd}
+tbody tr:hover{background:#f5f9ff}
+td.c,th.c{text-align:center;white-space:nowrap}
+td.num{white-space:nowrap;font-family:Consolas,"Cascadia Mono",monospace;color:#475569}
+table.compact th,table.compact td{padding:6px 8px;font-size:12.8px}
+.tbl-hint{font-size:12.5px;color:#94a3b8;margin-top:-6px}
+
+/* ---------- inline code / chips ---------- */
+code,.pin{font-family:Consolas,"Cascadia Mono",monospace;background:#eef2f7;border:1px solid #dbe3ee;
+  border-radius:5px;padding:1px 6px;font-size:12.4px;color:#1e40af;white-space:nowrap}
+.pin.hole{background:#fff7ed;border-color:#fed7aa;color:#9a3412}
+.chip{display:inline-block;padding:0 8px;border-radius:6px;font-size:12px;font-weight:600;
+  border:1px solid;line-height:19px;white-space:nowrap}
+.c-3v3{background:#fee2e2;border-color:#fca5a5;color:#b91c1c}
+.c-vin{background:#ffedd5;border-color:#fdba74;color:#c2410c}
+.c-gnd{background:#e5e7eb;border-color:#9ca3af;color:#111827}
+.c-adc{background:#fef9c3;border-color:#fde047;color:#a16207}
+.c-node{background:#dcfce7;border-color:#86efac;color:#15803d}
+.c-dq{background:#dbeafe;border-color:#93c5fd;color:#1d4ed8}
+.c-gpio{background:#fce7f3;border-color:#f9a8d4;color:#be185d}
+.c-v12{background:#f3e8ff;border-color:#d8b4fe;color:#7c3aed}
+.c-gray{background:#f1f5f9;border-color:#cbd5e1;color:#475569}
+.b-ok{color:#15803d;font-weight:600}
+.b-lock{color:#b45309;font-weight:600}
+.b-warn{color:#b91c1c;font-weight:600}
+.b-todo{color:#64748b;font-weight:600}
+.tag{display:inline-block;font-size:11.5px;padding:0 7px;border-radius:5px;background:#eef2ff;
+  border:1px solid #c7d2fe;color:#3730a3;margin-right:4px}
+
+/* ---------- callouts ---------- */
+.note,.warn,.danger,.ok-box{border-radius:12px;padding:12px 16px;margin:14px 0;font-size:13.8px;border:1px solid}
+.note{background:#eff6ff;border-color:#bfdbfe}
+.warn{background:#fffbeb;border-color:#fde68a}
+.danger{background:#fef2f2;border-color:#fecaca}
+.ok-box{background:#f0fdf4;border-color:#bbf7d0}
+.note b,.warn b,.danger b,.ok-box b{color:inherit}
+.note .t,.warn .t,.danger .t,.ok-box .t{display:block;font-weight:700;margin-bottom:4px;font-size:13.5px}
+.warn .t{color:#92400e}.danger .t{color:#991b1b}.note .t{color:#1e40af}.ok-box .t{color:#166534}
+
+/* ---------- figures ---------- */
+figure{margin:18px 0;border:1px solid var(--line);border-radius:14px;background:#fff;
+  padding:12px 12px 8px;overflow-x:auto}
+figure svg{display:block;width:100%;height:auto;min-width:720px;border-radius:8px}
+figcaption{font-size:12.5px;color:var(--muted);text-align:center;margin-top:8px;line-height:1.6}
+figcaption b{color:#334155}
+.legend{display:flex;gap:16px;flex-wrap:wrap;font-size:13px;margin:8px 2px 2px}
+.legend span{display:inline-flex;align-items:center;gap:7px}
+.swatch{width:24px;height:4px;border-radius:2px;display:inline-block;flex:none}
+.swatch.dash{background:repeating-linear-gradient(90deg,#64748b 0 5px,transparent 5px 9px)}
+
+/* ---------- grids ---------- */
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+.grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
+.grid4{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}
+@media(max-width:920px){.grid2,.grid3,.grid4{grid-template-columns:1fr}}
+.mini{border:1px solid var(--line);border-radius:12px;padding:14px 16px;background:#fff;height:100%}
+.mini .ico{font-size:20px;line-height:1}
+.mini h5{margin:6px 0 6px;font-size:14px;color:#0f172a}
+.mini p{margin:0;font-size:13px;color:#475569}
+
+/* ---------- checklist ---------- */
+.checklist{list-style:none;margin:12px 0;padding:0;counter-reset:ck}
+.checklist li{display:flex;gap:11px;align-items:flex-start;padding:9px 13px;border:1px solid var(--line);
+  border-radius:10px;margin-bottom:8px;background:#fff;font-size:13.6px;transition:.15s}
+.checklist li:hover{border-color:#c7d2fe}
+.checklist input{margin-top:6px;width:16px;height:16px;accent-color:#2563eb;flex:none}
+.checklist li.done{background:#f0fdf4;border-color:#bbf7d0}
+.checklist li.done .txt{color:#64748b}
+.ck-bar{display:flex;align-items:center;gap:12px;font-size:13px;color:#475569;margin:6px 0 2px}
+.ck-bar .track{flex:1;height:8px;border-radius:99px;background:#e2e8f0;overflow:hidden}
+.ck-bar .fill{height:100%;width:0;background:linear-gradient(90deg,#22c55e,#16a34a);transition:.2s}
+
+/* ---------- terminal / oled mocks ---------- */
+.term{background:#0b1220;color:#cbd5e1;border-radius:12px;padding:14px 16px;max-width:100%;
+  font:12.2px/1.75 Consolas,"Cascadia Mono",monospace;overflow-x:auto;white-space:pre;border:1px solid #1e293b}
+.term .b{color:#7dd3fc}.term .g{color:#86efac}.term .y{color:#fcd34d}.term .d{color:#64748b}
+.mockrow{display:flex;gap:18px;flex-wrap:wrap;align-items:flex-start}
+.mockrow>div{min-width:0}
+.mockrow .tbl-hint{margin-top:8px}
+.oled{background:#0b1220;border:6px solid #111827;border-radius:14px;padding:16px 18px;width:100%;
+  max-width:400px;color:#dbeafe;font:12px/1.6 Consolas,monospace;box-shadow:inset 0 0 22px rgba(37,99,235,.18)}
+.oled .o1{color:#93c5fd}.oled .o2{color:#fbbf24}.oled .o3{color:#86efac}
+.oled .big{font-size:30px;line-height:1.15;font-weight:700;color:#fff;letter-spacing:4px;margin:4px 0}
+.oled .big.inv{display:inline-block;background:#fff;color:#0b1220;padding:0 6px;letter-spacing:2px}
+.oled .ln{display:flex;justify-content:space-between;gap:10px}
+
+/* ---------- buttons / print ---------- */
+.btn{position:fixed;right:22px;bottom:22px;z-index:60;background:#1e293b;color:#fff;border:0;
+  border-radius:999px;padding:11px 18px;font-size:13.5px;cursor:pointer;box-shadow:0 6px 18px rgba(15,23,42,.25)}
+.btn:hover{background:#0f172a}
+footer{color:#64748b;font-size:12.5px;text-align:center;padding:44px 0 10px;line-height:1.9}
+
+@media print{
+  @page{size:A4;margin:12mm}
+  body{background:#fff;font-size:11.5px}
+  nav.toc,.btn{display:none!important}
+  .hero{background:#0b1220!important;-webkit-print-color-adjust:exact;print-color-adjust:exact;padding:18px 0}
+  section{border:1px solid #cbd5e1;box-shadow:none;border-radius:8px;margin-top:12px;padding:14px 16px;break-inside:auto}
+  h2,h3{break-after:avoid}
+  .grid3,.grid2{break-inside:auto}
+  h2{font-size:16px}h2 .num{width:24px;height:24px;font-size:11px}
+  h3{font-size:13px;margin:14px 0 6px}
+  figure{break-inside:avoid;border:1px solid #cbd5e1;max-width:100%}
+  .tw{overflow:visible}
+  .term{white-space:pre-wrap;word-break:break-all;font-size:9px}
+  .checklist li{padding:5px 8px;margin-bottom:4px}
+  table{font-size:9.6px}th,td{padding:3px 5px}
+  thead th{position:static}
+  .note,.warn,.danger,.ok-box{break-inside:avoid}
+  a{color:inherit;text-decoration:none}
+}
+</style>
+</head>
+<body>
+
+<header class="hero">
+  <div class="wrap">
+    <div class="kicker">HARDWARE WIRING · ELECTRICAL CONNECTION PLAN</div>
+    <h1>RA4M2_MINI 洗手水在线判别装置<br>硬件电路连接方案 · 可视化接线图</h1>
+    <div class="sub">
+      板卡孔位与引脚事实、电源与星形单点接地、两路 ADC（TDS 直连 + 浊度模块 1k/2k 分压）、
+      DS18B20 1-Wire 上拉、板载 OLED / CH340E / LED / 按键、P104 继电器与 12V 阀预留回路、
+      逐根接线表、上电前万用表检查、上电自检与 08 T0~T10 联调。
+    </div>
+    <div class="badges">
+      <span class="badge">目标工程：Selective_hand_wash_water_recycling_system</span>
+      <span class="badge">RA4M2_MINI（R7FA4M2AD3CFL）</span>
+      <span class="badge">FSP 6.6.0</span>
+      <span class="badge">固件：SENSOR-NODE v1.1（2026-10-30 构建版）</span>
+      <span class="badge">3.3V 逻辑 · 模拟绝对最大 3.6V</span>
+    </div>
+    <div class="meta">
+      本页是 <a href="12_硬件电路连接方案.txt">12_硬件电路连接方案.txt</a>（v1.1，671 行）的可视化渲染件；
+      接线口径以 txt 为准，两者同步维护。相关文档：
+      <a href="00_总览_接线与FSP配置.txt">00 总览</a>、
+      <a href="08_验收测试与标定指引.txt">08 验收</a>、
+      <a href="10_OLED状态显示.txt">10 OLED</a>。
+    </div>
+  </div>
+</header>
+
+<nav class="toc">
+  <div class="wrap">
+    <span class="tt">目录</span>
+    <a href="#s0">0 怎么用</a>
+    <a href="#s1">1 电路总览</a>
+    <a href="#s2">2 板卡孔位</a>
+    <a href="#s3">3 电源与接地</a>
+    <a href="#s4">4 模拟输入</a>
+    <a href="#s5">5 数字接口</a>
+    <a href="#s6">6 执行器预留</a>
+    <a href="#s7">7 完整接线表</a>
+    <a href="#s8">8 上电检查</a>
+    <a href="#s9">9 上电联调</a>
+    <a href="#s10">10 排障</a>
+    <a href="#s11">11 红线与限制</a>
+    <a href="#s12">12 BOM</a>
+    <a href="#s13">13 文档关系</a>
+    <a href="#appa">附录 A 速查卡</a>
+  </div>
+</nav>
+
+<div class="wrap">
+
+<!-- ============ 三条硬前提 ============ -->
+<section id="hard" style="border-left:6px solid #dc2626">
+  <h2><span class="num">!</span>先记住三条硬前提 <span class="en">P1 / P2 / P3</span></h2>
+  <p class="lead">违反会烧 ADC 或烧板；逐条展开见 <a href="#s11">§11 电气红线</a>。</p>
+
+  <div class="grid3">
+    <div class="mini" style="border-left:4px solid #dc2626">
+      <div class="ico">⚡</div>
+      <h5>P1 先分压，再进 MCU</h5>
+      <p>板子 IO 是 <b>3.3V 逻辑</b>，模拟输入绝对最大 <b>3.6V</b>。5V 传感器输出必须先分压/钳位，不能直连。</p>
+    </div>
+    <div class="mini" style="border-left:4px solid #ea580c">
+      <div class="ico">🔧</div>
+      <h5>P2 只接排针，不做不可逆改造</h5>
+      <p>板子是借的、赛后收回：<b>只接排针/端子</b>；禁止割线、焊死、拆焊板载 OLED / CH340E / LDO。</p>
+    </div>
+    <div class="mini" style="border-left:4px solid #2563eb">
+      <div class="ico">📏</div>
+      <h5>P3 断电接线、先量后接</h5>
+      <p>拔掉所有电源再动手；<b>一次只改一处</b>，每次改线后重新按 <a href="#s8">§8.2</a> 用万用表量一遍。</p>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 0 ============ -->
+<section id="s0">
+  <h2><span class="num">0</span>这份文件解决什么问题、怎么读 <span class="en">HOW TO USE</span></h2>
+  <p class="lead">本页回答三个问题：① 板子上哪个孔是哪个脚、哪些脚已占用、哪些能碰（§2）；② 每根线从模块哪个端子接到板子哪个孔、串什么电阻电容（§3~§7）；③ 接完怎么确认没接错、上电后应该看到什么（§8~§9）。</p>
+
+  <div class="grid3">
+    <div class="mini"><h5>🧭 第一次接线</h5><p>按 §0 → §2 → §3 → §4 → §5 → §7 → §8 顺序做。</p></div>
+    <div class="mini"><h5>🔍 只查一根线</h5><p>直接看 <a href="#s7">§7 完整接线表</a> 或文末 <a href="#appa">附录 A 速查卡</a>。</p></div>
+    <div class="mini"><h5>🧯 排障 / 答辩</h5><p>接线类故障看 <a href="#s10">§10</a>；红线与已知限制看 <a href="#s11">§11</a>。</p></div>
+  </div>
+
+  <div class="danger">
+    <span class="t">v1.1 更正（2026-10-31）：浊度模块是 4 针 G/A/D/V + 4 线探头，不是 3 针 TS-300B</span>
+    丝印 <b>G（GND）/ A（AO）/ D（DO）/ V（VCC，只能 5V）</b>：只接 G、A、V 三根；
+    <b>D 是 5V 比较器输出，必须悬空</b>，严禁接 P013 / P014 / P104。灵敏度电位器只调 DO 阈值、不影响 AO；
+    4 线探头必须原配、按模块座丝印 1~4 对插。板 VIN 供电时 AO 满量程 ≈4.7V，1k+2k 后节点 ≤3.13V（安全），
+    分压电阻不变。满量程/方向实测见 <a href="#s4">§4.2</a> 与 <a href="#s8">§8.2</a> 第 11/12 项。
+  </div>
+
+  <div class="note">
+    <span class="t">文档关系一句话</span>
+    本文给“电”的唯一口径；《硬件搭建方案》给“水”和“阀选型”；00 §3.1 是本文的压缩速查版；
+    08 T0~T10 是本文接完后的验收动作。
+  </div>
+</section>
+
+<!-- ============ 1 ============ -->
+<section id="s1">
+  <h2><span class="num">1</span>电路总览 <span class="en">OVERVIEW</span></h2>
+
+  <h3>1.1 三类连接（20 多根线先分成三类，接线不会乱）</h3>
+  <div class="grid3">
+    <div class="mini" style="border-left:4px solid #dc2626">
+      <h5>① 电源</h5>
+      <p>Type-C 5V 进板 → 板载 LDO 出 3.3V（<code>U1-12</code>）；5V 外设从 VIN（<code>U2-19/20</code>）取电，与板同开同关；12V 只给阀（本阶段不接）。</p>
+    </div>
+    <div class="mini" style="border-left:4px solid #111827">
+      <h5>② 地</h5>
+      <p>所有模块 GND 汇到“星形单点”，再进板 GND（U1-1/8/16、U2-4/6/11/14/18，共 <b>8 个排针地脚</b>）；阀/继电器大电流地单独走线。</p>
+    </div>
+    <div class="mini" style="border-left:4px solid #2563eb">
+      <h5>③ 信号</h5>
+      <p>2 路模拟（TDS→P014/AN12、浊度分压→P013/AN11）+ 1 路 1-Wire（DS18B20→P500）+ 板载 I2C0（OLED→P407/P408）+ 板载串口（CH340E→P109/P110）+ 2 路 GPIO（LED1→P111 板载、阀→P104 预留）。</p>
+    </div>
+  </div>
+
+  <h3>1.2 系统接线总图（信号实线画出，电源/地用网络标签）</h3>
+  <figure>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 880" role="img" aria-label="RA4M2_MINI 硬件接线总图：传感器/执行器/板载资源与信号流向" style="font-family:'Microsoft YaHei','PingFang SC','Noto Sans CJK SC',system-ui,sans-serif">
+<rect width="1280" height="880" fill="#ffffff"/>
+<path d="M0,0V880 M20,0V880 M40,0V880 M60,0V880 M80,0V880 M100,0V880 M120,0V880 M140,0V880 M160,0V880 M180,0V880 M200,0V880 M220,0V880 M240,0V880 M260,0V880 M280,0V880 M300,0V880 M320,0V880 M340,0V880 M360,0V880 M380,0V880 M400,0V880 M420,0V880 M440,0V880 M460,0V880 M480,0V880 M500,0V880 M520,0V880 M540,0V880 M560,0V880 M580,0V880 M600,0V880 M620,0V880 M640,0V880 M660,0V880 M680,0V880 M700,0V880 M720,0V880 M740,0V880 M760,0V880 M780,0V880 M800,0V880 M820,0V880 M840,0V880 M860,0V880 M880,0V880 M900,0V880 M920,0V880 M940,0V880 M960,0V880 M980,0V880 M1000,0V880 M1020,0V880 M1040,0V880 M1060,0V880 M1080,0V880 M1100,0V880 M1120,0V880 M1140,0V880 M1160,0V880 M1180,0V880 M1200,0V880 M1220,0V880 M1240,0V880 M1260,0V880 M1280,0V880 M0,0H1280 M0,20H1280 M0,40H1280 M0,60H1280 M0,80H1280 M0,100H1280 M0,120H1280 M0,140H1280 M0,160H1280 M0,180H1280 M0,200H1280 M0,220H1280 M0,240H1280 M0,260H1280 M0,280H1280 M0,300H1280 M0,320H1280 M0,340H1280 M0,360H1280 M0,380H1280 M0,400H1280 M0,420H1280 M0,440H1280 M0,460H1280 M0,480H1280 M0,500H1280 M0,520H1280 M0,540H1280 M0,560H1280 M0,580H1280 M0,600H1280 M0,620H1280 M0,640H1280 M0,660H1280 M0,680H1280 M0,700H1280 M0,720H1280 M0,740H1280 M0,760H1280 M0,780H1280 M0,800H1280 M0,820H1280 M0,840H1280 M0,860H1280 M0,880H1280" stroke="#eef2f7" stroke-width="1" fill="none"/>
+  <polyline points="300.0,345.0 305.0,345.0" stroke-width="2.2" stroke="#16a34a" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+  <polyline points="335.0,345.0 440.0,345.0" stroke-width="2.2" stroke="#16a34a" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+  <polyline points="345.0,345.0 345.0,353.0" stroke-width="2.2" stroke="#16a34a" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+  <polyline points="345.0,398.0 345.0,410.0" stroke-width="2.8" stroke="#111827" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+  <polyline points="395.0,345.0 395.0,371.0" stroke-width="2.2" stroke="#16a34a" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+  <polyline points="395.0,378.0 395.0,405.0" stroke-width="2.8" stroke="#111827" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+  <polyline points="300.0,205.0 440.0,205.0" stroke-width="2.2" stroke="#ca8a04" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+  <polyline points="300.0,525.0 440.0,525.0" stroke-width="2.2" stroke="#2563eb" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+  <polyline points="418.0,525.0 418.0,500.0" stroke-width="2.8" stroke="#dc2626" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+  <polyline points="418.0,468.0 418.0,456.0" stroke-width="2.8" stroke="#dc2626" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+  <polyline points="900.0,78.0 876.0,78.0 876.0,32.0 640.0,32.0 640.0,52.0" stroke-width="2.6" stroke="#ea580c" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+  <polygon points="640.0,52.0 644.0,44.0 636.0,44.0" fill="#ea580c"/>
+  <polyline points="780.0,509.0 866.0,509.0 866.0,195.0 900.0,195.0" stroke-width="2.0" stroke="#7c3aed" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+  <polyline points="840.0,600.0 900.0,600.0" stroke-width="2.0" stroke="#db2777" fill="none" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="7 5"/>
+  <rect x="440" y="70" width="400" height="760" rx="16" fill="#f8fafc" stroke="#334155" stroke-width="2"/>
+  <rect x="608" y="52" width="64" height="20" rx="5" fill="#334155"/>
+  <rect x="588.0" y="140.0" width="232.0" height="168.0" rx="10" fill="#eef2f7" stroke="#cbd5e1" stroke-width="1.4"/>
+  <rect x="600.0" y="352.0" width="180.0" height="86.0" rx="10" fill="#eef2f7" stroke="#cbd5e1" stroke-width="1.4"/>
+  <rect x="600.0" y="466.0" width="180.0" height="86.0" rx="10" fill="#eef2f7" stroke="#cbd5e1" stroke-width="1.4"/>
+  <rect x="600.0" y="580.0" width="105.0" height="74.0" rx="10" fill="#eef2f7" stroke="#cbd5e1" stroke-width="1.4"/>
+  <rect x="452.0" y="600.0" width="150.0" height="74.0" rx="10" fill="#eef2f7" stroke="#cbd5e1" stroke-width="1.4" stroke-dasharray="8 5"/>
+  <rect x="110.0" y="150.0" width="190.0" height="110.0" rx="10" fill="#ffffff" stroke="#94a3b8" stroke-width="1.4"/>
+  <rect x="68.4" y="181.5" width="33.6" height="21" rx="6" fill="#fee2e2" stroke="#dc2626" stroke-width="1.2"/>
+  <rect x="68.4" y="225.5" width="33.6" height="21" rx="6" fill="#e5e7eb" stroke="#111827" stroke-width="1.2"/>
+  <circle cx="300.0" cy="205.0" r="5.0" fill="#ffffff" stroke="#ca8a04" stroke-width="2.4"/>
+  <rect x="110.0" y="290.0" width="190.0" height="110.0" rx="10" fill="#ffffff" stroke="#94a3b8" stroke-width="1.4"/>
+  <rect x="68.4" y="311.5" width="33.6" height="21" rx="6" fill="#ffedd5" stroke="#ea580c" stroke-width="1.2"/>
+  <rect x="68.4" y="357.5" width="33.6" height="21" rx="6" fill="#e5e7eb" stroke="#111827" stroke-width="1.2"/>
+  <circle cx="300.0" cy="345.0" r="5.0" fill="#ffffff" stroke="#16a34a" stroke-width="2.4"/>
+  <rect x="110.0" y="470.0" width="190.0" height="110.0" rx="10" fill="#ffffff" stroke="#94a3b8" stroke-width="1.4"/>
+  <rect x="68.4" y="491.5" width="33.6" height="21" rx="6" fill="#fee2e2" stroke="#dc2626" stroke-width="1.2"/>
+  <rect x="68.4" y="537.5" width="33.6" height="21" rx="6" fill="#e5e7eb" stroke="#111827" stroke-width="1.2"/>
+  <circle cx="300.0" cy="525.0" r="5.0" fill="#ffffff" stroke="#2563eb" stroke-width="2.4"/>
+  <rect x="305.0" y="338.5" width="30.0" height="13.0" rx="2.5" fill="#ffffff" stroke="#334155" stroke-width="1.8"/>
+  <circle cx="345.0" cy="345.0" r="3.4" fill="#16a34a"/>
+  <rect x="338.5" y="353.0" width="13.0" height="45.0" rx="2.5" fill="#ffffff" stroke="#334155" stroke-width="1.8"/>
+  <rect x="328.2" y="410.5" width="33.6" height="21" rx="6" fill="#e5e7eb" stroke="#111827" stroke-width="1.2"/>
+  <circle cx="395.0" cy="345.0" r="3.4" fill="#16a34a"/>
+  <line x1="382.0" y1="369.4" x2="408.0" y2="369.4" stroke="#334155" stroke-width="2.2"/>
+  <line x1="382.0" y1="372.6" x2="408.0" y2="372.6" stroke="#334155" stroke-width="2.2"/>
+  <rect x="378.2" y="405.5" width="33.6" height="21" rx="6" fill="#e5e7eb" stroke="#111827" stroke-width="1.2"/>
+  <circle cx="418.0" cy="525.0" r="3.4" fill="#2563eb"/>
+  <rect x="411.5" y="468.0" width="13.0" height="32.0" rx="2.5" fill="#ffffff" stroke="#334155" stroke-width="1.8"/>
+  <rect x="401.2" y="433.5" width="33.6" height="21" rx="6" fill="#fee2e2" stroke="#dc2626" stroke-width="1.2"/>
+  <circle cx="440.0" cy="205.0" r="5.0" fill="#ffffff" stroke="#ca8a04" stroke-width="2.4"/>
+  <circle cx="440.0" cy="345.0" r="5.0" fill="#ffffff" stroke="#16a34a" stroke-width="2.4"/>
+  <circle cx="440.0" cy="525.0" r="5.0" fill="#ffffff" stroke="#2563eb" stroke-width="2.4"/>
+  <circle cx="840.0" cy="600.0" r="5.0" fill="#ffffff" stroke="#db2777" stroke-width="2.4"/>
+  <rect x="900.0" y="36.0" width="330.0" height="84.0" rx="10" fill="#ffffff" stroke="#94a3b8" stroke-width="1.4"/>
+  <rect x="900.0" y="150.0" width="330.0" height="90.0" rx="10" fill="#ffffff" stroke="#94a3b8" stroke-width="1.4"/>
+  <rect x="900.0" y="540.0" width="330.0" height="120.0" rx="10" fill="#fbfbfd" stroke="#94a3b8" stroke-width="1.4" stroke-dasharray="8 5"/>
+  <rect x="900.0" y="700.0" width="330.0" height="110.0" rx="10" fill="#fbfbfd" stroke="#94a3b8" stroke-width="1.4" stroke-dasharray="8 5"/>
+  <rect x="40.0" y="610.0" width="380.0" height="190.0" rx="10" fill="#fffbeb" stroke="#f59e0b" stroke-width="1.4"/>
+  <text x="640.0" y="66.0" style="font-size:9px;font-weight:600;fill:#ffffff;text-anchor:middle">Type-C</text>
+  <text x="640.0" y="106.0" style="font-size:15.5px;font-weight:700;fill:#0f172a;text-anchor:middle">RA4M2_MINI</text>
+  <text x="640.0" y="124.0" style="font-size:9.5px;font-weight:400;fill:#475569;text-anchor:middle">R7FA4M2AD3CFL · Cortex-M33 · 3.3V 逻辑</text>
+  <text x="704.0" y="211.9" style="font-size:12.5px;font-weight:600;fill:#0f172a;text-anchor:middle">MCU · R7FA4M2AD3CFL</text>
+  <text x="704.0" y="224.1" style="font-size:9.5px;font-weight:400;fill:#475569;text-anchor:middle">ADC0 / SCI9 / IIC0 / GPIO</text>
+  <text x="704.0" y="238.6" style="font-size:9.5px;font-weight:400;fill:#475569;text-anchor:middle">1-Wire 位操作 · SysTick 1 ms</text>
+  <text x="690.0" y="382.9" style="font-size:12.5px;font-weight:600;fill:#0f172a;text-anchor:middle">板载 OLED</text>
+  <text x="690.0" y="395.1" style="font-size:9.5px;font-weight:400;fill:#475569;text-anchor:middle">SSD1306 128×64</text>
+  <text x="690.0" y="409.6" style="font-size:9.5px;font-weight:400;fill:#475569;text-anchor:middle">I2C0 0x3C · P407/P408</text>
+  <text x="690.0" y="496.9" style="font-size:12.5px;font-weight:600;fill:#0f172a;text-anchor:middle">CH340E</text>
+  <text x="690.0" y="509.1" style="font-size:9.5px;font-weight:400;fill:#475569;text-anchor:middle">USB ↔ SCI9</text>
+  <text x="690.0" y="523.6" style="font-size:9.5px;font-weight:400;fill:#475569;text-anchor:middle">P109/P110 · 115200</text>
+  <text x="652.5" y="605.5" style="font-size:11.5px;font-weight:600;fill:#0f172a;text-anchor:middle">LED1 / K2</text>
+  <text x="652.5" y="617.3" style="font-size:8.5px;font-weight:400;fill:#475569;text-anchor:middle">P111 点亮</text>
+  <text x="652.5" y="630.8" style="font-size:8.5px;font-weight:400;fill:#475569;text-anchor:middle">P000 按键</text>
+  <text x="527.0" y="625.4" style="font-size:11px;font-weight:600;fill:#0f172a;text-anchor:middle">SWD 调试排针</text>
+  <text x="527.0" y="636.9" style="font-size:8.5px;font-weight:400;fill:#475569;text-anchor:middle">P300/P108 + GND</text>
+  <text x="527.0" y="650.4" style="font-size:8.5px;font-weight:400;fill:#475569;text-anchor:middle">（可选，仅调试）</text>
+  <text x="460.0" y="720.0" style="font-size:9.5px;font-weight:400;fill:#64748b;text-anchor:start">板载 LDO：5V → 3.3V（≈200 mA 级，⏳ 待核）</text>
+  <text x="460.0" y="744.0" style="font-size:9.5px;font-weight:400;fill:#64748b;text-anchor:start">8 个排针地脚：U1-1/8/16 · U2-4/6/11/14/18</text>
+  <text x="460.0" y="768.0" style="font-size:9.5px;font-weight:400;fill:#64748b;text-anchor:start">本图按功能排列；孔位物理顺序见 §2 孔位图</text>
+  <text x="205.0" y="200.1" style="font-size:12.5px;font-weight:600;fill:#0f172a;text-anchor:middle">TDS 传感器模块</text>
+  <text x="205.0" y="212.4" style="font-size:9.5px;font-weight:400;fill:#475569;text-anchor:middle">3.3V 供电 · AOUT 0~2.3V</text>
+  <text x="85.2" y="195.8" style="font-size:10.5px;font-weight:600;fill:#dc2626;text-anchor:middle">3V3</text>
+  <text x="85.2" y="239.8" style="font-size:10.5px;font-weight:600;fill:#111827;text-anchor:middle">GND</text>
+  <text x="205.0" y="340.1" style="font-size:12.5px;font-weight:600;fill:#0f172a;text-anchor:middle">浊度模块（4 针）</text>
+  <text x="205.0" y="352.4" style="font-size:9.5px;font-weight:400;fill:#475569;text-anchor:middle">5V · AO 0~VCC · D 悬空</text>
+  <text x="85.2" y="325.8" style="font-size:10.5px;font-weight:600;fill:#ea580c;text-anchor:middle">VIN</text>
+  <text x="85.2" y="371.8" style="font-size:10.5px;font-weight:600;fill:#111827;text-anchor:middle">GND</text>
+  <text x="205.0" y="520.1" style="font-size:12.5px;font-weight:600;fill:#0f172a;text-anchor:middle">DS18B20 水温</text>
+  <text x="205.0" y="532.4" style="font-size:9.5px;font-weight:400;fill:#475569;text-anchor:middle">3 线供电 · 1-Wire 开漏</text>
+  <text x="85.2" y="505.8" style="font-size:10.5px;font-weight:600;fill:#dc2626;text-anchor:middle">3V3</text>
+  <text x="85.2" y="551.8" style="font-size:10.5px;font-weight:600;fill:#111827;text-anchor:middle">GND</text>
+  <text x="320.0" y="336.0" style="font-size:9.5px;font-weight:600;fill:#334155;text-anchor:middle">R1 1kΩ</text>
+  <text x="400.0" y="329.0" style="font-size:10.5px;font-weight:400;fill:#334155;text-anchor:middle;paint-order:stroke;stroke:#ffffff;stroke-width:3.8px;stroke-linejoin:round">→ U1-5（P013）</text>
+  <text x="332.5" y="378.9" style="font-size:9.5px;font-weight:600;fill:#334155;text-anchor:end">R2 2kΩ</text>
+  <text x="345.0" y="424.8" style="font-size:10.5px;font-weight:600;fill:#111827;text-anchor:middle">GND</text>
+  <text x="395.0" y="419.8" style="font-size:10.5px;font-weight:600;fill:#111827;text-anchor:middle">GND</text>
+  <text x="408.0" y="379.0" style="font-size:9px;font-weight:600;fill:#334155;text-anchor:start">0.1 µF</text>
+  <text x="306.0" y="306.0" style="font-size:9.5px;font-weight:400;fill:#a16207;text-anchor:start">5V→3.3V 分压（必做）</text>
+  <text x="370.0" y="189.0" style="font-size:10.5px;font-weight:400;fill:#334155;text-anchor:middle;paint-order:stroke;stroke:#ffffff;stroke-width:3.8px;stroke-linejoin:round">AOUT → U1-6（P014）</text>
+  <text x="365.0" y="509.0" style="font-size:10.5px;font-weight:400;fill:#334155;text-anchor:middle;paint-order:stroke;stroke:#ffffff;stroke-width:3.8px;stroke-linejoin:round">DQ → U1-17（P500）</text>
+  <text x="405.5" y="487.4" style="font-size:9.5px;font-weight:600;fill:#334155;text-anchor:end">4.7 kΩ</text>
+  <text x="418.0" y="447.8" style="font-size:10.5px;font-weight:600;fill:#dc2626;text-anchor:middle">3V3</text>
+  <text x="304.0" y="444.0" style="font-size:9px;font-weight:400;fill:#64748b;text-anchor:start">开漏总线需上拉</text>
+  <text x="452.0" y="200.0" style="font-size:10.5px;font-weight:700;fill:#0f172a;text-anchor:start">U1-6</text>
+  <text x="452.0" y="214.0" style="font-size:9px;font-weight:400;fill:#a16207;text-anchor:start">P014 · AN12</text>
+  <text x="452.0" y="340.0" style="font-size:10.5px;font-weight:700;fill:#0f172a;text-anchor:start">U1-5</text>
+  <text x="452.0" y="354.0" style="font-size:9px;font-weight:400;fill:#15803d;text-anchor:start">P013 · AN11</text>
+  <text x="452.0" y="520.0" style="font-size:10.5px;font-weight:700;fill:#0f172a;text-anchor:start">U1-17</text>
+  <text x="452.0" y="534.0" style="font-size:9px;font-weight:400;fill:#1d4ed8;text-anchor:start">P500 · 1-Wire</text>
+  <text x="828.0" y="595.0" style="font-size:10.5px;font-weight:700;fill:#0f172a;text-anchor:end">U2-8</text>
+  <text x="828.0" y="609.0" style="font-size:9px;font-weight:400;fill:#be185d;text-anchor:end">P104 · 阀</text>
+  <text x="1065.0" y="65.9" style="font-size:12.5px;font-weight:600;fill:#0f172a;text-anchor:middle">Type-C 5V 供电</text>
+  <text x="1065.0" y="78.1" style="font-size:9.5px;font-weight:400;fill:#475569;text-anchor:middle">联调：电脑 USB ｜ 演示：5V/2A 适配器</text>
+  <text x="1065.0" y="92.6" style="font-size:9.5px;font-weight:400;fill:#475569;text-anchor:middle">板载 LDO 出 3.3V（U1-12）</text>
+  <text x="770.0" y="24.0" style="font-size:9.5px;font-weight:600;fill:#c2410c;text-anchor:middle">5V 输入</text>
+  <text x="1065.0" y="182.9" style="font-size:12.5px;font-weight:600;fill:#0f172a;text-anchor:middle">PC · 串口终端</text>
+  <text x="1065.0" y="195.1" style="font-size:9.5px;font-weight:400;fill:#475569;text-anchor:middle">板载 CH340E · SSCOM 115200</text>
+  <text x="1065.0" y="209.6" style="font-size:9.5px;font-weight:400;fill:#475569;text-anchor:middle">CSV 17 列 · state/action 行</text>
+  <text x="1065.0" y="580.6" style="font-size:12.5px;font-weight:600;fill:#64748b;text-anchor:middle">继电器模块（预留，本轮不接）</text>
+  <text x="1065.0" y="592.9" style="font-size:9.5px;font-weight:400;fill:#94a3b8;text-anchor:middle">VCC→VIN(U2-19) · GND→地排</text>
+  <text x="1065.0" y="607.4" style="font-size:9.5px;font-weight:400;fill:#94a3b8;text-anchor:middle">IN→P104(U2-8) · 3.3V 触发 / 光耦</text>
+  <text x="1065.0" y="621.9" style="font-size:9.5px;font-weight:400;fill:#94a3b8;text-anchor:middle">P104 ↔ GND 加 10 kΩ 下拉（fail-safe）</text>
+  <text x="1065.0" y="735.6" style="font-size:12.5px;font-weight:600;fill:#64748b;text-anchor:middle">12V 三通阀回路（本阶段不接）</text>
+  <text x="1065.0" y="747.9" style="font-size:9.5px;font-weight:400;fill:#94a3b8;text-anchor:middle">12V/3A → 2A 保险丝 → 船型开关 → COM</text>
+  <text x="1065.0" y="762.4" style="font-size:9.5px;font-weight:400;fill:#94a3b8;text-anchor:middle">NO → 阀+ ；阀− → 12V− ；断电 = 排空</text>
+  <text x="1065.0" y="776.9" style="font-size:9.5px;font-weight:400;fill:#94a3b8;text-anchor:middle">1N4007 续流：阴极→阀+、阳极→阀−</text>
+  <text x="900.0" y="828.0" style="font-size:9px;font-weight:400;fill:#94a3b8;text-anchor:start">阀地单独走线到端子排，不经过开发板地线</text>
+  <text x="230.0" y="636.0" style="font-size:11.5px;font-weight:600;fill:#0f172a;text-anchor:middle">接线顺序（每次改线都照做，详见 §8.1）</text>
+  <text x="58.0" y="648.0" style="font-size:9.8px;font-weight:400;fill:#92400e;text-anchor:start">① 断电：拔掉所有电源再动手</text>
+  <text x="58.0" y="672.0" style="font-size:9.8px;font-weight:400;fill:#92400e;text-anchor:start">② 认孔：先从 3V3 孔（U1-12）入手定位</text>
+  <text x="58.0" y="696.0" style="font-size:9.8px;font-weight:400;fill:#92400e;text-anchor:start">③ 先接地：模块 GND → 端子排 → 单根进板</text>
+  <text x="58.0" y="720.0" style="font-size:9.8px;font-weight:400;fill:#92400e;text-anchor:start">④ 接 3.3V 组：TDS + DS18B20（含 4.7 kΩ 上拉）</text>
+  <text x="58.0" y="744.0" style="font-size:9.8px;font-weight:400;fill:#92400e;text-anchor:start">⑤ 接 5V 组：浊度模块（V/A/G）+ R1/R2 + 0.1 µF</text>
+  <text x="58.0" y="768.0" style="font-size:9.8px;font-weight:400;fill:#92400e;text-anchor:start">⑥ 复核接线表 → ⑦ 先给板供电 → ⑧ 再开外设</text>
+  <text x="40.0" y="856.0" style="font-size:10px;font-weight:400;fill:#64748b;text-anchor:start">说明：同名网络标签 = 同一根线；虚线框 = 本阶段不接 / 预留；圆点 = 排针孔位。孔位物理顺序见 §2，逐根接线见 §7。</text>
+</svg>
+    <figcaption><b>图 1-1</b> 硬件接线总图。同名网络标签视为同一根线；虚线框为本阶段不接/预留；圆点为排针孔位。
+      孔位物理顺序见 <a href="#s2">§2</a>，逐根接线见 <a href="#s7">§7</a>。</figcaption>
+  </figure>
+
+  <div class="legend">
+    <span><i class="swatch" style="background:#dc2626"></i>3V3（U1-12）</span>
+    <span><i class="swatch" style="background:#ea580c"></i>VIN / 5V（U2-19/20）</span>
+    <span><i class="swatch" style="background:#111827"></i>GND（星形单点）</span>
+    <span><i class="swatch" style="background:#ca8a04"></i>模拟信号</span>
+    <span><i class="swatch" style="background:#16a34a"></i>分压节点</span>
+    <span><i class="swatch" style="background:#2563eb"></i>1-Wire DQ</span>
+    <span><i class="swatch" style="background:#7c3aed"></i>板载串口</span>
+    <span><i class="swatch" style="background:#db2777"></i>GPIO / 阀控制</span>
+    <span><i class="swatch dash"></i>预留 / 本阶段不接</span>
+  </div>
+
+  <div class="note">
+    <span class="t">电源与地怎么走（图里用标签，实际走线见 §3 与 §7）</span>
+    Type-C 5V（联调用电脑 / 演示用 5V/2A 适配器）→ 板载 3.3V LDO；5V 外设（浊度、继电器线圈）从 VIN
+    （<code>U2-19/20</code>，≈4.5~4.7V）取电；12V 阀回路：独立 12V/3A → 2A 保险丝 → 船型开关 → 继电器 COM（本阶段不接）。
+  </div>
+
+  <h3>1.3 信号清单与电平</h3>
+  <div class="tw">
+  <table>
+    <thead><tr><th>信号</th><th>板端（引脚 / 孔）</th><th>MCU 外设</th><th class="c">方向</th><th>电平 / 范围</th><th class="c">本阶段</th></tr></thead>
+    <tbody>
+      <tr><td><span class="chip c-adc">TDS AOUT</span></td><td><code>P014</code>（U1-6）/ AN12</td><td>ADC0</td><td class="c">输入</td><td>0~2.3V（实测高浓度 2.36V）</td><td class="c b-ok">必须</td></tr>
+      <tr><td><span class="chip c-node">浊度节点</span></td><td><code>P013</code>（U1-5）/ AN11</td><td>ADC0</td><td class="c">输入</td><td>0~3.2V（分压后）</td><td class="c b-ok">必须</td></tr>
+      <tr><td><span class="chip c-dq">DS18B20 DQ</span></td><td><code>P500</code>（U1-17）</td><td>1-Wire</td><td class="c">双向</td><td>3.3V 开漏 + 4.7k 上拉</td><td class="c b-ok">必须</td></tr>
+      <tr><td>OLED SDA</td><td><code>P407</code>（U1-7）/ IIC0_SDA</td><td>I2C0</td><td class="c">双向</td><td>3.3V，板载上拉</td><td class="c b-lock">板载</td></tr>
+      <tr><td>OLED SCL</td><td><code>P408</code>（U2-7）/ IIC0_SCL</td><td>I2C0</td><td class="c">双向</td><td>3.3V</td><td class="c b-lock">板载</td></tr>
+      <tr><td>串口 TX</td><td><code>P109</code>（U2-12）/ TXD9</td><td>SCI9</td><td class="c">输出</td><td>板载电平</td><td class="c b-lock">板载</td></tr>
+      <tr><td>串口 RX</td><td><code>P110</code>（U2-13）/ RXD9</td><td>SCI9</td><td class="c">输入</td><td>板载电平</td><td class="c b-lock">板载</td></tr>
+      <tr><td><span class="chip c-gpio">阀控制</span></td><td><code>P104</code>（U2-8）</td><td>GPIO 出</td><td class="c">输出</td><td>0/3.3V；默认低</td><td class="c b-todo">预留</td></tr>
+      <tr><td>用户 LED1</td><td><code>P111</code>（U2-2）</td><td>GPIO 出</td><td class="c">输出</td><td>高电平点亮</td><td class="c b-lock">板载</td></tr>
+      <tr><td>用户 K2</td><td><code>P000</code>（U1-14）</td><td>GPIO 入</td><td class="c">输入</td><td>上拉 4.7k，按下 = 0</td><td class="c b-lock">板载</td></tr>
+      <tr><td>SWD 时钟</td><td><code>P300</code>（U2-1）</td><td>Debug</td><td class="c">—</td><td>3.3V</td><td class="c b-todo">调试可选</td></tr>
+      <tr><td>SWD 数据</td><td><code>P108</code>（U2-10）</td><td>Debug</td><td class="c">双向</td><td>3.3V</td><td class="c b-todo">调试可选</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <h3>1.4 电气特性与绝对最大（做任何连接前先记住这 5 条）</h3>
+  <div class="grid2">
+    <div class="warn"><span class="t">① 逻辑电平 3.3V</span>除 <code>P206/P407/P408/P409</code> 外，所有 IO <b>都不是 5V 容忍</b>；模拟输入绝对最大 <b>3.6V</b>，超过即损坏 ADC / 引脚。</div>
+    <div class="note"><span class="t">② ADC 参考</span>VREFH0 = 板载 3.3V（不用外接基准）；12 位 = 0~4095 对应 0~3.3V，<b>1 LSB ≈ 0.806 mV</b>。</div>
+    <div class="warn"><span class="t">③ ADC 源阻抗 ≤ 1 kΩ</span>这是浊度必须用 <b>1k+2k</b>、不能用“10k+20k”的原因（见 <a href="#s4">§4.3</a>）。</div>
+    <div class="note"><span class="t">④ 5V 容忍脚只有 4 个</span><code>P206</code>（流量计预留）、<code>P407/P408</code>（已给 OLED）、<code>P409</code>（蜂鸣器预留）；其余 5V 信号一律分压或加电平转换。</div>
+    <div class="danger"><span class="t">⑤ 5V 外设只从 VIN 取电</span>与板同开同关；不允许“板断电、外设带电”（会从 IO 倒灌）。</div>
+    <div class="note"><span class="t">⑥ 板载 LDO 余量</span>3.3V 侧负载约 60~90 mA，板载 LDO（丝印 662K，约 200 mA 级，<span class="b-todo">⏳ 型号待核</span>）；外部取电余量估计 &lt;100 mA，满载实测确认。</div>
+  </div>
+</section>
+
+<!-- ============ 2 ============ -->
+<section id="s2">
+  <h2><span class="num">2</span>板卡与孔位事实 <span class="en">BOARD &amp; PINOUT</span></h2>
+
+  <h3>2.1 板卡型号与板载资源 🟢（已按实际板卡原理图 V1.2.1 + 瑞萨数据手册核对）</h3>
+  <ul class="tight">
+    <li>型号：<b>RA4M2_MINI</b>（R7FA4M2AD3CFL，ARM Cortex-M33，48 脚 LQFP）；</li>
+    <li>板载：0.96" OLED（SSD1306 兼容，I2C0，<code>0x3C</code>，自带 4.7kΩ 上拉）、CH340E USB-串口（接 SCI9）、
+        用户 LED1、用户按键 K2、复位键、两排 20 孔排针（记作 <b>U1、U2</b>）、SWD 排针（P300/P108）；</li>
+    <li>没有板载调试器：烧录走 Type-C + CH340E + SCI Boot（Renesas Flash Programmer），或用外部 J-Link/EZ-Cube3 走 SWD；</li>
+    <li>开发板是借的、赛后收回：只接排针/端子，禁止不可逆改造（见 <a href="#s11">§11 红线</a>）。</li>
+  </ul>
+
+  <h3>2.2 孔位计数规则 ★（数错孔是新手第一大坑）</h3>
+  <div class="danger">
+    <span class="t">数孔规则（按 12 文档 §2.2 原文）</span>
+    U1、U2 两排都是从板子<b>下端往 Type-C 方向</b>数：<br>
+    第 1 孔 = <code>U1-1</code> / <code>U2-1</code>　　第 9 孔 = <code>U1-12</code> / <code>U2-12</code>　　第 20 孔 = <code>U1-20</code> / <code>U2-20</code>
+  </div>
+  <div class="grid3" style="margin-top:12px">
+    <div class="mini"><h5>记忆锚点 ①</h5><p><b>第 9 孔 = 3V3</b>（U1 侧，即 <code>U1-12</code>）。</p></div>
+    <div class="mini"><h5>记忆锚点 ②</h5><p><b>U2 第 19/20 孔 = VIN</b>（≈4.5~4.7V）。</p></div>
+    <div class="mini"><h5>最稳的定位法</h5><p>上电后用万用表量：<b>3.25~3.35V 的孔就是 3V3（U1-12）</b>，其余孔位以它为基准反推。</p></div>
+  </div>
+  <div class="note" style="margin-top:12px">
+    <span class="t">接线前的动作</span>
+    把排针孔位用标签纸/记号笔标出来，接线时逐孔念“U1-6 = P014”再插。
+    （注：02 文档写“U1 从上往下第 9 孔”，与本节方向描述字面不同；<b>以万用表实测 3V3 孔为准</b>，见 <a href="#s8">§8.2</a> 第 1 项。）
+  </div>
+
+  <h3>2.3 U1 排（20 孔）完整表</h3>
+  <div class="tw">
+  <table class="compact">
+    <thead><tr><th class="c" style="width:70px">孔号</th><th style="width:80px">引脚</th><th>复用能力</th><th>本项目用途 / 可用性</th></tr></thead>
+    <tbody>
+      <tr><td class="c"><code class="pin hole">U1-1</code></td><td>GND</td><td>地</td><td><span class="b-ok">✅ 模块地 / 星形地</span></td></tr>
+      <tr><td class="c"><code class="pin hole">U1-2</code></td><td>P402</td><td>GPIO / IRQ4 / SCI4_CTS</td><td>✅ 空闲（阀/流量计备选）</td></tr>
+      <tr><td class="c"><code class="pin hole">U1-3</code></td><td>P001</td><td>GPIO / IRQ7 / ADC0_AN01</td><td>✅ 空闲（ADC 备选）</td></tr>
+      <tr><td class="c"><code class="pin hole">U1-4</code></td><td>P002</td><td>GPIO / IRQ8 / ADC0_AN02</td><td>✅ 空闲（ADC 备选）</td></tr>
+      <tr><td class="c"><code class="pin hole">U1-5</code></td><td>P013</td><td>ADC0_AN11（模拟）</td><td><span class="b-lock">🔒 浊度分压后输入</span></td></tr>
+      <tr><td class="c"><code class="pin hole">U1-6</code></td><td>P014</td><td>ADC0_AN12（模拟）/ DAC0</td><td><span class="b-lock">🔒 TDS AOUT 直连</span></td></tr>
+      <tr><td class="c"><code class="pin hole">U1-7</code></td><td>P407</td><td>IIC0_SDA / CTSU / GPT6（5V 容忍）</td><td><span class="b-lock">🔒 板载 OLED SDA</span></td></tr>
+      <tr><td class="c"><code class="pin hole">U1-8</code></td><td>GND</td><td>地</td><td>✅ 模块地</td></tr>
+      <tr><td class="c"><code class="pin hole">U1-9</code></td><td>P102</td><td>SPI_SCK</td><td>✅ 空闲（本作品不用 SPI）</td></tr>
+      <tr><td class="c"><code class="pin hole">U1-10</code></td><td>P100</td><td>SPI_MISO</td><td>✅ 空闲</td></tr>
+      <tr><td class="c"><code class="pin hole">U1-11</code></td><td>P101</td><td>SPI_MOSI</td><td>✅ 空闲</td></tr>
+      <tr><td class="c"><code class="pin hole">U1-12</code></td><td><b>3V3</b></td><td>3.3V 输出（板载 LDO）</td><td><span class="b-ok">✅ 3.3V 总取电点（推荐，第 9 孔）</span></td></tr>
+      <tr><td class="c"><code class="pin hole">U1-13</code></td><td>P015</td><td>GPIO / IRQ13 / ADC0_AN13 / DAC1</td><td>✅ 空闲</td></tr>
+      <tr><td class="c"><code class="pin hole">U1-14</code></td><td>P000</td><td>GPIO / IRQ6 / ADC0_AN00</td><td><span class="b-lock">🔒 板载 K2（4.7k 上拉）</span></td></tr>
+      <tr><td class="c"><code class="pin hole">U1-15</code></td><td>RES</td><td>复位</td><td><span class="b-warn">⚠ 不接</span></td></tr>
+      <tr><td class="c"><code class="pin hole">U1-16</code></td><td>GND</td><td>地</td><td>✅ 模块地（离传感器最近）</td></tr>
+      <tr><td class="c"><code class="pin hole">U1-17</code></td><td>P500</td><td>ADC0_AN16（本方案不用 ADC）/ GPIO</td><td><span class="b-lock">🔒 DS18B20 DQ（1-Wire）</span></td></tr>
+      <tr><td class="c"><code class="pin hole">U1-18</code></td><td>P301</td><td>GPIO / SCI2_SCL2 / SCI2_RXD2 / GPT4</td><td>✅ 空闲</td></tr>
+      <tr><td class="c"><code class="pin hole">U1-19</code></td><td>P302</td><td>GPIO / SCI2_SDA2 / SCI2_TXD2 / GPT4</td><td>✅ 空闲</td></tr>
+      <tr><td class="c"><code class="pin hole">U1-20</code></td><td>3V3?</td><td>原理图标 3V3，板背丝印疑为 VIN</td><td><span class="b-todo">⏳ 先别用；3.3V 一律走 U1-12</span></td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <h3>2.4 U2 排（20 孔）完整表</h3>
+  <div class="tw">
+  <table class="compact">
+    <thead><tr><th class="c" style="width:70px">孔号</th><th style="width:80px">引脚</th><th>复用能力</th><th>本项目用途 / 可用性</th></tr></thead>
+    <tbody>
+      <tr><td class="c"><code class="pin hole">U2-1</code></td><td>P300</td><td>SWCLK / GPT0</td><td><span class="b-lock">🔒 SWD 调试口</span></td></tr>
+      <tr><td class="c"><code class="pin hole">U2-2</code></td><td>P111</td><td>GPIO / IRQ4 / SCI2_SCK（板载 LED1）</td><td><span class="b-lock">🔒 假执行器 LED1</span></td></tr>
+      <tr><td class="c"><code class="pin hole">U2-3</code></td><td>P409</td><td>GPIO / IRQ6 / SCI3 / CTSU（5V 容忍）</td><td>✅ 空闲（蜂鸣器备选）</td></tr>
+      <tr><td class="c"><code class="pin hole">U2-4</code></td><td>GND</td><td>地</td><td>✅ 模块地</td></tr>
+      <tr><td class="c"><code class="pin hole">U2-5</code></td><td>P200</td><td>GPIO / NMI</td><td><span class="b-warn">⚠ 空闲但是 NMI，不建议用</span></td></tr>
+      <tr><td class="c"><code class="pin hole">U2-6</code></td><td>GND</td><td>地</td><td>✅ 模块地</td></tr>
+      <tr><td class="c"><code class="pin hole">U2-7</code></td><td>P408</td><td>IIC0_SCL / IRQ7 / SCI3 / GPT6</td><td><span class="b-lock">🔒 板载 OLED SCL</span></td></tr>
+      <tr><td class="c"><code class="pin hole">U2-8</code></td><td>P104</td><td>GPIO / IRQ1 / GPT1</td><td><span class="b-lock">🔒 阀 / 继电器 IN（预留）</span></td></tr>
+      <tr><td class="c"><code class="pin hole">U2-9</code></td><td>P103</td><td>GPIO / SCI0_CTS / GPT2</td><td>✅ 空闲（阀 GPIO 备选）</td></tr>
+      <tr><td class="c"><code class="pin hole">U2-10</code></td><td>P108</td><td>SWDIO / SCI9_CTS</td><td><span class="b-lock">🔒 SWD 调试口</span></td></tr>
+      <tr><td class="c"><code class="pin hole">U2-11</code></td><td>GND</td><td>地</td><td>✅ 模块地</td></tr>
+      <tr><td class="c"><code class="pin hole">U2-12</code></td><td>P109</td><td>SCI9_TXD</td><td><span class="b-lock">🔒 CH340E 串口 TX</span></td></tr>
+      <tr><td class="c"><code class="pin hole">U2-13</code></td><td>P110</td><td>SCI9_RXD / IRQ3 / GPT1</td><td><span class="b-lock">🔒 CH340E 串口 RX</span></td></tr>
+      <tr><td class="c"><code class="pin hole">U2-14</code></td><td>GND</td><td>地</td><td>✅ 模块地</td></tr>
+      <tr><td class="c"><code class="pin hole">U2-15</code></td><td>P112</td><td>SCI1_SCK / SCI2_TXD / GPT3</td><td>✅ 空闲</td></tr>
+      <tr><td class="c"><code class="pin hole">U2-16</code></td><td>P206</td><td>SCI4_RXD / SCI9_CTS / CTSU（5V 容忍）</td><td>✅ 空闲（流量计备选）</td></tr>
+      <tr><td class="c"><code class="pin hole">U2-17</code></td><td>P207</td><td>SCI4_TXD / CTSU</td><td>✅ 空闲</td></tr>
+      <tr><td class="c"><code class="pin hole">U2-18</code></td><td>GND</td><td>地</td><td>✅ 模块地</td></tr>
+      <tr><td class="c"><code class="pin hole">U2-19</code></td><td><b>VIN</b></td><td>USB VBUS 经防反接二极管 ≈4.5~4.7V</td><td><span class="b-warn">⚠ 只作输出取 5V</span></td></tr>
+      <tr><td class="c"><code class="pin hole">U2-20</code></td><td><b>VIN</b></td><td>同上</td><td><span class="b-warn">⚠ 同上</span></td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <div class="warn">
+    <span class="t">U2-19/20 的 VIN 是“板载 LDO 的输入”</span>
+    设计上只允许从这里 <b>取</b> 5V 给外设，<b>不允许外部 5V 从这两个孔灌进板子</b>（尤其不要插 USB 的同时灌 VIN，防倒灌）。
+  </div>
+  <div class="warn">
+    <span class="t">P407 / P408（OLED）虽然 5V 容忍，但已被 OLED 独占</span>
+    不要抢作 GPIO / 别的外设；OLED 是焊在板上的，<b>不需要任何外部接线</b>。
+  </div>
+
+  <h3>2.5 本方案用到的孔位汇总（接线只碰这些孔）</h3>
+  <div class="tw">
+  <table class="compact">
+    <thead><tr><th style="width:130px">用途</th><th>孔位</th><th>说明</th></tr></thead>
+    <tbody>
+      <tr><td><span class="chip c-3v3">3V3</span></td><td><code>U1-12</code></td><td>板载 LDO 输出，3.3V 总取电点（第 9 孔）</td></tr>
+      <tr><td><span class="chip c-gnd">GND</span></td><td><code>U1-1 / U1-8 / U1-16 / U2-4 / U2-6 / U2-11 / U2-14 / U2-18</code></td><td>共 8 个排针地脚，全部汇到端子排（星形单点）</td></tr>
+      <tr><td><span class="chip c-vin">VIN（5V 外设）</span></td><td><code>U2-19</code> 或 <code>U2-20</code></td><td>只作输出取 5V，不灌电</td></tr>
+      <tr><td><span class="chip c-adc">模拟</span></td><td><code>U1-6</code>（P014 / TDS）、<code>U1-5</code>（P013 / 浊度节点）</td><td>ADC0_AN12 / AN11，同一 Scan Group</td></tr>
+      <tr><td><span class="chip c-dq">数字</span></td><td><code>U1-17</code>（P500 / DS18B20）、<code>U1-7/U2-7</code>（P407/P408 板载 OLED）、<code>U2-12/U2-13</code>（P109/P110 板载 CH340E）、<code>U2-2</code>（P111 板载 LED）、<code>U1-14</code>（P000 板载 K2）、<code>U2-8</code>（P104 继电器预留）</td><td>标“板载”的孔不需要外部接线</td></tr>
+      <tr><td><span class="chip c-gray">调试</span></td><td><code>U2-1</code>（P300/SWCLK）、<code>U2-10</code>（P108/SWDIO）+ SWD 排针 pin4（GND）</td><td>可选，仅调试用</td></tr>
+    </tbody>
+  </table>
+  </div>
+</section>
+<!-- ============ 3 ============ -->
+<section id="s3">
+  <h2><span class="num">3</span>电源与接地 <span class="en">POWER &amp; GROUND</span></h2>
+
+  <h3>3.1 供配电拓扑（照这个接，不要自由发挥）</h3>
+  <figure>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1160 430" role="img" aria-label="供配电拓扑：5V / 3.3V / VIN 分配" style="font-family:'Microsoft YaHei','PingFang SC','Noto Sans CJK SC',system-ui,sans-serif">
+<rect width="1160" height="430" fill="#ffffff"/>
+<path d="M0,0V430 M20,0V430 M40,0V430 M60,0V430 M80,0V430 M100,0V430 M120,0V430 M140,0V430 M160,0V430 M180,0V430 M200,0V430 M220,0V430 M240,0V430 M260,0V430 M280,0V430 M300,0V430 M320,0V430 M340,0V430 M360,0V430 M380,0V430 M400,0V430 M420,0V430 M440,0V430 M460,0V430 M480,0V430 M500,0V430 M520,0V430 M540,0V430 M560,0V430 M580,0V430 M600,0V430 M620,0V430 M640,0V430 M660,0V430 M680,0V430 M700,0V430 M720,0V430 M740,0V430 M760,0V430 M780,0V430 M800,0V430 M820,0V430 M840,0V430 M860,0V430 M880,0V430 M900,0V430 M920,0V430 M940,0V430 M960,0V430 M980,0V430 M1000,0V430 M1020,0V430 M1040,0V430 M1060,0V430 M1080,0V430 M1100,0V430 M1120,0V430 M1140,0V430 M1160,0V430 M0,0H1160 M0,20H1160 M0,40H1160 M0,60H1160 M0,80H1160 M0,100H1160 M0,120H1160 M0,140H1160 M0,160H1160 M0,180H1160 M0,200H1160 M0,220H1160 M0,240H1160 M0,260H1160 M0,280H1160 M0,300H1160 M0,320H1160 M0,340H1160 M0,360H1160 M0,380H1160 M0,400H1160 M0,420H1160" stroke="#eef2f7" stroke-width="1" fill="none"/>
+  <polyline points="210.0,210.0 300.0,210.0" stroke-width="2.8" stroke="#ea580c" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+  <polygon points="300.0,210.0 292.0,206.0 292.0,214.0" fill="#ea580c"/>
+  <polyline points="420.0,150.0 420.0,110.0 1030.0,110.0" stroke-width="3.0" stroke="#dc2626" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+  <polyline points="625.0,140.0 625.0,110.0" stroke-width="2.8" stroke="#dc2626" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+  <polyline points="815.0,140.0 815.0,110.0" stroke-width="2.8" stroke="#dc2626" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+  <polyline points="1030.0,140.0 1030.0,110.0" stroke-width="2.8" stroke="#dc2626" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+  <polyline points="540.0,210.0 556.0,210.0 556.0,330.0 1030.0,330.0" stroke-width="3.0" stroke="#ea580c" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+  <polyline points="625.0,350.0 625.0,330.0" stroke-width="2.8" stroke="#ea580c" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+  <polyline points="830.0,350.0 830.0,330.0" stroke-width="1.8" stroke="#ea580c" fill="none" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="5 4"/>
+  <rect x="30.0" y="168.0" width="180.0" height="84.0" rx="10" fill="#ffffff" stroke="#94a3b8" stroke-width="1.4"/>
+  <rect x="300.0" y="150.0" width="240.0" height="120.0" rx="10" fill="#f8fafc" stroke="#334155" stroke-width="1.4"/>
+  <circle cx="300.0" cy="210.0" r="5.0" fill="#ffffff" stroke="#ea580c" stroke-width="2.4"/>
+  <circle cx="540.0" cy="210.0" r="5.0" fill="#ffffff" stroke="#ea580c" stroke-width="2.4"/>
+  <rect x="540.0" y="140.0" width="170.0" height="70.0" rx="10" fill="#ffffff" stroke="#94a3b8" stroke-width="1.4"/>
+  <circle cx="625.0" cy="110.0" r="3.4" fill="#dc2626"/>
+  <rect x="730.0" y="140.0" width="170.0" height="70.0" rx="10" fill="#ffffff" stroke="#94a3b8" stroke-width="1.4"/>
+  <circle cx="815.0" cy="110.0" r="3.4" fill="#dc2626"/>
+  <rect x="920.0" y="140.0" width="220.0" height="70.0" rx="10" fill="#ffffff" stroke="#94a3b8" stroke-width="1.4"/>
+  <circle cx="1030.0" cy="110.0" r="3.4" fill="#dc2626"/>
+  <rect x="540.0" y="350.0" width="170.0" height="64.0" rx="10" fill="#ffffff" stroke="#94a3b8" stroke-width="1.4"/>
+  <circle cx="625.0" cy="330.0" r="3.4" fill="#ea580c"/>
+  <rect x="730.0" y="350.0" width="200.0" height="64.0" rx="10" fill="#fbfbfd" stroke="#94a3b8" stroke-width="1.4" stroke-dasharray="8 5"/>
+  <rect x="950.0" y="350.0" width="190.0" height="64.0" rx="10" fill="#fbfbfd" stroke="#94a3b8" stroke-width="1.4" stroke-dasharray="8 5"/>
+  <circle cx="830.0" cy="330.0" r="3.4" fill="#ea580c"/>
+  <rect x="40.0" y="300.0" width="440.0" height="100.0" rx="10" fill="#fef2f2" stroke="#f87171" stroke-width="1.4"/>
+  <text x="120.0" y="197.9" style="font-size:12.5px;font-weight:600;fill:#0f172a;text-anchor:middle">5V 电源</text>
+  <text x="120.0" y="210.1" style="font-size:9.5px;font-weight:400;fill:#475569;text-anchor:middle">5V/2A 适配器（演示）</text>
+  <text x="120.0" y="224.6" style="font-size:9.5px;font-weight:400;fill:#475569;text-anchor:middle">或电脑 USB（联调）</text>
+  <text x="420.0" y="197.9" style="font-size:12.5px;font-weight:600;fill:#0f172a;text-anchor:middle">RA4M2_MINI</text>
+  <text x="420.0" y="210.1" style="font-size:9.5px;font-weight:400;fill:#475569;text-anchor:middle">板载 LDO：5V → 3.3V</text>
+  <text x="420.0" y="224.6" style="font-size:9.5px;font-weight:400;fill:#475569;text-anchor:middle">MCU+OLED+CH340E</text>
+  <text x="420.0" y="246.0" style="font-size:9.5px;font-weight:400;fill:#c2410c;text-anchor:middle">≈60~90 mA</text>
+  <text x="546.0" y="204.0" style="font-size:8.5px;font-weight:400;fill:#c2410c;text-anchor:start">U2-19</text>
+  <text x="432.0" y="102.0" style="font-size:10px;font-weight:700;fill:#b91c1c;text-anchor:start">3V3（U1-12，第 9 孔）：≈5~10 mA</text>
+  <text x="625.0" y="169.8" style="font-size:11.5px;font-weight:600;fill:#0f172a;text-anchor:middle">TDS 模块 VCC</text>
+  <text x="625.0" y="181.5" style="font-size:9.5px;font-weight:400;fill:#475569;text-anchor:middle">3.3V · ≈3~6 mA</text>
+  <text x="815.0" y="169.8" style="font-size:11.5px;font-weight:600;fill:#0f172a;text-anchor:middle">DS18B20 VDD</text>
+  <text x="815.0" y="181.5" style="font-size:9.5px;font-weight:400;fill:#475569;text-anchor:middle">3.3V · ≈1 mA</text>
+  <text x="1030.0" y="169.8" style="font-size:11.5px;font-weight:600;fill:#0f172a;text-anchor:middle">4.7kΩ 上拉 / 分压上端</text>
+  <text x="1030.0" y="181.5" style="font-size:9.5px;font-weight:400;fill:#475569;text-anchor:middle">µA 级 · 从 3V3 取</text>
+  <text x="568.0" y="322.0" style="font-size:10px;font-weight:700;fill:#c2410c;text-anchor:start">VIN（U2-19/20）≈4.5~4.7V：≈85~95 mA</text>
+  <text x="625.0" y="376.6" style="font-size:11px;font-weight:600;fill:#0f172a;text-anchor:middle">浊度模块 VCC</text>
+  <text x="625.0" y="388.1" style="font-size:9.5px;font-weight:400;fill:#475569;text-anchor:middle">5V · ≈20~40 mA</text>
+  <text x="830.0" y="376.6" style="font-size:11px;font-weight:600;fill:#64748b;text-anchor:middle">继电器模块 VCC</text>
+  <text x="830.0" y="388.1" style="font-size:9.5px;font-weight:400;fill:#94a3b8;text-anchor:middle">5V · ≈45~55 mA</text>
+  <text x="1045.0" y="376.6" style="font-size:11px;font-weight:600;fill:#64748b;text-anchor:middle">12V 阀（独立）</text>
+  <text x="1045.0" y="388.1" style="font-size:9.5px;font-weight:400;fill:#94a3b8;text-anchor:middle">不从板取电</text>
+  <text x="838.0" y="342.0" style="font-size:8.5px;font-weight:400;fill:#94a3b8;text-anchor:start">预留</text>
+  <text x="260.0" y="324.0" style="font-size:12.5px;font-weight:600;fill:#0f172a;text-anchor:middle">两条禁令（§3.5）</text>
+  <text x="58.0" y="336.0" style="font-size:9.8px;font-weight:400;fill:#7f1d1d;text-anchor:start">① 不要把外部 5V 灌进 VIN（防倒灌）</text>
+  <text x="58.0" y="362.0" style="font-size:9.8px;font-weight:400;fill:#7f1d1d;text-anchor:start">② 不要电脑 USB 与 5V 适配器同时供电</text>
+  <text x="40.0" y="424.0" style="font-size:9.5px;font-weight:400;fill:#64748b;text-anchor:start">原则：5V 外设只从 VIN 取电、与板同开同关；12V 阀必须独立供电（见 §6）。</text>
+</svg>
+    <figcaption><b>图 3-1</b> 5V / 3V3 / VIN 分配。3.3V 外设（TDS、DS18B20、上拉/分压上端）从 U1-12 取电；
+      5V 外设（浊度模块、继电器线圈）从 VIN（U2-19/20）取电；12V 阀必须独立供电。</figcaption>
+  </figure>
+
+  <div class="tw">
+  <table>
+    <thead><tr><th>负载</th><th>电压 / 电流（估）</th><th>取电点</th><th>备注</th></tr></thead>
+    <tbody>
+      <tr><td>RA4M2_MINI（MCU + OLED + CH340E）</td><td>5V，≈60~90 mA</td><td>Type-C USB</td><td>板载 LDO 余量</td></tr>
+      <tr><td>TDS 模块</td><td>3.3V，≈3~6 mA</td><td><code>U1-12</code></td><td>模拟输出</td></tr>
+      <tr><td>DS18B20</td><td>3.3V，≈1 mA</td><td><code>U1-12</code></td><td>测温 2 s 一次</td></tr>
+      <tr><td>浊度模块（4 针 G/A/D/V）</td><td>5V，≈20~40 mA</td><td><code>U2-19/20</code> VIN</td><td>AO ≈0~4.7V，D 不接</td></tr>
+      <tr><td>继电器模块（预留）</td><td>5V，≈45~55 mA</td><td><code>U2-19/20</code> VIN</td><td>吸合瞬间电流大</td></tr>
+      <tr><td>12V 阀（不接）</td><td>12V，≈0.3~0.5 A</td><td>独立 12V</td><td><b>禁止从板取电</b></td></tr>
+    </tbody>
+  </table>
+  </div>
+  <div class="note">
+    <span class="t">结论</span>
+    3.3V 侧负载约 60~90 mA（MCU + OLED + 传感器；板载 LDO 丝印 662K、约 200 mA 级，<span class="b-todo">🟡 型号待核</span>，
+    3.3V 外部取电余量估计 &lt;100 mA，<span class="b-todo">⏳ 满载实测确认</span>）；5V 侧（含板）约 150~200 mA。
+    联调用电脑 USB 完全够；演示用 5V/2A 适配器有余量。<b>12V 阀必须独立供电，绝不从板 5V/3V3 取。</b>
+  </div>
+
+  <h3>3.2 接地：为什么必须星形单点</h3>
+  <figure>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1120 480" role="img" aria-label="星形单点接地：模块地、板地与大电流地" style="font-family:'Microsoft YaHei','PingFang SC','Noto Sans CJK SC',system-ui,sans-serif">
+<rect width="1120" height="480" fill="#ffffff"/>
+<path d="M0,0V480 M20,0V480 M40,0V480 M60,0V480 M80,0V480 M100,0V480 M120,0V480 M140,0V480 M160,0V480 M180,0V480 M200,0V480 M220,0V480 M240,0V480 M260,0V480 M280,0V480 M300,0V480 M320,0V480 M340,0V480 M360,0V480 M380,0V480 M400,0V480 M420,0V480 M440,0V480 M460,0V480 M480,0V480 M500,0V480 M520,0V480 M540,0V480 M560,0V480 M580,0V480 M600,0V480 M620,0V480 M640,0V480 M660,0V480 M680,0V480 M700,0V480 M720,0V480 M740,0V480 M760,0V480 M780,0V480 M800,0V480 M820,0V480 M840,0V480 M860,0V480 M880,0V480 M900,0V480 M920,0V480 M940,0V480 M960,0V480 M980,0V480 M1000,0V480 M1020,0V480 M1040,0V480 M1060,0V480 M1080,0V480 M1100,0V480 M1120,0V480 M0,0H1120 M0,20H1120 M0,40H1120 M0,60H1120 M0,80H1120 M0,100H1120 M0,120H1120 M0,140H1120 M0,160H1120 M0,180H1120 M0,200H1120 M0,220H1120 M0,240H1120 M0,260H1120 M0,280H1120 M0,300H1120 M0,320H1120 M0,340H1120 M0,360H1120 M0,380H1120 M0,400H1120 M0,420H1120 M0,440H1120 M0,460H1120 M0,480H1120" stroke="#eef2f7" stroke-width="1" fill="none"/>
+  <polyline points="135.0,130.0 135.0,210.0" stroke-width="2.8" stroke="#111827" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+  <polyline points="315.0,130.0 315.0,210.0" stroke-width="2.8" stroke="#111827" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+  <polyline points="495.0,130.0 495.0,210.0" stroke-width="2.8" stroke="#111827" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+  <polyline points="685.0,130.0 685.0,210.0" stroke-width="2.8" stroke="#111827" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+  <polyline points="110.0,210.0 1000.0,210.0" stroke-width="8" stroke="#111827" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+  <polyline points="975.0,280.0 975.0,210.0" stroke-width="2.8" stroke="#111827" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+  <polyline points="780.0,400.0 830.0,400.0 830.0,210.0" stroke-width="3.2" stroke="#111827" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="60.0" y="46.0" width="150.0" height="84.0" rx="10" fill="#ffffff" stroke="#94a3b8" stroke-width="1.4"/>
+  <rect x="240.0" y="46.0" width="150.0" height="84.0" rx="10" fill="#ffffff" stroke="#94a3b8" stroke-width="1.4"/>
+  <rect x="420.0" y="46.0" width="150.0" height="84.0" rx="10" fill="#ffffff" stroke="#94a3b8" stroke-width="1.4"/>
+  <rect x="600.0" y="46.0" width="170.0" height="84.0" rx="10" fill="#ffffff" stroke="#94a3b8" stroke-width="1.4"/>
+  <circle cx="135.0" cy="210.0" r="4" fill="#111827"/>
+  <circle cx="315.0" cy="210.0" r="4" fill="#111827"/>
+  <circle cx="495.0" cy="210.0" r="4" fill="#111827"/>
+  <circle cx="685.0" cy="210.0" r="4" fill="#111827"/>
+  <rect x="860.0" y="280.0" width="230.0" height="130.0" rx="10" fill="#f8fafc" stroke="#334155" stroke-width="1.4"/>
+  <circle cx="975.0" cy="210.0" r="4" fill="#111827"/>
+  <rect x="560.0" y="350.0" width="220.0" height="100.0" rx="10" fill="#fef2f2" stroke="#f87171" stroke-width="1.4"/>
+  <circle cx="830.0" cy="210.0" r="4" fill="#111827"/>
+  <text x="135.0" y="82.8" style="font-size:11.5px;font-weight:600;fill:#0f172a;text-anchor:middle">TDS 模块</text>
+  <text x="135.0" y="94.5" style="font-size:9.5px;font-weight:400;fill:#475569;text-anchor:middle">GND</text>
+  <text x="315.0" y="82.8" style="font-size:11.5px;font-weight:600;fill:#0f172a;text-anchor:middle">DS18B20</text>
+  <text x="315.0" y="94.5" style="font-size:9.5px;font-weight:400;fill:#475569;text-anchor:middle">GND</text>
+  <text x="495.0" y="82.8" style="font-size:11.5px;font-weight:600;fill:#0f172a;text-anchor:middle">浊度模块</text>
+  <text x="495.0" y="94.5" style="font-size:9.5px;font-weight:400;fill:#475569;text-anchor:middle">GND</text>
+  <text x="685.0" y="82.8" style="font-size:11.5px;font-weight:600;fill:#0f172a;text-anchor:middle">继电器（预留）</text>
+  <text x="685.0" y="94.5" style="font-size:9.5px;font-weight:400;fill:#475569;text-anchor:middle">GND</text>
+  <text x="742.0" y="202.0" style="font-size:10.5px;font-weight:700;fill:#111827;text-anchor:start">接线端子排 / 地排（星形单点）</text>
+  <text x="110.0" y="250.0" style="font-size:10px;font-weight:600;fill:#475569;text-anchor:start">所有模块 GND 先汇到这里，再用 1 根线进板 GND</text>
+  <text x="110.0" y="282.0" style="font-size:9.5px;font-weight:400;fill:#475569;text-anchor:start">• 不要一根一根“就近插板子”：会形成地环路 → ADC 跳动、OLED 花屏</text>
+  <text x="110.0" y="308.0" style="font-size:9.5px;font-weight:400;fill:#475569;text-anchor:start">• 通电后用通断档确认：每个模块 GND 与板 GND 之间 &lt; 1 Ω</text>
+  <text x="110.0" y="334.0" style="font-size:9.5px;font-weight:400;fill:#475569;text-anchor:start">• 模拟地按星形单点，探头信号线与电源线分开走、不要捆在一起</text>
+  <text x="975.0" y="333.4" style="font-size:12.5px;font-weight:600;fill:#0f172a;text-anchor:middle">RA4M2_MINI</text>
+  <text x="975.0" y="345.6" style="font-size:9px;font-weight:400;fill:#475569;text-anchor:middle">排针地脚 8 个：</text>
+  <text x="975.0" y="359.6" style="font-size:9px;font-weight:400;fill:#475569;text-anchor:middle">U1-1/8/16 · U2-4/6/11/14/18</text>
+  <text x="986.0" y="274.0" style="font-size:9px;font-weight:400;fill:#475569;text-anchor:start">1 根进板</text>
+  <text x="670.0" y="388.0" style="font-size:11.5px;font-weight:600;fill:#0f172a;text-anchor:middle">12V 电源 −</text>
+  <text x="670.0" y="399.8" style="font-size:9px;font-weight:400;fill:#475569;text-anchor:middle">阀 / 继电器电流地</text>
+  <text x="670.0" y="413.8" style="font-size:9px;font-weight:400;fill:#475569;text-anchor:middle">单独走线，不经过开发板</text>
+  <text x="592.0" y="340.0" style="font-size:9px;font-weight:400;fill:#b91c1c;text-anchor:start">大电流地单独一根到地排</text>
+</svg>
+    <figcaption><b>图 3-2</b> 星形单点接地：所有模块 GND 先汇到端子排/地排，再用 1 根线进板 GND；
+      阀/继电器的电流地单独走线，不经过开发板地。</figcaption>
+  </figure>
+  <ul class="tight">
+    <li>板上 GND 有 <b>8 个排针地脚</b>（U1-1/8/16、U2-4/6/11/14/18）+ SWD 排针 GND + OLED 座地；本方案只用排针 8 处。</li>
+    <li>所有模块 GND 先汇到“接线端子排/洞洞板地排”，再用 1 根线进板 GND —— 不要一根一根地“就近插板子”
+        （会形成地环路，ADC 读数跳动、OLED 花屏）。</li>
+    <li>阀/继电器的电流地单独走一根到端子排，<b>绝不流经开发板地线</b>（大电流会把地电位抬起）。</li>
+    <li>通电后用万用表通断档确认：每个模块 GND 与板 GND 之间 <b>&lt; 1 Ω</b>。</li>
+  </ul>
+
+  <h3>3.3 去耦与滤波</h3>
+  <ul class="tight">
+    <li>每个模块电源入口就近并 <b>0.1 µF</b> 瓷片电容到 GND（TDS、DS18B20、浊度模块各 1 只）；</li>
+    <li>继电器模块 VCC 就近并 <b>100 µF 电解 + 0.1 µF 瓷片</b>（吸合瞬间防拉跌）；</li>
+    <li>浊度分压节点并 0.1 µF 对地（与 R2 并联，滤高频，见 §4.2）；</li>
+    <li>探头线/信号线尽量短（≤30 cm 为佳），与 5V 电源线、12V 线分开走，不要捆在一起。</li>
+  </ul>
+
+  <h3>3.4 上电/断电顺序与三条禁令</h3>
+  <div class="grid2">
+    <div class="ok-box"><span class="t">上电</span>先板（插 USB / 适配器）→ 等自检（LED 快闪 3 下、串口 boot 行）→ 再开 5V 外设。</div>
+    <div class="ok-box"><span class="t">断电</span>先关 5V 外设 → 再断板。</div>
+  </div>
+  <div class="danger" style="margin-top:14px">
+    <span class="t">三条禁令</span>
+    ① 不要把外部 5V 灌进 VIN 排针同时插 USB（防倒灌）；<br>
+    ② 不要用电脑 USB 与外部 5V 适配器同时给板供电；<br>
+    ③ 板子只有 1 个 Type-C：插 5V 适配器就没有串口（独立演示工况），串口 + 独立供电二选一
+    （要同时保留可加带供电的 USB HUB，可选）。
+  </div>
+</section>
+
+<!-- ============ 4 ============ -->
+<section id="s4">
+  <h2><span class="num">4</span>模拟输入电路（两路 ADC） <span class="en">ANALOG</span></h2>
+
+  <h3>4.1 TDS 通道（P014 / AN12，主判据）：可以直连</h3>
+  <div class="tw">
+  <table class="compact">
+    <thead><tr><th style="width:150px">TDS 模块端子</th><th style="width:230px">接到</th><th>要点</th></tr></thead>
+    <tbody>
+      <tr><td>VCC</td><td><code>U1-12</code>（3V3，第 9 孔）</td><td class="b-warn">必须 3.3V，<b>不要接 5V</b></td></tr>
+      <tr><td>GND</td><td><code>U1-16</code>（或 GND 地排）</td><td>必须共地</td></tr>
+      <tr><td>AOUT</td><td><code>U1-6</code>（P014 / AN12）</td><td>直连安全（0~2.3V）</td></tr>
+      <tr><td>探头</td><td>模块上 2P XH-2.54 座</td><td>插紧；黑色连接器不可入水</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <div class="note">
+    <span class="t">为什么可以直连</span>
+    模块标称 AOUT 0~2.3V，实测高浓度皂液水最高 <b>2.356V</b>，均 &lt; 3.6V 绝对最大，也 &lt; ADC 满量程 3.3V。
+    <b>若个别批次输出更高（&gt;3.0V），必须改分压后再接</b>。
+  </div>
+  <div class="warn">
+    <span class="t">TDS 注意</span>
+    ① 不要给模块接 5V：5V 供电时输出幅度会抬高；若同时给 DS18B20 供 5V，DQ 上拉会变成 5V，超 MCU 耐压。<br>
+    ② AOUT 不是“越大越脏”：不同批次方向可能不同，只做相对判据，不预测方向。<br>
+    ③ 探头可拆洗：每次实验后取下冲洗、甩干；探头不要碰杯壁/杯底（固定深度）。<br>
+    ④ 可选抗干扰（默认不装）：AOUT 对地并 0.1 µF（只并电容、不串电阻，保持源阻抗）。
+  </div>
+
+  <h3>4.2 浊度模块通道（P013 / AN11）：分压必做，不能省；模块是 4 针 G/A/D/V</h3>
+  <figure>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 940 430" role="img" aria-label="浊度分压电路（4 针模块 A/AO → P013/AN11）" style="font-family:'Microsoft YaHei','PingFang SC','Noto Sans CJK SC',system-ui,sans-serif">
+<rect width="940" height="430" fill="#ffffff"/>
+<path d="M0,0V430 M20,0V430 M40,0V430 M60,0V430 M80,0V430 M100,0V430 M120,0V430 M140,0V430 M160,0V430 M180,0V430 M200,0V430 M220,0V430 M240,0V430 M260,0V430 M280,0V430 M300,0V430 M320,0V430 M340,0V430 M360,0V430 M380,0V430 M400,0V430 M420,0V430 M440,0V430 M460,0V430 M480,0V430 M500,0V430 M520,0V430 M540,0V430 M560,0V430 M580,0V430 M600,0V430 M620,0V430 M640,0V430 M660,0V430 M680,0V430 M700,0V430 M720,0V430 M740,0V430 M760,0V430 M780,0V430 M800,0V430 M820,0V430 M840,0V430 M860,0V430 M880,0V430 M900,0V430 M920,0V430 M940,0V430 M0,0H940 M0,20H940 M0,40H940 M0,60H940 M0,80H940 M0,100H940 M0,120H940 M0,140H940 M0,160H940 M0,180H940 M0,200H940 M0,220H940 M0,240H940 M0,260H940 M0,280H940 M0,300H940 M0,320H940 M0,340H940 M0,360H940 M0,380H940 M0,400H940 M0,420H940" stroke="#eef2f7" stroke-width="1" fill="none"/>
+  <polyline points="230.0,210.0 250.0,210.0" stroke-width="2.2" stroke="#16a34a" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+  <polyline points="290.0,210.0 560.0,210.0" stroke-width="2.2" stroke="#16a34a" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+  <polyline points="330.0,210.0 330.0,218.0" stroke-width="2.2" stroke="#16a34a" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+  <polyline points="330.0,266.0 330.0,286.0" stroke-width="2.8" stroke="#111827" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+  <polyline points="500.0,210.0 500.0,238.0" stroke-width="2.2" stroke="#16a34a" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+  <polyline points="500.0,246.0 500.0,280.0" stroke-width="2.8" stroke="#111827" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="60.0" y="150.0" width="170.0" height="140.0" rx="10" fill="#ffffff" stroke="#94a3b8" stroke-width="1.4"/>
+  <rect x="18.4" y="179.5" width="33.6" height="21" rx="6" fill="#ffedd5" stroke="#ea580c" stroke-width="1.2"/>
+  <rect x="18.4" y="221.5" width="33.6" height="21" rx="6" fill="#e5e7eb" stroke="#111827" stroke-width="1.2"/>
+  <circle cx="230.0" cy="210.0" r="5.0" fill="#ffffff" stroke="#16a34a" stroke-width="2.4"/>
+  <rect x="250.0" y="203.5" width="40.0" height="13.0" rx="2.5" fill="#ffffff" stroke="#334155" stroke-width="1.8"/>
+  <circle cx="330.0" cy="210.0" r="3.4" fill="#16a34a"/>
+  <rect x="323.5" y="218.0" width="13.0" height="48.0" rx="2.5" fill="#ffffff" stroke="#334155" stroke-width="1.8"/>
+  <rect x="313.2" y="286.5" width="33.6" height="21" rx="6" fill="#e5e7eb" stroke="#111827" stroke-width="1.2"/>
+  <circle cx="500.0" cy="210.0" r="3.4" fill="#16a34a"/>
+  <line x1="487.0" y1="236.4" x2="513.0" y2="236.4" stroke="#334155" stroke-width="2.2"/>
+  <line x1="487.0" y1="239.6" x2="513.0" y2="239.6" stroke="#334155" stroke-width="2.2"/>
+  <rect x="483.2" y="280.5" width="33.6" height="21" rx="6" fill="#e5e7eb" stroke="#111827" stroke-width="1.2"/>
+  <rect x="560" y="150" width="20" height="90" rx="6" fill="#f8fafc" stroke="#334155" stroke-width="1.6"/>
+  <circle cx="560.0" cy="210.0" r="5.0" fill="#ffffff" stroke="#16a34a" stroke-width="2.4"/>
+  <rect x="640.0" y="60.0" width="280.0" height="330.0" rx="10" fill="#fffbeb" stroke="#f59e0b" stroke-width="1.4"/>
+  <text x="145.0" y="200.4" style="font-size:12px;font-weight:600;fill:#0f172a;text-anchor:middle">浊度模块</text>
+  <text x="145.0" y="212.4" style="font-size:9.5px;font-weight:400;fill:#475569;text-anchor:middle">5V 供电</text>
+  <text x="145.0" y="226.9" style="font-size:9.5px;font-weight:400;fill:#475569;text-anchor:middle">AO 0~VCC（≤4.7V）</text>
+  <text x="145.0" y="241.4" style="font-size:9.5px;font-weight:400;fill:#475569;text-anchor:middle">4 针 G/A/D/V，D 不接</text>
+  <text x="35.2" y="193.8" style="font-size:10.5px;font-weight:600;fill:#ea580c;text-anchor:middle">VIN</text>
+  <text x="35.2" y="235.8" style="font-size:10.5px;font-weight:600;fill:#111827;text-anchor:middle">GND</text>
+  <text x="270.0" y="201.0" style="font-size:9.5px;font-weight:600;fill:#334155;text-anchor:middle">R1 = 1 kΩ</text>
+  <text x="420.0" y="192.0" style="font-size:10.5px;font-weight:400;fill:#334155;text-anchor:middle;paint-order:stroke;stroke:#ffffff;stroke-width:3.8px;stroke-linejoin:round">节点 ≈ 0~3.13 V → P013（AN11）</text>
+  <text x="317.5" y="245.4" style="font-size:9.5px;font-weight:600;fill:#334155;text-anchor:end">R2 = 2 kΩ</text>
+  <text x="330.0" y="300.8" style="font-size:10.5px;font-weight:600;fill:#111827;text-anchor:middle">GND</text>
+  <text x="500.0" y="294.8" style="font-size:10.5px;font-weight:600;fill:#111827;text-anchor:middle">GND</text>
+  <text x="516.0" y="244.0" style="font-size:9.5px;font-weight:600;fill:#334155;text-anchor:start">0.1 µF</text>
+  <text x="570.0" y="142.0" style="font-size:9px;font-weight:400;fill:#475569;text-anchor:middle">RA4M2</text>
+  <text x="590.0" y="205.0" style="font-size:10.5px;font-weight:700;fill:#0f172a;text-anchor:start">U1-5</text>
+  <text x="590.0" y="219.0" style="font-size:9px;font-weight:400;fill:#15803d;text-anchor:start">P013 / AN11</text>
+  <text x="780.0" y="86.0" style="font-size:11.5px;font-weight:600;fill:#0f172a;text-anchor:middle">算一遍（写进报告 / 答辩）</text>
+  <text x="656.0" y="104.0" style="font-size:9.3px;font-weight:700;fill:#92400e;text-anchor:start">分压比</text>
+  <text x="742.0" y="104.0" style="font-size:9.3px;font-weight:400;fill:#78350f;text-anchor:start">R2/(R1+R2) = 2/3</text>
+  <text x="656.0" y="129.0" style="font-size:9.3px;font-weight:700;fill:#92400e;text-anchor:start">AO 最大 ≈4.7 V</text>
+  <text x="742.0" y="129.0" style="font-size:9.3px;font-weight:400;fill:#78350f;text-anchor:start">→ 节点 4.7 × 2/3 = 3.13 V</text>
+  <text x="656.0" y="154.0" style="font-size:9.3px;font-weight:700;fill:#92400e;text-anchor:start">余量</text>
+  <text x="742.0" y="154.0" style="font-size:9.3px;font-weight:400;fill:#78350f;text-anchor:start">3.13 V &lt; 3.3 V ✓（0.17 V）</text>
+  <text x="656.0" y="179.0" style="font-size:9.3px;font-weight:700;fill:#92400e;text-anchor:start">源阻抗</text>
+  <text x="742.0" y="179.0" style="font-size:9.3px;font-weight:400;fill:#78350f;text-anchor:start">R1//R2 = 667 Ω ≤ 1 kΩ ✓</text>
+  <text x="656.0" y="229.0" style="font-size:9.3px;font-weight:700;fill:#92400e;text-anchor:start">✗ 10k+20k</text>
+  <text x="742.0" y="229.0" style="font-size:9.3px;font-weight:400;fill:#78350f;text-anchor:start">分压比相同，但源阻抗 6.67 kΩ</text>
+  <text x="742.0" y="254.0" style="font-size:9.3px;font-weight:400;fill:#78350f;text-anchor:start">&gt; 1 kΩ → 12 位 ADC 采样偏低且不稳</text>
+  <text x="656.0" y="304.0" style="font-size:9.3px;font-weight:700;fill:#92400e;text-anchor:start">分压电阻</text>
+  <text x="742.0" y="304.0" style="font-size:9.3px;font-weight:400;fill:#78350f;text-anchor:start">板 VIN 供电 → 1k+2k 不变</text>
+  <text x="742.0" y="329.0" style="font-size:9.3px;font-weight:400;fill:#78350f;text-anchor:start">独立 5V 供电 → R2 改 1.5 kΩ</text>
+  <text x="40.0" y="400.0" style="font-size:9.5px;font-weight:400;fill:#b91c1c;text-anchor:start">⚠ 分压比写死在固件里（ntu_div_r1_ohm / ntu_div_r2_ohm，默认 1000/2000）；换电阻必须同步改配置。</text>
+  <text x="40.0" y="420.0" style="font-size:9.5px;font-weight:400;fill:#b91c1c;text-anchor:start">⚠ 4 针丝印 G/A/D/V：D（DO）悬空；方向以实测为准（08 T4 清水/浑水对照）。</text>
+</svg>
+    <figcaption><b>图 4-1</b> 4 针浊度模块（丝印 G/A/D/V）的 <b>A（AO）</b>经 R1=1kΩ / R2=2kΩ 分压后进 P013/AN11；
+      节点对地并 0.1 µF；<b>D（DO）悬空</b>。<b>V→VIN、G→GND、A→[R1]</b>。</figcaption>
+  </figure>
+  <div class="grid3">
+    <div class="mini"><h5>分压比</h5><p>R2/(R1+R2) = <b>2/3</b></p></div>
+    <div class="mini"><h5>节点最大电压</h5><p>AO ≤ VCC ≈4.5~4.7V → 节点 <b>≤3.13V</b>（&lt; 3.3V，安全）</p></div>
+    <div class="mini"><h5>源阻抗</h5><p>R1∥R2 = <b>667 Ω</b> ≤ 1 kΩ（满足 12 位 ADC 要求）</p></div>
+  </div>
+  <div class="danger" style="margin-top:14px">
+    <span class="t">v1.1 更正：4 针模块 ≠ 3 针 TS-300B</span>
+    模块丝印 <b>G（GND）/ A（AO）/ D（DO）/ V（VCC，只能 5V）</b>。只接 G、A、V 三根；
+    <b>D 是 5V 比较器数字输出，必须悬空</b>，严禁接 P013 / P014 / P104（要用于“数字报警”须先分压/电平转换）。
+    灵敏度电位器只调 DO 阈值，<b>不影响 AO</b>，不用调。
+  </div>
+  <div class="tw">
+  <table class="compact">
+    <thead><tr><th style="width:110px">模块丝印</th><th style="width:210px">含义</th><th>本方案怎么接</th></tr></thead>
+    <tbody>
+      <tr><td><b>V</b>（VCC）</td><td>电源正，规格书要求 5V（禁止 3.3V）</td><td><code>U2-19/20</code>（VIN ≈4.5~4.7V），与板同开同关</td></tr>
+      <tr><td><b>G</b>（GND）</td><td>电源负极</td><td>GND 地排 / <code>U2-18</code>（星形单点）</td></tr>
+      <tr><td><b>A</b>（AO）</td><td>模拟输出，0~VCC（规格 0~5V）</td><td>→ [R1 1kΩ] → 节点 → <code>U1-5</code>（P013 / AN11）</td></tr>
+      <tr><td><b>D</b>（DO）</td><td>比较器数字输出，5V 电平</td><td><b>悬空不接</b>（要用须先分压/电平转换，本阶段不做）</td></tr>
+      <tr><td>4P 探头座</td><td>1 电源负极 / 2 传感器− / 3 传感器out / 4 传感器+</td><td>用原配 4 线探头按丝印对插；<b>不能配 3 线 TS-300B 探头</b></td></tr>
+    </tbody>
+  </table>
+  </div>
+  <div class="warn">
+    <span class="t">为什么不能用 10k + 20k</span>
+    分压比同样是 2/3，但源阻抗 = 6.67 kΩ &gt; 1 kΩ，12 位 ADC 采样会明显偏低且不稳 —— 这是最容易犯的错。
+  </div>
+  <div class="warn">
+    <span class="t">电阻怎么选（别照抄旧版“AO 最大 4.5V / 满量程 5.0V”）</span>
+    板 VIN 供电（4.5~4.7V）→ AO 上限 ≤4.7V → <b>保持 R1=1k、R2=2k</b>；
+    只有改成独立 5.0V 供电（AO 可到 5.0V）时，才把 R2 换 1.5k（节点 3.0V），此时固件 <code>ntu_div_r2_ohm</code>
+    必须同步改 1500。电阻优先 1% 金属膜；5% 最坏时节点仍 &lt;3.3V 但余量小，务必实测。
+  </div>
+  <div class="note">
+    <span class="t">⚠ 分压比写死在固件配置里</span>
+    <code>pipeline_cfg.ntu_div_r1_ohm / ntu_div_r2_ohm</code>，默认 <b>1000 / 2000</b> —— 换电阻必须同步改这两个值，否则 ao_mv 还原错误。
+    输出方向以实测为准（常见批次“清水电压高、越浑越低”，也有反相批次）；用 08 文档 T4 做一次清水/浑水对照即可确定，反相才把 ntu_clear_high 改 false。
+  </div>
+  <div class="note">
+    <span class="t">到货必做两项实测（§8.2 第 11 / 12 项）</span>
+    ① 清水（或空气）下量 A-G 最高电压，得 AO 满量程 → 决定保持 1k+2k 还是换 R2；
+    ② 清水/浑水各量一次 A（或节点）并看串口 <code>ntu_node_mv</code> → 定方向。
+  </div>
+  <div class="note">
+    <span class="t">VIN 电压注意</span>
+    本板 VIN 是 USB VBUS 经防反接二极管后的 <b>4.5~4.7V</b>（低于标称 5V）。模块要求 5V，4.5V 一般也能工作（LED 稍暗、AO 整体略低）；
+    若读数不稳/贴轨，先量 V（VCC）是否 ≥4.5V，必要时用独立 5V 适配器给模块供电（与板共地、同开同关，不能把外部 5V 灌进 VIN）。
+  </div>
+
+  <h3>4.3 两路 ADC 的共同要求</h3>
+  <ul class="tight">
+    <li><b>参考电压</b>：VREFH0 = 板载 3.3V（RASC 默认，不要外接基准）；</li>
+    <li><b>采样</b>：两路必须在同一个 Scan Group（AN11 + AN12），一次扫描同时转换，保证 TDS 与浊度“同一时刻”采样（RASC 配置见 00 §4.1）；</li>
+    <li><b>源阻抗</b>：任何进 ADC 的信号源阻抗 ≤ 1 kΩ（分压电阻/跟随器要按此选型）；</li>
+    <li><b>保护</b>：P013/P014 绝对最大 3.6V；上电前必须先量 AO 最大值（§8.2）；</li>
+    <li><b>地</b>：模拟地按 §3.2 星形单点，探头信号线与电源线分开走。</li>
+  </ul>
+
+  <h3>4.4 探头安装与噪声（影响数据质量，接线后立刻检查）</h3>
+  <ul class="tight">
+    <li>TDS 探头与 DS18B20 装在流动池同一水体、同一深度，探头感测面浸入 10~20 mm，不碰壁、不碰底（详见《硬件搭建方案》§7.3 流动池）；</li>
+    <li>浊度模块的 4 线探头同样固定（感测面浸入 10~20 mm），避开气泡/泡沫聚集处；</li>
+    <li>气泡/泡沫会造成 2% 级噪声：流动池下进上出、撇泡；</li>
+    <li>电极污染/结垢会漂移：每次实验前重采基线（08 T5）。</li>
+  </ul>
+</section>
+
+<!-- ============ 5 ============ -->
+<section id="s5">
+  <h2><span class="num">5</span>数字接口电路 <span class="en">DIGITAL</span></h2>
+
+  <h3>5.1 DS18B20 水温（P500，1-Wire）：必须 4.7k 上拉</h3>
+  <figure>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 860 420" role="img" aria-label="DS18B20 1-Wire 接线（P500 + 4.7k 上拉）" style="font-family:'Microsoft YaHei','PingFang SC','Noto Sans CJK SC',system-ui,sans-serif">
+<rect width="860" height="420" fill="#ffffff"/>
+<path d="M0,0V420 M20,0V420 M40,0V420 M60,0V420 M80,0V420 M100,0V420 M120,0V420 M140,0V420 M160,0V420 M180,0V420 M200,0V420 M220,0V420 M240,0V420 M260,0V420 M280,0V420 M300,0V420 M320,0V420 M340,0V420 M360,0V420 M380,0V420 M400,0V420 M420,0V420 M440,0V420 M460,0V420 M480,0V420 M500,0V420 M520,0V420 M540,0V420 M560,0V420 M580,0V420 M600,0V420 M620,0V420 M640,0V420 M660,0V420 M680,0V420 M700,0V420 M720,0V420 M740,0V420 M760,0V420 M780,0V420 M800,0V420 M820,0V420 M840,0V420 M860,0V420 M0,0H860 M0,20H860 M0,40H860 M0,60H860 M0,80H860 M0,100H860 M0,120H860 M0,140H860 M0,160H860 M0,180H860 M0,200H860 M0,220H860 M0,240H860 M0,260H860 M0,280H860 M0,300H860 M0,320H860 M0,340H860 M0,360H860 M0,380H860 M0,400H860 M0,420H860" stroke="#eef2f7" stroke-width="1" fill="none"/>
+  <polyline points="150.0,80.0 760.0,80.0" stroke-width="3.0" stroke="#dc2626" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+  <polyline points="280.0,190.0 280.0,80.0" stroke-width="2.8" stroke="#dc2626" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+  <polyline points="170.0,310.0 170.0,334.0" stroke-width="2.8" stroke="#111827" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+  <polyline points="280.0,245.0 700.0,245.0" stroke-width="2.2" stroke="#2563eb" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+  <polyline points="400.0,245.0 400.0,232.0" stroke-width="2.8" stroke="#dc2626" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+  <polyline points="400.0,190.0 400.0,80.0" stroke-width="2.8" stroke="#dc2626" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="109.7" y="69.5" width="80.7" height="21" rx="6" fill="#fee2e2" stroke="#dc2626" stroke-width="1.2"/>
+  <rect x="60.0" y="160.0" width="220.0" height="150.0" rx="10" fill="#ffffff" stroke="#94a3b8" stroke-width="1.4"/>
+  <circle cx="280.0" cy="190.0" r="5.0" fill="#ffffff" stroke="#dc2626" stroke-width="2.4"/>
+  <circle cx="280.0" cy="80.0" r="3.4" fill="#dc2626"/>
+  <circle cx="280.0" cy="245.0" r="5.0" fill="#ffffff" stroke="#2563eb" stroke-width="2.4"/>
+  <circle cx="170.0" cy="310.0" r="5.0" fill="#ffffff" stroke="#111827" stroke-width="2.4"/>
+  <rect x="153.2" y="334.5" width="33.6" height="21" rx="6" fill="#e5e7eb" stroke="#111827" stroke-width="1.2"/>
+  <circle cx="400.0" cy="245.0" r="3.4" fill="#2563eb"/>
+  <rect x="393.5" y="190.0" width="13.0" height="42.0" rx="2.5" fill="#ffffff" stroke="#334155" stroke-width="1.8"/>
+  <circle cx="400.0" cy="80.0" r="3.4" fill="#dc2626"/>
+  <rect x="700.0" y="180.0" width="120.0" height="130.0" rx="10" fill="#f8fafc" stroke="#334155" stroke-width="1.4"/>
+  <circle cx="700.0" cy="245.0" r="5.0" fill="#ffffff" stroke="#2563eb" stroke-width="2.4"/>
+  <rect x="60.0" y="364.0" width="760.0" height="50.0" rx="10" fill="#fffbeb" stroke="#f59e0b" stroke-width="1.4"/>
+  <text x="150.0" y="83.8" style="font-size:10.5px;font-weight:600;fill:#dc2626;text-anchor:middle">3V3 · U1-12</text>
+  <text x="420.0" y="68.0" style="font-size:9.5px;font-weight:700;fill:#b91c1c;text-anchor:start">3.3 V</text>
+  <text x="170.0" y="223.1" style="font-size:13px;font-weight:600;fill:#0f172a;text-anchor:middle">DS18B20</text>
+  <text x="170.0" y="235.6" style="font-size:9.5px;font-weight:400;fill:#475569;text-anchor:middle">TO-92 / 模块座</text>
+  <text x="170.0" y="250.1" style="font-size:9.5px;font-weight:400;fill:#475569;text-anchor:middle">1-Wire 数字温度</text>
+  <text x="286.0" y="194.0" style="font-size:9px;font-weight:700;fill:#b91c1c;text-anchor:start">VDD</text>
+  <text x="286.0" y="249.0" style="font-size:9px;font-weight:700;fill:#1d4ed8;text-anchor:start">DQ</text>
+  <text x="170.0" y="348.8" style="font-size:10.5px;font-weight:600;fill:#111827;text-anchor:middle">GND</text>
+  <text x="470.0" y="227.0" style="font-size:10.5px;font-weight:400;fill:#334155;text-anchor:middle;paint-order:stroke;stroke:#ffffff;stroke-width:3.8px;stroke-linejoin:round">DQ → P500（U1-17）</text>
+  <text x="412.5" y="214.4" style="font-size:9.5px;font-weight:600;fill:#334155;text-anchor:start">4.7 kΩ 上拉（必须）</text>
+  <text x="760.0" y="232.7" style="font-size:12px;font-weight:600;fill:#0f172a;text-anchor:middle">RA4M2</text>
+  <text x="760.0" y="244.7" style="font-size:9.5px;font-weight:400;fill:#475569;text-anchor:middle">P500</text>
+  <text x="760.0" y="259.2" style="font-size:9.5px;font-weight:400;fill:#475569;text-anchor:middle">非 5V 容忍</text>
+  <text x="440.0" y="385.0" style="font-size:10.5px;font-weight:600;fill:#0f172a;text-anchor:middle">为什么必须上拉</text>
+  <text x="76.0" y="402.0" style="font-size:9.3px;font-weight:400;fill:#78350f;text-anchor:start">1-Wire 是开漏总线：不加 4.7 kΩ 上拉，总线永远拉不到 3.3 V → 读数 0 / FIX；模块座自带则不要重复加。</text>
+</svg>
+    <figcaption><b>图 5-1</b> 3 线供电接法：VDD→3V3、GND→地排、DQ→P500，DQ 与 3V3 之间 4.7 kΩ 上拉。</figcaption>
+  </figure>
+  <div class="tw">
+  <table class="compact">
+    <thead><tr><th style="width:150px">DS18B20</th><th style="width:230px">接到</th><th>要点</th></tr></thead>
+    <tbody>
+      <tr><td>VDD</td><td><code>U1-12</code>（3V3）</td><td>不要接 5V</td></tr>
+      <tr><td>GND</td><td><code>U1-1</code>（或 GND 地排）</td><td>共地</td></tr>
+      <tr><td>DQ</td><td><code>U1-17</code>（P500）</td><td>同时用 <b>4.7 kΩ 上拉到 3.3V</b></td></tr>
+    </tbody>
+  </table>
+  </div>
+  <div class="warn">
+    <span class="t">注意</span>
+    ① 4.7 kΩ 上拉是必须的（开漏总线）；模块座/转接板已自带则不要重复加（两个 4.7k 并联 ≈2.35k 一般也能用，但不必要）；<br>
+    ② 不要给 DS18B20 接 5V：P500 不是 5V 容忍，DQ 会被 5V 上拉打坏；<br>
+    ③ 杜邦线尽量短（≤50 cm）；长线/多探头要降速或改寄生供电（本方案不需要）；<br>
+    ④ 固件已有保障：全 0/全 FF 判无效、连续 3 次无效自动停用、串口 T24.5 手输兜底。
+  </div>
+
+  <h3>5.2 板载 OLED（I2C0：P407 / P408，0x3C）：完全免接线</h3>
+  <div class="grid2">
+    <div class="ok-box"><span class="t">不用接线</span>模块已焊在板上，SDA=P407、SCL=P408，自带 4.7kΩ 上拉；0.96" SSD1306 兼容 128×64。</div>
+    <div class="note"><span class="t">固件地址</span><code>0x3C</code>（7-bit），I2C0，Fast Mode 400 kHz（RASC 配置见 00 §4.3）。</div>
+  </div>
+  <ul class="tight" style="margin-top:12px">
+    <li><b>禁止</b>：不要拆焊/遮挡 OLED；不要把 P407/P408 改作 GPIO 或别的外设；</li>
+    <li><b>故障注入（08 T10）</b>：把固件里的 <code>OLED_I2C_ADDR</code> 临时改为 <code>0x3D</code> 重烧，串口应出现一次 WARN，
+        判别/CSV/LED/阀不受影响（<b>OLED 不是安全路径</b>）。</li>
+  </ul>
+
+  <h3>5.3 串口 CH340E（P109 / P110，115200 8N1）：完全板载</h3>
+  <ul class="tight">
+    <li>Type-C 座 → 板载 CH340E → P109(TXD9) / P110(RXD9)，<b>不需要外接 USB-TTL 模块</b>；</li>
+    <li>电脑端装 CH340 驱动，SSCOM 选对应 COM，115200 8N1，勾“发送新行”；</li>
+    <li>关键前提：P109/P110 默认被 Debug0 的 JTAG 功能（TDO/TDI）占用，必须先在 RASC 把 Debug0 改成 SWD（P300/P108），
+        再把 P109/P110 配成 SCI9（00 §4.2/§4.4），否则 UART 打不开（固件会 LED 10 Hz 报警、不静默死等）；</li>
+    <li>联调用电脑 USB 即可；独立演示用 5V/2A 适配器时没有串口（二选一，§3.4）。</li>
+  </ul>
+
+  <h3>5.4 用户 LED1（P111）与按键 K2（P000）：完全板载</h3>
+  <div class="grid2">
+    <div class="mini" style="border-left:4px solid #16a34a">
+      <h5>LED1（P111，高电平点亮）</h5>
+      <p>启动时快闪 3 下（约 0.72 s）表示“程序在跑”；状态图案：WAIT 1 Hz 慢闪 / FLUSH 5 Hz 快闪 / CLEAR 常亮（回收）/
+        UNCERTAIN、SOAP 灭（判读以串口 state/action 列为准）。它是<b>“假执行器”</b>：本阶段用它演示阀的回收/排空，不接真阀。</p>
+    </div>
+    <div class="mini" style="border-left:4px solid #2563eb">
+      <h5>K2（P000，板载 4.7k 上拉，按下为低）</h5>
+      <p>短按释放时打 MARK（<code># MARK ... src=KEY</code>）；按住 ≥1.5 s 重采基线。与串口命令 R/E/B/P/H 等效
+        （设备不在电脑旁也能打标记/重采基线）。</p>
+    </div>
+  </div>
+
+  <h3>5.5 烧录 / 调试接口（SWD 可选）</h3>
+  <figure>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 860 300" role="img" aria-label="SWD 调试排针（可选）" style="font-family:'Microsoft YaHei','PingFang SC','Noto Sans CJK SC',system-ui,sans-serif">
+<rect width="860" height="300" fill="#ffffff"/>
+<path d="M0,0V300 M20,0V300 M40,0V300 M60,0V300 M80,0V300 M100,0V300 M120,0V300 M140,0V300 M160,0V300 M180,0V300 M200,0V300 M220,0V300 M240,0V300 M260,0V300 M280,0V300 M300,0V300 M320,0V300 M340,0V300 M360,0V300 M380,0V300 M400,0V300 M420,0V300 M440,0V300 M460,0V300 M480,0V300 M500,0V300 M520,0V300 M540,0V300 M560,0V300 M580,0V300 M600,0V300 M620,0V300 M640,0V300 M660,0V300 M680,0V300 M700,0V300 M720,0V300 M740,0V300 M760,0V300 M780,0V300 M800,0V300 M820,0V300 M840,0V300 M860,0V300 M0,0H860 M0,20H860 M0,40H860 M0,60H860 M0,80H860 M0,100H860 M0,120H860 M0,140H860 M0,160H860 M0,180H860 M0,200H860 M0,220H860 M0,240H860 M0,260H860 M0,280H860 M0,300H860" stroke="#eef2f7" stroke-width="1" fill="none"/>
+  <polyline points="220.0,100.0 300.0,100.0" stroke-width="1.6" stroke="#64748b" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+  <polyline points="220.0,128.0 300.0,128.0" stroke-width="1.6" stroke="#64748b" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+  <polyline points="220.0,156.0 300.0,156.0" stroke-width="1.6" stroke="#64748b" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+  <polyline points="220.0,184.0 300.0,184.0" stroke-width="1.6" stroke="#64748b" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+  <polyline points="220.0,212.0 300.0,212.0" stroke-width="1.6" stroke="#64748b" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="50.0" y="85.0" width="170.0" height="150.0" rx="10" fill="#ffffff" stroke="#94a3b8" stroke-width="1.4"/>
+  <rect x="300" y="80" width="80" height="160" rx="8" fill="#eef2f7" stroke="#94a3b8" stroke-width="1.4"/>
+  <circle cx="325" cy="100" r="5" fill="#fff" stroke="#334155" stroke-width="1.6"/>
+  <circle cx="325" cy="128" r="5" fill="#fff" stroke="#334155" stroke-width="1.6"/>
+  <circle cx="325" cy="156" r="5" fill="#fff" stroke="#334155" stroke-width="1.6"/>
+  <circle cx="325" cy="184" r="5" fill="#fff" stroke="#334155" stroke-width="1.6"/>
+  <circle cx="325" cy="212" r="5" fill="#fff" stroke="#334155" stroke-width="1.6"/>
+  <rect x="560.0" y="80.0" width="250.0" height="160.0" rx="10" fill="#fffbeb" stroke="#f59e0b" stroke-width="1.4"/>
+  <text x="135.0" y="148.0" style="font-size:11.5px;font-weight:600;fill:#0f172a;text-anchor:middle">外部调试器</text>
+  <text x="135.0" y="159.8" style="font-size:9px;font-weight:400;fill:#475569;text-anchor:middle">J-Link / EZ-Cube3</text>
+  <text x="135.0" y="173.8" style="font-size:9px;font-weight:400;fill:#475569;text-anchor:middle">可选，仅调试用</text>
+  <text x="325.0" y="103.2" style="font-size:7.5px;font-weight:400;fill:#334155;text-anchor:middle">1</text>
+  <text x="398.0" y="103.6" style="font-size:9.8px;font-weight:400;fill:#1e293b;text-anchor:start">P300 / SWCLK</text>
+  <text x="325.0" y="131.2" style="font-size:7.5px;font-weight:400;fill:#334155;text-anchor:middle">2</text>
+  <text x="398.0" y="131.6" style="font-size:9.8px;font-weight:400;fill:#1e293b;text-anchor:start">P108 / SWDIO</text>
+  <text x="325.0" y="159.2" style="font-size:7.5px;font-weight:400;fill:#334155;text-anchor:middle">3</text>
+  <text x="398.0" y="159.6" style="font-size:9.8px;font-weight:400;fill:#1e293b;text-anchor:start">RES</text>
+  <text x="325.0" y="187.2" style="font-size:7.5px;font-weight:400;fill:#334155;text-anchor:middle">4</text>
+  <text x="398.0" y="187.6" style="font-size:9.8px;font-weight:400;fill:#1e293b;text-anchor:start">GND</text>
+  <text x="325.0" y="215.2" style="font-size:7.5px;font-weight:400;fill:#334155;text-anchor:middle">5</text>
+  <text x="398.0" y="215.6" style="font-size:9.8px;font-weight:400;fill:#1e293b;text-anchor:start">3.3V</text>
+  <text x="300.0" y="268.0" style="font-size:9.5px;font-weight:400;fill:#475569;text-anchor:middle">SWD 排针（板载，5 针）</text>
+  <text x="685.0" y="104.0" style="font-size:11px;font-weight:600;fill:#0f172a;text-anchor:middle">烧录（推荐）</text>
+  <text x="578.0" y="120.0" style="font-size:9.2px;font-weight:400;fill:#78350f;text-anchor:start">Type-C + CH340E + SCI Boot</text>
+  <text x="578.0" y="146.0" style="font-size:9.2px;font-weight:400;fill:#78350f;text-anchor:start">工具：Renesas Flash Programmer</text>
+  <text x="578.0" y="172.0" style="font-size:9.2px;font-weight:400;fill:#78350f;text-anchor:start">SWD 仅备用（板载无调试器）</text>
+  <text x="50.0" y="286.0" style="font-size:9.2px;font-weight:400;fill:#b91c1c;text-anchor:start">RASC 中 Debug0 必须配成 SWD（P300/P108），否则 P109/P110 被 TDO/TDI 占用，板载串口打不开。</text>
+</svg>
+    <figcaption><b>图 5-2</b> SWD 排针（5 针，pin1=P300/SWCLK、pin2=P108/SWDIO、pin3=RES、pin4=GND、pin5=3.3V）；
+      板载无调试器，烧录优先 Type-C + CH340E + SCI Boot（RFP）。</figcaption>
+  </figure>
+  <ul class="tight">
+    <li><b>烧录（推荐）</b>：Type-C + CH340E + SCI Boot + Renesas Flash Programmer（RFP）；进入 SCI Boot 按板卡说明（BOOT 拨到 ON/按复位，具体以板卡丝印为准）；</li>
+    <li><b>调试（可选）</b>：外部 J-Link / EZ-Cube3 接 SWD 排针；针序与常见 20 针不同（见上图）；P300/P108 在 RASC 里已配成 DEBUG 功能；</li>
+    <li>提示：RASC 里改 Debug0 为 SWD 后，P300/P108 会出现在 <code>pin_data.c</code> 的 IOPORT_PERIPHERAL_DEBUG 行（00 §4.4 验收：最终 pin_data.c 正好 8 条）。</li>
+  </ul>
+</section>
+
+<!-- ============ 6 ============ -->
+<section id="s6">
+  <h2><span class="num">6</span>执行器接口（阀 / 继电器，本阶段预留不接） <span class="en">ACTUATOR</span></h2>
+
+  <div class="warn">
+    <span class="t">本阶段状态：APP_USE_VALVE = 0（默认）</span>
+    P104 不驱动继电器，只由 LED1 表示“回收/排空”（假执行器，先跑通状态机）。但固件仍在最早时刻把 P104 配置为输出低（排空电平），
+    保证以后接上继电器时，上电/复位瞬间也是排空（<b>fail-safe</b>）。对应固件常量：
+    <code>APP_VALVE_PIN=BSP_IO_PORT_01_PIN_04</code>（P104 / U2-8）、<code>APP_VALVE_RECOVER_LEVEL=HIGH</code>、<code>APP_VALVE_DRAIN_LEVEL=LOW</code>。
+  </div>
+
+  <h3>6.1 继电器 + 12V 阀回路（接阀时按此做）</h3>
+  <figure>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1080 560" role="img" aria-label="继电器与 12V 阀回路（本阶段预留不接）" style="font-family:'Microsoft YaHei','PingFang SC','Noto Sans CJK SC',system-ui,sans-serif">
+<rect width="1080" height="560" fill="#ffffff"/>
+<path d="M0,0V560 M20,0V560 M40,0V560 M60,0V560 M80,0V560 M100,0V560 M120,0V560 M140,0V560 M160,0V560 M180,0V560 M200,0V560 M220,0V560 M240,0V560 M260,0V560 M280,0V560 M300,0V560 M320,0V560 M340,0V560 M360,0V560 M380,0V560 M400,0V560 M420,0V560 M440,0V560 M460,0V560 M480,0V560 M500,0V560 M520,0V560 M540,0V560 M560,0V560 M580,0V560 M600,0V560 M620,0V560 M640,0V560 M660,0V560 M680,0V560 M700,0V560 M720,0V560 M740,0V560 M760,0V560 M780,0V560 M800,0V560 M820,0V560 M840,0V560 M860,0V560 M880,0V560 M900,0V560 M920,0V560 M940,0V560 M960,0V560 M980,0V560 M1000,0V560 M1020,0V560 M1040,0V560 M1060,0V560 M1080,0V560 M0,0H1080 M0,20H1080 M0,40H1080 M0,60H1080 M0,80H1080 M0,100H1080 M0,120H1080 M0,140H1080 M0,160H1080 M0,180H1080 M0,200H1080 M0,220H1080 M0,240H1080 M0,260H1080 M0,280H1080 M0,300H1080 M0,320H1080 M0,340H1080 M0,360H1080 M0,380H1080 M0,400H1080 M0,420H1080 M0,440H1080 M0,460H1080 M0,480H1080 M0,500H1080 M0,520H1080 M0,540H1080 M0,560H1080" stroke="#eef2f7" stroke-width="1" fill="none"/>
+  <polyline points="210.0,125.0 330.0,125.0" stroke-width="2.2" stroke="#db2777" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+  <polyline points="270.0,125.0 270.0,185.0" stroke-width="2.8" stroke="#111827" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+  <polyline points="270.0,225.0 270.0,250.0" stroke-width="2.8" stroke="#111827" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+  <polyline points="670.0,115.0 690.0,115.0" stroke-width="2.8" stroke="#9333ea" fill="none" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="7 5"/>
+  <polyline points="790.0,115.0 810.0,115.0" stroke-width="2.8" stroke="#9333ea" fill="none" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="7 5"/>
+  <polyline points="920.0,115.0 990.0,115.0 990.0,200.0" stroke-width="2.8" stroke="#9333ea" fill="none" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="7 5"/>
+  <polyline points="990.0,278.0 880.0,278.0" stroke-width="2.8" stroke="#9333ea" fill="none" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="7 5"/>
+  <polyline points="740.0,278.0 700.0,278.0 700.0,400.0" stroke-width="2.2" stroke="#111827" fill="none" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="7 5"/>
+  <polyline points="670.0,405.0 700.0,405.0" stroke-width="2.8" stroke="#111827" fill="none" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="7 5"/>
+  <polyline points="900.0,278.0 900.0,205.0 720.0,205.0 720.0,278.0" stroke-width="2.8" stroke="#9333ea" fill="none" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="7 5"/>
+  <rect x="60.0" y="90.0" width="150.0" height="70.0" rx="10" fill="#f8fafc" stroke="#334155" stroke-width="1.4"/>
+  <circle cx="210.0" cy="125.0" r="5.0" fill="#ffffff" stroke="#db2777" stroke-width="2.4"/>
+  <circle cx="270.0" cy="125.0" r="3.4" fill="#db2777"/>
+  <rect x="263.5" y="185.0" width="13.0" height="40.0" rx="2.5" fill="#ffffff" stroke="#334155" stroke-width="1.8"/>
+  <rect x="253.2" y="250.5" width="33.6" height="21" rx="6" fill="#e5e7eb" stroke="#111827" stroke-width="1.2"/>
+  <rect x="330.0" y="80.0" width="190.0" height="150.0" rx="10" fill="#ffffff" stroke="#94a3b8" stroke-width="1.4"/>
+  <rect x="545" y="40" width="500" height="380" rx="14" fill="none" stroke="#94a3b8" stroke-width="1.4" stroke-dasharray="8 5"/>
+  <rect x="560.0" y="90.0" width="110.0" height="50.0" rx="10" fill="#fbfbfd" stroke="#94a3b8" stroke-width="1.4" stroke-dasharray="8 5"/>
+  <rect x="690.0" y="90.0" width="100.0" height="50.0" rx="10" fill="#fbfbfd" stroke="#94a3b8" stroke-width="1.4" stroke-dasharray="8 5"/>
+  <rect x="810.0" y="90.0" width="110.0" height="50.0" rx="10" fill="#fbfbfd" stroke="#94a3b8" stroke-width="1.4" stroke-dasharray="8 5"/>
+  <circle cx="990" cy="200" r="4.5" fill="#fff" stroke="#9333ea" stroke-width="2"/>
+  <line x1="990" y1="205" x2="972" y2="272" stroke="#9333ea" stroke-width="2"/>
+  <circle cx="990" cy="278" r="4.5" fill="#fff" stroke="#9333ea" stroke-width="2"/>
+  <rect x="740.0" y="230.0" width="140.0" height="100.0" rx="10" fill="#fbfbfd" stroke="#94a3b8" stroke-width="1.4" stroke-dasharray="8 5"/>
+  <rect x="560.0" y="380.0" width="110.0" height="50.0" rx="10" fill="#fbfbfd" stroke="#94a3b8" stroke-width="1.4" stroke-dasharray="8 5"/>
+  <circle cx="900.0" cy="278.0" r="3.4" fill="#9333ea"/>
+  <circle cx="720.0" cy="278.0" r="3.4" fill="#9333ea"/>
+  <polygon points="806,196 806,214 820,205" fill="#ffffff" stroke="#9333ea" stroke-width="1.8"/>
+  <line x1="820" y1="196" x2="820" y2="214" stroke="#9333ea" stroke-width="2.4"/>
+  <text x="60.0" y="60.0" style="font-size:11px;font-weight:700;fill:#0f172a;text-anchor:start">① 控制侧：P104 → 继电器模块（本阶段 APP_USE_VALVE=0）</text>
+  <text x="135.0" y="119.8" style="font-size:11.5px;font-weight:600;fill:#0f172a;text-anchor:middle">RA4M2_MINI</text>
+  <text x="135.0" y="131.5" style="font-size:9.5px;font-weight:400;fill:#475569;text-anchor:middle">P104（U2-8）</text>
+  <text x="282.5" y="208.4" style="font-size:9px;font-weight:600;fill:#334155;text-anchor:start">10 kΩ</text>
+  <text x="270.0" y="264.8" style="font-size:10.5px;font-weight:600;fill:#111827;text-anchor:middle">GND</text>
+  <text x="228.0" y="176.0" style="font-size:8.6px;font-weight:400;fill:#475569;text-anchor:end">下拉</text>
+  <text x="425.0" y="136.0" style="font-size:11.5px;font-weight:600;fill:#0f172a;text-anchor:middle">继电器模块</text>
+  <text x="425.0" y="147.8" style="font-size:9px;font-weight:400;fill:#475569;text-anchor:middle">3.3V 触发 · 光耦输入</text>
+  <text x="425.0" y="161.8" style="font-size:9px;font-weight:400;fill:#475569;text-anchor:middle">VCC→VIN · GND→地排</text>
+  <text x="425.0" y="175.8" style="font-size:9px;font-weight:400;fill:#475569;text-anchor:middle">IN→P104</text>
+  <text x="60.0" y="300.0" style="font-size:9.3px;font-weight:400;fill:#b91c1c;text-anchor:start">P104 在复位/配置完成前是高阻：靠 10 kΩ 下拉守住“上电不动作”。</text>
+  <text x="60.0" y="322.0" style="font-size:9.3px;font-weight:400;fill:#b91c1c;text-anchor:start">模块必须是 3.3V 可触发款；低电平触发款要改上拉 + 改固件有效电平。</text>
+  <text x="60.0" y="370.0" style="font-size:10.5px;font-weight:700;fill:#0f172a;text-anchor:start">30 秒验证法（到货必做）</text>
+  <text x="76.0" y="396.0" style="font-size:9.3px;font-weight:400;fill:#475569;text-anchor:start">① 量模块 VCC-GND ≥ 4.5 V     ② 触发端接 3.3 V，听“咔哒”</text>
+  <text x="76.0" y="420.0" style="font-size:9.3px;font-weight:400;fill:#475569;text-anchor:start">③ 通断档量 COM-NO：吸合导通、释放断开</text>
+  <text x="76.0" y="444.0" style="font-size:9.3px;font-weight:400;fill:#475569;text-anchor:start">④ 吸合时量线圈电压 ≈ VCC（&lt; 4.2 V → 换短粗线 / 独立 5V）</text>
+  <text x="76.0" y="468.0" style="font-size:9.3px;font-weight:400;fill:#475569;text-anchor:start">⑤ 连续触发 10 次全部动作 → 合格</text>
+  <text x="566.0" y="68.0" style="font-size:11px;font-weight:700;fill:#6b7280;text-anchor:start">② 12V 回路：继电器 → 三通阀（本阶段不接）</text>
+  <text x="615.0" y="110.1" style="font-size:11px;font-weight:600;fill:#64748b;text-anchor:middle">+12V</text>
+  <text x="615.0" y="121.6" style="font-size:8.5px;font-weight:400;fill:#94a3b8;text-anchor:middle">12V/3A</text>
+  <text x="740.0" y="117.5" style="font-size:10px;font-weight:600;fill:#64748b;text-anchor:middle">2A 保险丝</text>
+  <text x="865.0" y="117.5" style="font-size:10px;font-weight:600;fill:#64748b;text-anchor:middle">船型开关</text>
+  <text x="1005.0" y="204.0" style="font-size:9px;font-weight:700;fill:#7c3aed;text-anchor:start">COM</text>
+  <text x="1005.0" y="282.0" style="font-size:9px;font-weight:700;fill:#7c3aed;text-anchor:start">NO</text>
+  <text x="1005.0" y="240.0" style="font-size:8.6px;font-weight:400;fill:#94a3b8;text-anchor:start">继电器触点</text>
+  <text x="810.0" y="267.4" style="font-size:11px;font-weight:600;fill:#64748b;text-anchor:middle">阀线圈</text>
+  <text x="810.0" y="278.9" style="font-size:9.5px;font-weight:400;fill:#94a3b8;text-anchor:middle">12V 三通阀</text>
+  <text x="810.0" y="293.4" style="font-size:9.5px;font-weight:400;fill:#94a3b8;text-anchor:middle">断电 = 排空</text>
+  <text x="884.0" y="270.0" style="font-size:10px;font-weight:700;fill:#9333ea;text-anchor:start">+</text>
+  <text x="744.0" y="270.0" style="font-size:10px;font-weight:700;fill:#9333ea;text-anchor:start">−</text>
+  <text x="615.0" y="400.1" style="font-size:11px;font-weight:600;fill:#64748b;text-anchor:middle">−12V</text>
+  <text x="615.0" y="411.6" style="font-size:8.5px;font-weight:400;fill:#94a3b8;text-anchor:middle">12V 回线</text>
+  <text x="736.0" y="190.0" style="font-size:8.8px;font-weight:700;fill:#7c3aed;text-anchor:start">1N4007 续流（阴极 → 阀+）</text>
+  <text x="566.0" y="450.0" style="font-size:9.2px;font-weight:400;fill:#6b7280;text-anchor:start">• 断电 / 复位 / 程序跑飞时，阀必须回到排空位；主排水路常通</text>
+  <text x="566.0" y="470.0" style="font-size:9.2px;font-weight:400;fill:#6b7280;text-anchor:start">• 线圈只在回收段通电（单次 ≤120 s）；阀地单独走线到地排</text>
+</svg>
+    <figcaption><b>图 6-1</b> 左：P104 → 继电器 IN（P104↔GND 加 10 kΩ 下拉）；右：12V 回路
+      适配器 → 2A 保险丝 → 船型开关 → 继电器 COM；NO → 阀+；阀− → 12V−；1N4007 续流（阴极→阀+）。
+      <b>虚线框 = 本阶段不接。</b></figcaption>
+  </figure>
+
+  <h4>继电器模块接法（3.3V 触发，光耦输入）</h4>
+  <div class="tw">
+  <table class="compact">
+    <thead><tr><th style="width:150px">继电器模块端子</th><th style="width:230px">接到</th><th>要点</th></tr></thead>
+    <tbody>
+      <tr><td>VCC</td><td><code>U2-19/20</code>（VIN）</td><td>从板取 5V，与板同开同关</td></tr>
+      <tr><td>GND</td><td>GND 地排 / <code>U2-18</code></td><td>必须共地</td></tr>
+      <tr><td>IN</td><td><code>U2-8</code>（P104）</td><td>3.3V 电平触发</td></tr>
+      <tr><td>下拉电阻</td><td>P104 ↔ GND 之间 <b>10 kΩ</b></td><td>复位/配置完成前 P104 高阻，强制“阀不动作”</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <ul class="tight">
+    <li>模块必须是 <b>“3.3V 可触发”款</b>（购买前确认，别买纯 5V 触发）；</li>
+    <li>光耦输入级共地后不提供电气隔离，只作电平/驱动；</li>
+    <li>若模块为低电平触发：把 10 kΩ 下拉改成 <b>10 kΩ 上拉到 3.3V</b>，并改固件 APP_VALVE_RECOVER_LEVEL/DRAIN_LEVEL（有效电平以实测为准）；</li>
+    <li>继电器模块 VCC 就近并 100 µF + 0.1 µF（§3.3）。</li>
+  </ul>
+
+  <h4>到货 30 秒验证法（必做）</h4>
+  <ul class="checklist" data-store="relay30">
+    <li><input type="checkbox"><span class="txt">① 万用表量模块 VCC-GND ≥ 4.5 V</span></li>
+    <li><input type="checkbox"><span class="txt">② 触发端接 3.3V（或 GPIO），听“咔哒”</span></li>
+    <li><input type="checkbox"><span class="txt">③ 通断档量 COM-NO：吸合导通、释放断开</span></li>
+    <li><input type="checkbox"><span class="txt">④ 吸合时量线圈两端电压 ≈ VCC（&lt; 4.2V → 换短粗线 / 独立 5V）</span></li>
+    <li><input type="checkbox"><span class="txt">⑤ 连续触发 10 次全部动作 → 合格</span></li>
+  </ul>
+
+  <h4>12V 三通阀回路（本阶段不接）</h4>
+  <ul class="tight">
+    <li><b>阀选型</b>：12V 二位三通直动式、一进两出、<b>断电 = 排空口通</b>、通径 ≥4 mm、G1/4、EPDM 密封（详见《硬件搭建方案》§6）；</li>
+    <li><b>回路</b>：12V 适配器（内正外负）→ 2A 保险丝 → 船型开关 → 继电器 COM；继电器 NO → 阀线圈（+）；阀线圈（−）→ 12V（−）；</li>
+    <li><b>续流二极管</b>：1N4007 并在阀线圈两端，<b>阴极 → 线圈（+）、阳极 → 线圈（−）</b>；反接会短路（轻则烧保险丝，重则烧电源）；</li>
+    <li>线圈两端电压：12V 额定；阀只在回收段通电（单次 ≤120 s 为后续需求，本阶段未实现）；</li>
+    <li><b>安全</b>：断电/复位/程序跑飞时阀必须回到“排空”位；主排水路常通；阀的地单独走线到端子排（§3.2）；</li>
+    <li>若不用三通阀：用“常通直排 + 回收支路常闭阀”方案 B 兜底（《硬件搭建方案》§6.3）。</li>
+  </ul>
+
+  <h3>6.2 可选：流量计 / 蜂鸣器（本阶段不做，先留位置）</h3>
+  <div class="grid2">
+    <div class="mini"><h5>流量计（YF-S201 类，5V 方波）</h5><p>VCC→U2-19、GND→U2-18、信号→<code>U2-16</code>（P206，5V 容忍脚，关内部上拉）；用于算回收水量/回收率（固件尚未支持）。</p></div>
+    <div class="mini"><h5>蜂鸣器（3.3V 有源模块）</h5><p>VCC→U1-12、GND→GND、IN→<code>U2-3</code>（P409，5V 容忍脚）；裸蜂鸣器不要直驱（电流可能超 GPIO 能力）。</p></div>
+  </div>
+</section>
+<!-- ============ 7 ============ -->
+<section id="s7">
+  <h2><span class="num">7</span>完整接线表（逐根线，按这个顺序接） <span class="en">WIRING TABLE</span></h2>
+  <p class="lead">本表是接线的<b>唯一权威清单</b>：模块端子 → 板孔 → 线色 → 说明。图中未画到的电源/地线都在这里。</p>
+
+  <div class="tw">
+  <table>
+    <thead><tr><th class="c" style="width:46px">#</th><th style="width:190px">从（模块 / 端子）</th><th style="width:210px">到（板孔 / 引脚）</th><th class="c" style="width:70px">线色建议</th><th>说明</th></tr></thead>
+    <tbody>
+      <tr><td class="c">1</td><td>TDS VCC</td><td><code>U1-12</code>（3V3）</td><td class="c"><span class="chip c-3v3">红</span></td><td>3.3V，勿接 5V</td></tr>
+      <tr><td class="c">2</td><td>TDS GND</td><td><code>U1-16</code>（或 GND 地排）</td><td class="c"><span class="chip c-gnd">黑</span></td><td>共地</td></tr>
+      <tr><td class="c">3</td><td>TDS AOUT</td><td><code>U1-6</code>（P014 / AN12）</td><td class="c"><span class="chip c-adc">黄</span></td><td>直连（0~2.3V）</td></tr>
+      <tr><td class="c">4</td><td>DS18B20 VDD</td><td><code>U1-12</code>（3V3）</td><td class="c"><span class="chip c-3v3">红</span></td><td>3.3V</td></tr>
+      <tr><td class="c">5</td><td>DS18B20 GND</td><td><code>U1-1</code>（或 GND 地排）</td><td class="c"><span class="chip c-gnd">黑</span></td><td>共地</td></tr>
+      <tr><td class="c">6</td><td>DS18B20 DQ</td><td><code>U1-17</code>（P500）</td><td class="c"><span class="chip c-dq">蓝</span></td><td>1-Wire</td></tr>
+      <tr><td class="c">7</td><td>4.7 kΩ 上拉</td><td>DQ ↔ <code>U1-12</code></td><td class="c">—</td><td>DQ 与 3V3 之间</td></tr>
+      <tr><td class="c">8</td><td>浊度模块 <b>V</b>（VCC）</td><td><code>U2-19</code>（VIN）</td><td class="c"><span class="chip c-vin">橙</span></td><td>5V 型模块；丝印 V</td></tr>
+      <tr><td class="c">9</td><td>浊度模块 <b>G</b>（GND）</td><td><code>U2-18</code>（或 GND 地排）</td><td class="c"><span class="chip c-gnd">黑</span></td><td>共地；丝印 G</td></tr>
+      <tr><td class="c">10</td><td>浊度模块 <b>A</b>（AO）</td><td>R1（1 kΩ）上端</td><td class="c"><span class="chip c-adc">黄</span></td><td>分压上臂；丝印 A，<b>D 不接</b></td></tr>
+      <tr><td class="c">11</td><td>R1（1 kΩ）下端 = 节点</td><td><code>U1-5</code>（P013 / AN11）</td><td class="c"><span class="chip c-node">绿</span></td><td>分压中点</td></tr>
+      <tr><td class="c">12</td><td>节点</td><td>R2（2 kΩ）上端</td><td class="c">—</td><td>分压下臂</td></tr>
+      <tr><td class="c">13</td><td>R2（2 kΩ）下端</td><td>GND 地排 / <code>U2-4</code></td><td class="c"><span class="chip c-gnd">黑</span></td><td>对地</td></tr>
+      <tr><td class="c">14</td><td>0.1 µF</td><td>节点 ↔ GND</td><td class="c">—</td><td>与 R2 并联滤波</td></tr>
+      <tr><td class="c">15</td><td>（可选）继电器 VCC</td><td><code>U2-19</code>（VIN）</td><td class="c"><span class="chip c-vin">橙</span></td><td>预留</td></tr>
+      <tr><td class="c">16</td><td>（可选）继电器 GND</td><td><code>U2-18</code></td><td class="c"><span class="chip c-gnd">黑</span></td><td>预留</td></tr>
+      <tr><td class="c">17</td><td>（可选）继电器 IN</td><td><code>U2-8</code>（P104）</td><td class="c"><span class="chip c-gpio">蓝</span></td><td>预留</td></tr>
+      <tr><td class="c">18</td><td>（可选）10 kΩ 下拉</td><td>P104 ↔ GND</td><td class="c">—</td><td>fail-safe 预留</td></tr>
+      <tr><td class="c">19</td><td>（可选）流量计 信号</td><td><code>U2-16</code>（P206）</td><td class="c"><span class="chip c-dq">蓝</span></td><td>5V 容忍脚</td></tr>
+      <tr><td class="c">20</td><td>（可选）蜂鸣器 IN</td><td><code>U2-3</code>（P409）</td><td class="c"><span class="chip c-dq">蓝</span></td><td>5V 容忍脚</td></tr>
+      <tr><td class="c">21</td><td>Type-C 数据线</td><td>板 Type-C ↔ 电脑 / 5V 适配器</td><td class="c">—</td><td>供电 + 串口</td></tr>
+      <tr><td class="c">22</td><td>GND 地排</td><td>板 GND（§2.5 的 8 个孔之一）</td><td class="c"><span class="chip c-gnd">黑</span></td><td>星形单点</td></tr>
+      <tr><td class="c">23</td><td>（可选）SWD 调试线</td><td>P300 / P108 / GND（SWD 排针）</td><td class="c">—</td><td>仅调试用</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <div class="danger">
+    <span class="t">v1.1 更正：浊度模块 4 针的接法</span>
+    模块丝印是 <b>G / A / D / V</b>（不是 VCC / GND / AO 的 3 针）：上表第 8 根接 <b>V</b>、第 9 根接 <b>G</b>、第 10 根接 <b>A</b>；
+    第 4 针 <b>D（DO）必须悬空</b>（5V 输出）。探头是 4 线，按模块座丝印 <b>1 电源负极 / 2 传感器− / 3 传感器out / 4 传感器+</b> 防呆对插，
+    不占 MCU 引脚、不需要另接电源。
+  </div>
+
+  <div class="note">
+    <span class="t">线色约定（建议）</span>
+    <span class="chip c-3v3">红 = 3.3V</span>
+    <span class="chip c-vin">橙 = 5V / VIN</span>
+    <span class="chip c-gnd">黑 = GND</span>
+    <span class="chip c-adc">黄 = 模拟信号</span>
+    <span class="chip c-dq">蓝 = 数字信号</span>
+    <span class="chip c-node">绿 = 分压节点</span>
+    —— 建议每根线两端贴标签（如 “TDS-AOUT→U1-6”），答辩时一眼可查。
+  </div>
+</section>
+
+<!-- ============ 8 ============ -->
+<section id="s8">
+  <h2><span class="num">8</span>接线步骤与上电前检查 <span class="en">CHECK BEFORE POWER-ON</span></h2>
+
+  <h3>8.1 断电接线顺序（每次改线都按这个顺序；拔掉所有电源再动手）</h3>
+  <ol class="tight">
+    <li><b>断电</b>：拔 USB / 适配器（接 12V 时先把船型开关关掉）。</li>
+    <li><b>认孔</b>：按 §2.2 从下端往 Type-C 数，标出 U1-12 / U1-16 / U1-6 / U1-5 / U1-17 / U2-19 / U2-18（先量 3V3 孔最稳）。</li>
+    <li><b>先接地</b>：所有模块 GND → 端子排地排 → 单根线进板 GND（星形单点）。</li>
+    <li><b>接 3.3V 组</b>：TDS（VCC / GND / AOUT）+ DS18B20（VDD / GND / DQ + 4.7k 上拉）。</li>
+    <li><b>接 5V 组</b>：浊度模块（丝印 <b>V / G / A</b> 三根，D 悬空）+ 分压电阻 R1/R2 + 0.1 µF；4 线探头插头对插。</li>
+    <li><b>复核</b>：对照 §7 表逐根核对（插错孔比焊错电阻常见得多）。</li>
+    <li><b>上电</b>：先只给板供电（USB/适配器），等自检通过（LED 快闪 3 下、串口 boot 行）再给 5V 外设供电
+        （独立 5V 适配器工况：先板、后外设；断电相反）。</li>
+    <li><b>收尾</b>：扎带固定、线束分色、滴水弯（水管下方线缆留滴水弯，防水顺线流进板）。</li>
+  </ol>
+
+  <h3>8.2 上电前 / 上电后万用表检查（逐项打勾）</h3>
+  <div class="ck-bar"><span id="ckTitle">进度</span><div class="track"><div class="fill" id="ckFill"></div></div><span id="ckCount">0 / 12</span></div>
+  <ul class="checklist" data-store="meter">
+    <li><input type="checkbox"><span class="txt"><b>1</b>　3V3（U1-12）对 GND　→　<b>3.25~3.35 V</b></span></li>
+    <li><input type="checkbox"><span class="txt"><b>2</b>　VIN（U2-19）对 GND　→　<b>4.5~4.7 V</b></span></li>
+    <li><input type="checkbox"><span class="txt"><b>3</b>　TDS AOUT 对 GND（模块已供电）　→　<b>≤2.4 V</b>（高浓度 2.36V）</span></li>
+    <li><input type="checkbox"><span class="txt"><b>4</b>　分压节点 对 GND（浊度满量程）　→　<b>≤3.2 V</b>（满量程≈3.13V）</span></li>
+    <li><input type="checkbox"><span class="txt"><b>5</b>　DS18B20 DQ 对 GND（静态）　→　<b>≈3.3 V</b>（上拉有效）</span></li>
+    <li><input type="checkbox"><span class="txt"><b>6</b>　各模块 GND ↔ 板 GND（通断档）　→　<b>&lt;1 Ω</b>（共地良好）</span></li>
+    <li><input type="checkbox"><span class="txt"><b>7</b>　3V3 对 GND、5V 对 GND（断电）　→　电阻 <b>&gt;1 kΩ</b>（无短路）</span></li>
+    <li><input type="checkbox"><span class="txt"><b>8</b>　12V 保险丝后对 12V（−）（接阀时）　→　<b>11.4~12.6 V</b></span></li>
+    <li><input type="checkbox"><span class="txt"><b>9</b>　P104 对 GND（上电未触发）　→　<b>0 V</b>（排空位；有 10k 下拉更稳）</span></li>
+    <li><input type="checkbox"><span class="txt"><b>10</b>　P104 对 GND（仅 APP_USE_VALVE=1 时）　→　0 V；发 V1 后 <b>≈3.3 V</b></span></li>
+    <li><input type="checkbox"><span class="txt"><b>11</b>　浊度模块 V 对 G（已供电）　→　<b>4.5~4.7 V</b>（&lt;4.3V 时 LED 偏暗、AO 偏低）</span></li>
+    <li><input type="checkbox"><span class="txt"><b>12</b>　浊度模块 A 对 G（清水 / 浑水各一次）　→　记下两值（定满量程与方向，§4.2）</span></li>
+  </ul>
+
+  <div class="warn">
+    <span class="t">本表覆盖 08 §2 并补充 6 项</span>
+    第 10 项只在“接真阀阶段”做（当前固件 APP_USE_VALVE=0 时不驱动 P104，只表现 LED1；V1/V0 命令仍会切内部状态，但引脚不动）。
+    08 §2 的“分压电阻实测 R1≈1.0kΩ、R2≈2.0kΩ（5% 内）”与“板卡无割线/焊接痕迹”两项同样必做。
+  </div>
+  <div class="danger">
+    <span class="t">顺序红线</span>
+    第 3 项必须“模块先供电 → 再量 AOUT → 最后才接线进 P014”；第 4 项同理（AO 满量程时量节点）。
+    <b>先量后接</b>，避免把超压信号灌进 ADC。若第 1/2 项不对：先别接任何模块，查 USB 线（只充电线不行）、板卡供电、Type-C 是否插到底；不要边量边插拔杜邦线。
+  </div>
+
+  <h3>8.3 上电后自检（固件 v1.1 的实际现象）</h3>
+  <div class="mockrow">
+    <div style="flex:1;min-width:300px">
+      <div class="term"><span class="b"># [BOOT] SENSOR-NODE v1.1 build 2026-10-30 HH:MM</span>
+<span class="b"># board: RA4M2_MINI (R7FA4M2AD3CFL)</span>
+<span class="b"># tick base: SysTick 1 ms</span>
+<span class="g"># display: OLED OK (128x64, I2C0 @0x3C)</span>
+<span class="d"># timing: tick=50ms csv=200ms ...</span>
+<span class="d"># thresholds(default, TO BE CALIBRATED)</span>
+<span class="d"># CSV header: ... （17 列）</span>
+<span class="y"># WARN: OLED not usable -&gt; UART only</span>
+<span class="y">#      （仅 OLED 故障时才出现）</span></div>
+      <p class="tbl-hint">串口（115200 8N1）依次出现以上行；出现 WARN 时判别/CSV/LED/阀照常（OLED 不是安全路径）。</p>
+    </div>
+    <div style="flex:1;min-width:280px">
+      <div class="oled">
+        <div class="o1">RA4M2 WATER JUDGE</div>
+        <div class="o2">OLED OK</div>
+        <div>SSD1306 128x64</div>
+        <div>I2C0 0x3C 400kHz</div>
+        <div class="o3">SENSOR-NODE v1.1</div>
+      </div>
+      <p class="tbl-hint">板载 OLED 开机页 5 行，约 0.8 s 后转状态页。</p>
+    </div>
+  </div>
+  <ul class="tight">
+    <li><b>LED1</b> 快闪 3 下（约 0.72 s）→ 表示固件在跑；</li>
+    <li><b>OLED</b> 开机页 5 行 → 约 0.8 s 后转状态页（页头 EC0/σ/水温 + 大字 + 两行状态）；</li>
+    <li>若串口出现 <code># WARN: OLED not usable -&gt; UART only ...</code>：OLED/I2C 未通，按 §10 查，但判别/CSV/LED/阀照常。</li>
+  </ul>
+</section>
+
+<!-- ============ 9 ============ -->
+<section id="s9">
+  <h2><span class="num">9</span>上电联调（对应 08 验收 T0~T10） <span class="en">BRING-UP</span></h2>
+
+  <h3>9.1 第一步：看读数是否“像真的”（不做标定，只看趋势）</h3>
+  <ul class="tight">
+    <li><b>TDS</b>：探头放自来水 vs 皂液水，串口 <code>tds_mv / tds_adc</code> 应有变化（方向以实测为准）；高浓度到 &gt;2400 mV 会标 TDS_SAT（饱和提醒），不是故障；</li>
+    <li><b>浊度</b>：清水 vs 浑水，<code>ntu_node_mv</code> 应有明显变化；若一直贴轨（≥4040 ADC）或为 0，先查分压/接线/供电（08 T4）；</li>
+    <li><b>DS18B20</b>：室温水应显示接近实际水温；显示 25.0 且 CSV <code>src=FIX</code> → 传感器没通（08 T2）；T24.5 可手输兜底。</li>
+  </ul>
+
+  <h3>9.2 第二步：基线 + 假执行器（08 T5 / T7）</h3>
+  <ul class="tight">
+    <li>探头浸在本底水（自来水）中，发 <code>B</code>（或长按 K2 ≥1.5 s）采基线；OLED 显示 <code>BASELINE n/20</code>，串口 <code># BASELINE start/OK</code>；</li>
+    <li>发 <code>R</code> 开始事件 → 观察 OLED 大字“冲洗”→“清水”、LED1 状态、串口 state/action；</li>
+    <li>L2 时 OLED 反显“污水”、LED1 灭（假执行器“排空”）；</li>
+    <li>全程 P104 不动作（APP_USE_VALVE=0）——先用 LED 把状态机跑通。</li>
+  </ul>
+  <div class="grid3" style="margin-top:8px">
+    <div class="mini"><h5>串口命令</h5><p><code>R</code> 开始事件 / <code>E</code> 结束 / <code>B</code> 采基线 / <code>P</code> 打印状态 / <code>H</code> 帮助 / <code>V1</code> <code>V0</code> 阀（钩子）</p></div>
+    <div class="mini"><h5>状态映射</h5><p>L0 回收（CLEAR）/ L1 拿不准（UNCERTAIN→排空）/ L2 含皂液特征（SOAP→排空）；安全侧优先。</p></div>
+    <div class="mini"><h5>数据留痕</h5><p>200 ms CSV（17 列）+ 事件行；现场指示看 OLED，<b>答辩数据一律引用串口 CSV</b>。</p></div>
+  </div>
+
+  <h3>9.3 第三步：对照 08 逐项验收</h3>
+  <div class="grid2">
+    <div class="mini">
+      <h5>T0 ~ T5</h5>
+      <p>T0 上电自检 → T1 串口链路 → T2 DS18B20 → T3 TDS → T4 浊度 → T5 基线</p>
+    </div>
+    <div class="mini">
+      <h5>T6 ~ T10</h5>
+      <p>T6 判据小实验 → T7 状态机/假执行器 → T8 故障与 fail-safe → T9 稳定性 → T10 OLED 状态页（含 0x3D 故障注入）</p>
+    </div>
+  </div>
+  <div class="note">
+    <span class="t">接线相关的前置项</span>
+    08 §2（上板前检查）与本文 §8.2 是同一套检查（本文覆盖 08 §2 并补充 6 项），做一次即可。
+  </div>
+</section>
+
+<!-- ============ 10 ============ -->
+<section id="s10">
+  <h2><span class="num">10</span>接线类故障排查（先量后猜，一次只改一处） <span class="en">TROUBLESHOOTING</span></h2>
+  <div class="tw">
+  <table class="compact">
+    <thead><tr><th style="width:190px">现象</th><th style="width:300px">可能原因</th><th>检查 / 处理</th></tr></thead>
+    <tbody>
+      <tr><td>串口无输出</td><td>只充电线 / COM 选错 / 没烧录 / BOOT 状态不对；UART 引脚被 JTAG 占着</td><td>换数据线；看设备管理器 COM；确认 RASC Debug0=SWD、P109/P110=SCI9</td></tr>
+      <tr><td>OLED 不亮</td><td>3V3 异常 / I2C 没配 / OLED 被撞坏</td><td>量 U1-12；查 00 §4.3 I2C 配置；<b>不要拆板载 OLED</b></td></tr>
+      <tr><td>TDS 读数恒 0 或乱跳</td><td>AOUT 没接到 P014 / 孔序数反 / 探针没插紧 / 没共地</td><td>断电通断档从模块 AOUT 查到 U1-6</td></tr>
+      <tr><td>TDS 读数贴轨（≥4000 ADC）</td><td>接错孔 / 过压 / 模块输出超 3.3V</td><td>量 AOUT ≤2.4V；查是否插错孔</td></tr>
+      <tr><td>浊度读数贴轨（≥4040）</td><td>AO 直连没分压 / 分压比算错 / 模块 5V 未供电</td><td>量节点 ≤3.2V；查 R1/R2</td></tr>
+      <tr><td>浊度读数接近 0</td><td>模块没供电 / 分压点开路 / 方向反相批次</td><td>量 VIN/节点；做 T4 清水浑水对照</td></tr>
+      <tr><td>DS18B20 显示 0 或 FIX</td><td>DQ 接错 / 没 4.7k 上拉 / CRC 无效 / 供 5V</td><td>量 DQ 静态 3.3V；查上拉；别供 5V</td></tr>
+      <tr><td>3V3 电压下跌（&lt;3.2V）</td><td>外设总电流太大 / LDO 过载 / USB 线太细</td><td>量电流；换短粗线；5V 外设走 VIN</td></tr>
+      <tr><td>ADC 读数偏小 / 不稳</td><td>分压电阻太大（&gt;1kΩ 源阻抗）/ 采样时间短</td><td>改 1k+2k；RASC 加长采样时间</td></tr>
+      <tr><td>板上电瞬间阀/继电器动作</td><td>P104 浮空 / 没有 10k 下拉</td><td>加 10kΩ 下拉（或按模块改上拉）</td></tr>
+      <tr><td>继电器不吸合</td><td>模块不是 3.3V 触发 / IN 极性反 / VIN 电压低 / 没共地</td><td>按 §6.1 的 30 秒验证法</td></tr>
+      <tr><td>阀不动但继电器响</td><td>12V 没到 / 保险丝断 / COM-NO 接反 / 二极管反接</td><td>量 12V；查二极管方向；单给阀试</td></tr>
+      <tr><td>阀动作但水流方向没变</td><td>阀常开/常闭口接反 / 阀内堵</td><td>断电吹气测试，按 08 T10 / 《硬件搭建方案》重接</td></tr>
+      <tr><td>OLED 花屏 / MCU 复位</td><td>继电器无续流二极管 / 共地不良 / 阀从板取电</td><td>加 1N4007、查共地、12V 独立供电</td></tr>
+      <tr><td>浊度读数不随水样变化</td><td>4 线探头插反 / 没插紧（按模块座丝印 1~4 重插）</td><td>断电重插；用 08 T4 对照方向与满量程</td></tr>
+      <tr><td>浊度模块发烫 / 无输出</td><td>V 与 G 反接（4 针两端就是 V 和 G）</td><td>立即断电；按丝印重接；再量 V-G 4.5~4.7V</td></tr>
+      <tr><td>量到 D 端有 5V</td><td>D = DO 是 5V 输出，被接到了 3.3V 引脚</td><td>立即断开；D 只能悬空（电平转换本阶段不做）</td></tr>
+      <tr><td>水溅到电气</td><td>湿电未分离 / 没有滴水弯</td><td>断电吹干；加防水盒与漏水盘；线缆做滴水弯</td></tr>
+    </tbody>
+  </table>
+  </div>
+</section>
+
+<!-- ============ 11 ============ -->
+<section id="s11">
+  <h2><span class="num">11</span>红线与已知限制（写报告 / 答辩必须如实说） <span class="en">RED LINES</span></h2>
+
+  <h3>11.1 电气红线（违反会烧 ADC/烧板，或答辩被扣分）</h3>
+  <div class="tw">
+  <table class="compact">
+    <thead><tr><th class="c" style="width:46px">#</th><th style="width:170px">红线</th><th>说明</th></tr></thead>
+    <tbody>
+      <tr><td class="c">①</td><td class="b-warn">3.3V 逻辑</td><td>模拟输入绝对最大 <b>3.6V</b>；5V 输出必须分压/钳位后才可进 MCU；P206/P407/P408/P409 是仅有的 5V 容忍脚，其余都不耐 5V。</td></tr>
+      <tr><td class="c">②</td><td class="b-warn">取电纪律</td><td>5V 外设一律从 VIN（U2-19/20）取电、与板同开同关；禁止外部 5V 灌 VIN；禁止电脑 USB 与 5V 适配器同时给板供电；阀的 12V 必须独立供电。</td></tr>
+      <tr><td class="c">③</td><td class="b-warn">不可逆改造</td><td>板子是借的、赛后收回：只接排针/端子，禁止割线、焊死、拆焊 OLED / CH340E / LDO。</td></tr>
+      <tr><td class="c">④</td><td class="b-warn">上电前必量</td><td>TDS AOUT ≤2.4V、分压节点 ≤3.2V、3V3 = 3.25~3.35V、VIN = 4.5~4.7V；断电时 3V3/5V 对 GND 电阻 &gt;1 kΩ（无短路）。</td></tr>
+      <tr><td class="c">⑤</td><td class="b-warn">上电先“排空”</td><td>固件第一步把 P104 置低；硬件 P104 与 GND 之间加 10 kΩ 下拉；接真阀时这个下拉不得省略（复位/配置完成前 P104 是高阻，靠它守住“不动作”）。</td></tr>
+      <tr><td class="c">⑥</td><td class="b-warn">湿电分离</td><td>电气在防水盒/干燥区，线缆做滴水弯，漏水盘在电气下方；12V 线远离水。</td></tr>
+      <tr><td class="c">⑦</td><td class="b-warn">先验收再上水</td><td>任何“新想法”先过 08 验收再上水；一次只改一处，改完重测（§8.2）。</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <h3>11.2 已知限制与待实测项（如实记录，⏳ 在到货/装机时逐条清掉）</h3>
+  <ul class="checklist" data-store="limits">
+    <li><input type="checkbox"><span class="txt">U1-20 丝印存疑（原理图标 3V3、板背疑 VIN）：⏳ 先别用，3.3V 一律走 U1-12</span></li>
+    <li><input type="checkbox"><span class="txt">板载 LDO 的实际电流余量 ⏳（按 3.3V 侧 60~90 mA 估算，待满载实测）</span></li>
+    <li><input type="checkbox"><span class="txt">浊度模块是 4 针 G/A/D/V + 4 线探头：D（DO）悬空、电位器不动、探头必须原配；AO 满量程（≤4.7V 用 1k+2k；独立 5V 时 5.0V 才改 R2=1.5k）与方向 ⏳ 到货先实测</span></li>
+    <li><input type="checkbox"><span class="txt">继电器模块有效电平（高/低触发）以实测为准，⏳ 30 秒验证法确认后再改固件</span></li>
+    <li><input type="checkbox"><span class="txt">12V 三通阀的断电方向、通径、连续通电温升 ⏳（见《硬件搭建方案》§6）</span></li>
+    <li><input type="checkbox"><span class="txt">本阶段不接真阀、无流量计：LED1 为假执行器，P104 钩子默认关闭</span></li>
+    <li><input type="checkbox"><span class="txt">无 NTU 标定：浊度只输出相对量；TDS 无标准液时不报绝对 ppm（红线见 08 §15）</span></li>
+    <li><input type="checkbox"><span class="txt">探头污染/气泡/结垢会漂移：可拆洗、间歇采样、每次实验前重采基线</span></li>
+    <li><input type="checkbox"><span class="txt">酒精免洗凝胶是 ΔEC + 浊度双盲区：写进“已知局限”，不得声称“识别所有污染物”</span></li>
+  </ul>
+</section>
+
+<!-- ============ 12 ============ -->
+<section id="s12">
+  <h2><span class="num">12</span>电气 BOM（只列“接电”相关） <span class="en">BOM</span></h2>
+  <div class="grid2">
+    <div>
+      <h4>必需（最小闭环，已有 tds_mini 器材的基本都齐）</h4>
+      <div class="tw"><table class="compact">
+        <thead><tr><th class="c" style="width:40px">#</th><th>物料</th><th>用途</th></tr></thead>
+        <tbody>
+          <tr><td class="c">1</td><td>杜邦线（母-母 / 公-母）若干、热缩管、扎带</td><td>接线 / 固定</td></tr>
+          <tr><td class="c">1b</td><td>浊度模块（4 针 G/A/D/V + 原配 4 线探头）1 套</td><td>浊度通道；3 针 TS-300B 探头不通用</td></tr>
+          <tr><td class="c">2</td><td>1 kΩ、2 kΩ 金属膜电阻各 ≥4 只（1% 优先）</td><td>浊度分压（R1/R2）</td></tr>
+          <tr><td class="c">3</td><td>4.7 kΩ 电阻 ≥2 只</td><td>DS18B20 上拉（模块自带可免）</td></tr>
+          <tr><td class="c">4</td><td>0.1 µF 瓷片电容 ≥3 只</td><td>模块去耦 / 分压滤波</td></tr>
+          <tr><td class="c">5</td><td>万用表（通断 / 直流电压 / 电阻档）</td><td>上电前检查（§8.2）</td></tr>
+          <tr><td class="c">6</td><td>面包板 / 洞洞板 / 接线端子排 1 套</td><td>星形地 / 分压电阻落位</td></tr>
+          <tr><td class="c">7</td><td>Type-C 数据线（能传数据，不是只充电线）</td><td>供电 + 串口</td></tr>
+          <tr><td class="c">8</td><td>（演示）5V/2A 适配器 + USB-A→C 线</td><td>独立供电（无串口工况）</td></tr>
+        </tbody>
+      </table></div>
+    </div>
+    <div>
+      <h4>可选（接真阀时再买）</h4>
+      <div class="tw"><table class="compact">
+        <thead><tr><th class="c" style="width:40px">#</th><th>物料</th><th>用途</th></tr></thead>
+        <tbody>
+          <tr><td class="c">9</td><td>3.3V 触发继电器模块（1 路，光耦）</td><td>驱动 12V 阀</td></tr>
+          <tr><td class="c">10</td><td>1N4007 ×5、10 kΩ ×5、100 µF ×2、0.1 µF ×5</td><td>续流 / 下拉 / 去耦</td></tr>
+          <tr><td class="c">11</td><td>12V/3A 适配器、2A 保险丝 + 座、船型开关、端子排</td><td>12V 回路</td></tr>
+          <tr><td class="c">12</td><td>12V 二位三通直动式电磁阀（断电 = 排空、≥4mm）</td><td>执行器（见《硬件搭建方案》§6）</td></tr>
+        </tbody>
+      </table></div>
+      <h4>明确不买（省钱且避免踩坑）</h4>
+      <ul class="tight" style="font-size:13.4px">
+        <li>5V→3.3V 降压模块（板载 LDO 够用，5V 外设直接接 VIN）；</li>
+        <li>电平转换模块（3.3V 与 5V 之间本项目只有浊度 1 路，1k+2k 分压即可）；</li>
+        <li>TS-300B 3 针一体化探头 / 另买第二套探头（与 4 针模块的 4 线探头不通用）。</li>
+        <li>PCB 打板 / 工业浊度 / 第二块 TDS / 12V 水泵（本阶段不需要）。</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 13 ============ -->
+<section id="s13">
+  <h2><span class="num">13</span>与其它文档的关系 <span class="en">CROSS REFERENCES</span></h2>
+  <div class="tw">
+  <table class="compact">
+    <thead><tr><th style="width:170px">文档</th><th>关系</th></tr></thead>
+    <tbody>
+      <tr><td>00 总览</td><td>§3.1 是本文的“最小接线速查表”，§4 是 RASC 配置（ADC/UART/I2C/引脚）；本文与 00 §3 冲突时，<b>以本文（及固件实测）为准</b>，并回填 00。</td></tr>
+      <tr><td>02 / 03 / 04</td><td>TDS / 浊度 / DS18B20 的换算、量程、校准细节（代码 FILE 段）。</td></tr>
+      <tr><td>05 / 06 / 07</td><td>采集 / 判别 / 应用主循环（CSV、事件、OLED、阀钩子）。</td></tr>
+      <tr><td>08 验收</td><td>§2 上板前检查、T0~T10 流程（本文 §8.2 覆盖 08 §2 并补充 6 项）。</td></tr>
+      <tr><td>10 OLED</td><td>板载屏的驱动 / 页面 / 故障处理（本文 §5.2 只讲“不用接线”）。</td></tr>
+      <tr><td>11 编译报错修复</td><td>工程构建 / 链接问题（与本文件无关）。</td></tr>
+      <tr><td>《硬件搭建方案》</td><td>水路、流动池、阀选型、BOM 预算、万用表 8 步通关；本文的电气部分与其 §3/§4/§5/§6 一致。</td></tr>
+      <tr><td>《项目设想（第 3 版）》</td><td>判据与红线的论证以主文档为准。</td></tr>
+    </tbody>
+  </table>
+  </div>
+</section>
+
+<!-- ============ 附录 A ============ -->
+<section id="appa">
+  <h2><span class="num">A</span>接线速查卡（可打印贴在台架上） <span class="en">QUICK CARD</span></h2>
+  <div class="grid2">
+    <div class="mini" style="border-left:4px solid #dc2626">
+      <h5>【供电】</h5>
+      <p>Type-C 5V → 板（联调用电脑 USB / 演示用 5V/2A 适配器，二选一）<br>
+      5V 外设（浊度模块 VCC、继电器 VCC）→ <code>U2-19/20</code>（VIN）<br>
+      3.3V 外设（TDS VCC、DS18B20 VDD、4.7k 上拉、分压上端）→ <code>U1-12</code>（3V3）<br>
+      12V 阀（本阶段不接）→ 独立 12V → 2A 保险丝 → 船型开关 → 继电器 COM</p>
+    </div>
+    <div class="mini" style="border-left:4px solid #111827">
+      <h5>【地】</h5>
+      <p>所有模块 GND → 端子排 → 板 GND（<code>U1-1/8/16、U2-4/6/11/14/18</code>）<b>★ 星形单点</b></p>
+    </div>
+    <div class="mini" style="border-left:4px solid #ca8a04">
+      <h5>【传感器】</h5>
+      <p><b>TDS</b>：VCC→U1-12；GND→U1-16；AOUT→U1-6（P014/AN12）<br>
+      <b>DS18B20</b>：VDD→U1-12；GND→U1-1；DQ→U1-17（P500）+ 4.7k 到 3V3<br>
+      <b>浊度模块</b>（4 针 G/A/D/V）：V→U2-19（VIN）；G→U2-18；A→[1k]→节点（U1-5 / P013 / AN11）；节点→[2k]→GND；节点→0.1µF→GND；<b>D（DO）悬空不接</b>；4 线探头按模块座丝印对插</p>
+    </div>
+    <div class="mini" style="border-left:4px solid #9333ea">
+      <h5>【执行（预留）】</h5>
+      <p><b>继电器</b>：VCC→U2-19；GND→U2-18；IN→U2-8（P104）；P104-GND 10k 下拉<br>
+      <b>阀</b>：COM = 12V+（保险丝后）、NO = 阀+、阀− = 12V−、1N4007 并在线圈（阴极→+）</p>
+    </div>
+    <div class="mini" style="border-left:4px solid #2563eb">
+      <h5>【串口 / OLED】</h5>
+      <p>板载 CH340E，Type-C，115200 8N1；RASC 里 Debug0 必须改 SWD（否则 P109/P110 被占）。<br>
+      板载 I2C0 P407/P408，0x3C，不用接线、不要拆焊、不要抢作 GPIO。</p>
+    </div>
+    <div class="mini" style="border-left:4px solid #b91c1c">
+      <h5>【每次上电前 60 秒检查】</h5>
+      <p>☐ 断电量过电压？（3V3=3.25~3.35V、VIN=4.5~4.7V）<br>
+      ☐ TDS AOUT ≤2.4V？☐ 分压节点 ≤3.2V？☐ V-G 4.5~4.7V？☐ DQ 静态 ≈3.3V？<br>
+      ☐ 共地通断（&lt;1Ω）？☐ 无短路（3V3/5V 对 GND &gt;1kΩ）？<br>
+      ☐ P104 10k 下拉已装？☐ 二极管方向对（阴极→阀+）？☐ 水没挨着电？<br>
+      <b>【上电顺序】板 → 5V 外设；断电：5V 外设 → 板。</b></p>
+    </div>
+  </div>
+</section>
+
+<footer>
+  12_硬件电路连接方案 · 可视化渲染件（HTML）　|　对应 txt：v1.1（2026-10-31，671 行）　|　固件：SENSOR-NODE v1.1（2026-10-30 构建版）<br>
+  本页与 <a href="12_硬件电路连接方案.txt">12_硬件电路连接方案.txt</a> 同步维护；接线口径以 txt 为准，图中未画到的电源/地线见 §7 完整接线表。<br>
+  文档性质：操作文档（不含源码、不参与 FILE 段提取）　·　图由内联 SVG 生成，单文件离线可用。
+</footer>
+
+</div><!-- /wrap -->
+
+<button class="btn" onclick="window.print()">🖨 打印 / 导出 PDF</button>
+
+<script>
+(function(){
+  // 勾选状态持久化 + 进度条
+  document.querySelectorAll('ul.checklist').forEach(function(ul){
+    var store = ul.dataset.store || ('ck_' + Math.random().toString(36).slice(2));
+    var boxes = Array.prototype.slice.call(ul.querySelectorAll('input[type=checkbox]'));
+    boxes.forEach(function(b,i){
+      var key = store + '_' + i;
+      try { if (localStorage.getItem(key) === '1') { b.checked = true; b.closest('li').classList.add('done'); } } catch(e){}
+      b.addEventListener('change', function(){
+        b.closest('li').classList.toggle('done', b.checked);
+        try { localStorage.setItem(key, b.checked ? '1' : '0'); } catch(e){}
+        update();
+      });
+    });
+    function update(){
+      var fill = document.getElementById('ckFill'), cnt = document.getElementById('ckCount');
+      if (!fill || store !== 'meter') return;
+      var n = boxes.filter(function(b){ return b.checked; }).length;
+      fill.style.width = (n / boxes.length * 100) + '%';
+      cnt.textContent = n + ' / ' + boxes.length;
+    }
+    update();
+  });
+})();
+</script>
+</body>
+</html>

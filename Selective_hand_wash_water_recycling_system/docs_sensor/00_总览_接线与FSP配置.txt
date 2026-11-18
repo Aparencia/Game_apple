@@ -1,0 +1,557 @@
+========================================================================
+ 文件：00_总览_接线与FSP配置.txt
+ 内容：传感器接入方案总览 / 硬件接线 / FSP(RASC) 配置 / 代码集成 / 串口协议 / 红线
+ 目标工程：Selective_hand_wash_water_recycling_system（RA4M2_MINI，FSP 6.6.0）
+ 配套文档：01~04 传感器驱动、05 采集特征、06 判别状态机、07 应用集成、08 验收测试、
+           10 OLED 状态显示（板载 SSD1306 驱动与状态页）、
+           15 执行器接入（二位三通电磁阀 + SRD-05VDC-SL-C 单路继电器模块，固件 v1.2.0）、
+           16 OLED 状态页升级（三页 + K2 切页，固件 v1.3.0）、
+           17 接线总表（整理版，施工一页速查）、
+           18 屏显数据解读（P1/P2/P3 每个字段/数字怎么读）
+ 使用方法：先读完本文，按第 4 节配好 RASC（ADC + UART + I2C），再按第 5 节把
+           01~07、10 的代码文件装进工程；接真阀时再加 15 文档的 src\actuator_valve.h/.c
+           并按 15 文档 §3~§4 接线、判定极性、验收。
+========================================================================
+
+【0】这套文档是什么、怎么用
+------------------------------------------------------------------------
+这是一套"代码原文 txt 文档"：每一个代码 txt 里用下面的标记（下面是示意，尖括号
+不是真实路径）把完整源文件一段一段隔开：
+        /* ===== FILE: <src/xxx.h> ===== */
+        /* ===== FILE: <src/xxx.c> ===== */
+标记出一段一段完整的源文件原文。你们要做的不是"照着抄"，而是：
+    ① 在 e² studio 里打开工程 → 按第 4 节在 RASC 里加 ADC、UART 与 I2C（板载 OLED）；
+    ② 把 01~07、10 里的每个 FILE 段"整段复制"成工程 src/ 下的同名文件；
+    ③ 按第 5.3 节改 hal_entry.cpp 一行调用；
+    ④ 编译、烧录、按 08 文档验收。
+本文档不直接改你们的工程，只提供"可粘贴的代码 + 施工顺序"。
+
+为什么要接这三个传感器（它们各自回答什么问题）：
+    - TDS（电导率）模块：本项目的主判据。洗手液/皂液/汗液会改变水的离子浓度，
+      表现为 TDS 模块输出电压相对"本底"的偏离 ΔEC。注意：**只用相对量**，不追求
+      绝对 ppm（没有标准液、本底不可移植，见项目设想 6.4 节红线）。
+    - DS18B20 水温：电导率随温度约 +2%/℃，必须用"水侧水温"把电压补偿到 25℃；
+      片上 TSN 测的是芯片温度，不能替代（硬件方案 §4.2/§13.1）。
+    - 浊度模块（4 针 G/A/D/V，TS-300B 类）：辅判据。颗粒物（泥沙、泡沫、悬浮物）会让透光率变化，
+      用来补"电导率正常但浊度明显变脏"的盲区；它没有 NTU 标定，只输出相对变化。
+
+本阶段做完后，装置具备的能力（"相关能力构建"的验收口径）：
+    ✅ 三路传感采集：TDS(AN12) / 浊度(AN11，分压后) / DS18B20(P500，1-Wire)
+    ✅ 温度补偿：V25 = V / (1 + 0.02·(T−25))
+    ✅ 中值 + EMA 滤波；上电/命令触发的本底基线自校准（EC0/NTU0 + 噪声 σ）
+    ✅ 相对特征：ΔEC(mV)、g=EC/EC0、ΔEC% 、方向归一化 ΔNTU%、变化率 dΔ/dt
+    ✅ 三级判别状态机：L0 回收 / L1 拿不准排空 / L2 含皂液特征排空
+    ✅ 200 ms 块内一致消抖 + 双阈值迟滞 + 变化率抢先触发
+    ✅ 安全侧：无基线 / 传感器故障 / ADC 超时 → 一律排空（fail-safe）
+    ✅ 串口 CSV 留痕（5 行/秒，整数缩放字段）+ 事件日志 + 命令集
+    ✅ 假执行器：板载 LED1（P111）表示"回收/排空"（APP_USE_VALVE=0 兼容模式）
+    ✅ 真实执行器（v1.2.0 起）：P104 → SRD-05VDC-SL-C 单路继电器模块 → 12V 二位三通单线圈阀；
+       断电=排空（fail-safe）、min_dwell 500 ms 防抖、连续吸合 120 s 上限 + 10 s 冷却、
+       动作计数与 # VALVE 事件行留痕（详见 15 文档）
+    ✅ 板载 0.96" OLED 三页状态页（SSD1306 128x64，I2C0 @0x3C；v1.3.0）：
+       P1 水质页（清水/污水反显/待机/冲洗/故障 + dEC/g/N）、
+       P2 执行器页（大字回收/排空/手动 + 继电器 RLY + 吸合次数/通电时长）、
+       P3 详情页（事件状态/时长/STATE/LEVEL/阀位置/ΔEC/g/ΔNTU/水温/EC0/σ/d1/d2）；
+       K2 短按切页（长按仍重采基线，串口 M 仍打 MARK）；现场指示器，数据仍以 CSV 为准
+    ⏳ 不包含（下一阶段）：流量计自动触发、PC 分析脚本；
+       OLED 只是过渡期的现场指示，后续若加流量计/PC 脚本再评估是否精简
+
+本文档的阅读顺序：第 1 节（系统）→ 第 3 节（接线）→ 第 4 节（RASC）→ 第 5 节
+（装代码）→ 第 6 节（串口协议）→ 第 7 节（判别逻辑）→ 08 文档（验收）。
+
+
+【1】系统与数据流
+------------------------------------------------------------------------
+   TDS 模块 AOUT ──0~2.3V──► P014 / AN12 ┐
+                                          ├─► RA4M2 ADC0 单次扫描组（AN11+AN12）
+   浊度 A(AO) ─1k+2k 分压─► P013 / AN11 ┘        │ 每通道多次采样取中值
+                                                 ▼
+   DS18B20 DQ ──1-Wire──► P500 ────────────► 水温（2 s 一次，非阻塞）
+                                                 │
+                                                 ▼
+   ┌────────────────────── sensor_pipeline（每 50 ms） ──────────────────────┐
+   │ ① ADC 中值 → 电压 → TDS 温补 mV25 / 浊度 AO mV                          │
+   │ ② EMA 平滑 → 相对基线：ΔEC(mV)、g、ΔNTU%（方向归一化）                  │
+   │ ③ 8 点窗口算变化率 → 4 个特征交给判别层                                 │
+   └──────────────────────────────┬──────────────────────────────────────────┘
+                                  ▼
+   ┌──────────────────── decision（每 50 ms） ───────────────────────────────┐
+   │ 候选等级（L0/L1/L2）→ 200 ms 块内 4 采样 3 一致 → 状态/动作             │
+   │ 变化率抢先触发直接 L2；无基线/故障/超时 → L1 排空（安全侧）              │
+   └──────────────────────────────┬──────────────────────────────────────────┘
+                                  ▼
+   app_main：200 ms 打一行 CSV；状态变化打事件行；LED1 显示"回收(亮)/排空(灭)"；
+              板载 OLED 大字状态页（清水/污水/待机/冲洗/故障）+ EC0/ΔEC/g/ΔNTU%/温度
+              （OLED 只做现场指示，不是数据来源；P104 从 v1.2.0 起真实驱动继电器，
+               APP_USE_VALVE=1 为默认，接线/极性/验收见 15 文档）
+
+
+【2】文件清单（txt → 工程文件）
+------------------------------------------------------------------------
+docs_sensor/ 下每个 txt 里用 FILE 标记给出源文件；复制到工程 src/ 后应得到：
+    01_公共库_sensor_common.txt      → src/sensor_common.h   src/sensor_common.c
+    02_TDS传感器.txt                 → src/sensor_tds.h      src/sensor_tds.c
+    03_浊度TS300B.txt                → src/sensor_ts300b.h   src/sensor_ts300b.c
+    04_DS18B20水温.txt               → src/sensor_ds18b20.h  src/sensor_ds18b20.c
+    05_采集与特征流水线.txt          → src/sensor_pipeline.h src/sensor_pipeline.c
+    06_判别状态机.txt                → src/decision.h        src/decision.c
+    07_应用集成与串口协议.txt        → src/app_main.h        src/app_main.c
+                                      （另含 hal_entry.cpp 修改片段，不是文件）
+    10_OLED状态显示.txt              → src/oled.h   src/oled.c   src/oledfont.h
+                                       src/display.h src/display.c
+    15_执行器_二位三通电磁阀_SRD-05VDC-SL-C继电器模块.txt
+                                     → src/actuator_valve.h   src/actuator_valve.c
+                                       （v1.2.0 新增；阀/继电器执行器模块）
+源码文件合计 21 个：10 个 .c + 11 个 .h（01~07、10、15 共 9 个 txt 的 FILE 段）。
+txt 文档 08/09/11/12/13/14/15 是说明/操作文档为主，不含完整工程源码；
+15 文档的 FILE 段只给本阶段新增的 2 个执行器源文件，以及 app_main.c 的 7 处改动对照。
+工程原有的 src/hal_entry.cpp 只需要改一行（见 5.3）；src/hal_warmstart.c 不动。
+
+模块依赖（谁 include 谁）：
+    sensor_common.h  ◄── 所有模块
+    sensor_tds.h / sensor_ts300b.h  ◄── sensor_pipeline.h ◄── decision.h
+    sensor_ds18b20.h                ◄── app_main.c（水温）
+    oledfont.h                      ◄── oled.c ◄── display.c ◄── app_main.c（OLED 状态页）
+    actuator_valve.h                ◄── app_main.c（执行器：P104→继电器→12V 阀）
+    app_main.h                      ◄── hal_entry.cpp
+禁止循环 include；禁止在 .c 里改 FSP 配置。
+
+
+【3】硬件接线（断电接线！接好、量过、再上电）
+------------------------------------------------------------------------
+（本节是最小接线速查；完整电气连接方案见 12_硬件电路连接方案.txt：
+  电源/接地/分压/上下拉/继电器/上电检查/排障全在里面。
+  一页施工总表/速查卡见 17_接线总表_整理版.txt 与 17_接线速查卡.png；
+  图形版见 17_接线图_图形版.png。）
+3.1 接线表（孔序：U1/U2 都是从板子下端往 Type-C 方向数；"第 9 孔=U1-12"）
+┌──────────────┬──────────────────────────┬───────────────────────────────┐
+│ 模块/信号     │ 接到                     │ 说明                          │
+├──────────────┼──────────────────────────┼───────────────────────────────┤
+│ TDS VCC       │ U1-12（3V3，第 9 孔）    │ 3.3 V 供电（不要 5V！）        │
+│ TDS GND       │ U1-16（GND）             │ 必须共地                      │
+│ TDS AOUT      │ U1-6 = P014（AN12）      │ 标称 0~2.3V，直连安全          │
+│ TDS 探针      │ 模块 2P XH-2.54 座       │ 插紧；黑色连接器不可入水       │
+├──────────────┼──────────────────────────┼───────────────────────────────┤
+│ DS18B20 VDD   │ 3.3V（模块座/U1-12）     │ 3.3 V                         │
+│ DS18B20 GND   │ GND                      │ 共地                          │
+│ DS18B20 DQ    │ U1-17 = P500             │ 4.7kΩ 上拉到 3.3V（座自带则免）│
+├──────────────┼──────────────────────────┼───────────────────────────────┤
+│ 浊度 V（VCC） │ U2-19/20（VIN≈4.5~4.7V） │ 4 针 G/A/D/V；只能 5V          │
+│ 浊度 G（GND） │ GND                      │ 共地                          │
+│ 浊度 A（AO）  │ 经分压 → U1-5 = P013(AN11)│ 见 3.2；D（DO）悬空不接！      │
+├──────────────┼──────────────────────────┼───────────────────────────────┤
+│ 串口 CH340E   │ 板载 Type-C（P109/P110） │ 115200 8N1                    │
+│ 用户 LED1     │ P111（板载）             │ 假执行器：亮=回收、闪=排空     │
+│ 用户按键 K2   │ P000（板载，按下=低）    │ 短按切 OLED 页；长按 1.5s 基线 │
+│ 板载 OLED     │ I2C0 P407=SDA/P408=SCL   │ 0.96" SSD1306 128x64 @0x3C     │
+├──────────────┼──────────────────────────┼───────────────────────────────┤
+│ 阀/继电器     │ P104 → 继电器 IN         │ v1.2.0 已接入，见 15 文档     │
+└──────────────┴──────────────────────────┴───────────────────────────────┘
+    ⚠ 浊度模块是 4 针（丝印 G/A/D/V）：上表只接 G/A/V 三根，D（DO，5V 输出）悬空；
+      4 线探头必须原配、按模块座丝印 1~4 对插（不能配 TS-300B 的 3 线探头）。
+    LED1 图案：WAIT 1 Hz 慢闪 / FLUSH 5 Hz 快闪 / CLEAR 常亮（回收）/ UNCERTAIN、SOAP 灭
+    （“亮=回收、闪=排空”只是速记；判读以串口 state/action 列为准）
+    板载 OLED：板载 I2C0（P407=SDA / P408=SCL），模块自带 4.7 kΩ 上拉，无需外部接线，
+               只配 I2C0 即可（见 4.3）；OLED 是板载器件，禁止拆焊，也不要抢作 GPIO。
+
+3.2 浊度模块分压电路（必做，不能省；模块为 4 针 G/A/D/V）
+    浊度 A（AO）──┬── R1=1kΩ ──┬──► P013 / AN11
+                  │            │
+                  │            ├── 0.1µF ── GND        （与 R2 并联，滤高频）
+                  │            │
+                  └── R2=2kΩ ──┴── GND
+    分压比 = R2/(R1+R2) = 2/3；AO 上限 ≈ 模块 VCC 4.5~4.7V（板 VIN 供电）→ 节点 3.00~3.13V
+    （<3.3V，安全；也低于固件 4040 的贴轨门限，不会误报 RAIL）
+    分压后源阻抗 = R1∥R2 = 667Ω ≤ 1kΩ（RA4M2 ADC 对源阻抗的要求，硬件方案 §4.3）
+    若改成独立 5.0V 供电（AO 可到 5.0V）：改 R1=1k + R2=1.5k（节点 3.0V），
+    同时固件 ntu_div_r2_ohm 必须改 1500，否则 ao_mv 还原错。
+    4 针模块只接 G/A/V 三根：D（DO）悬空（5V 输出，严禁接 MCU）；电位器只调 DO 阈值，
+    不用动；探头是 4 线（1 电源负极/2 传感器−/3 传感器out/4 传感器+），必须原配、按丝印对插。
+    上板顺序：只给模块 5V → 万用表量 A 最大电压与方向 → 接分压 → 量节点 ≤3.2V → 再进 P013
+    ⚠ 分压比写死在代码配置里（pipeline_cfg.ntu_div_r1_ohm / ntu_div_r2_ohm），
+      换电阻必须同步改这两个值，否则 ao_mv 还原错误。
+
+3.3 电气红线（违反会烧 ADC/烧板，答辩也会被问）
+    ① 板子 IO 是 3.3V 逻辑：模拟输入绝对最大 3.6V；除 P206/P407/P408/P409 外都不是 5V 容忍。
+       浊度模块的 AO（标称 0~5V，VIN 供电时上限≈4.7V）**必须分压**；TDS 的 AOUT（0~2.3V）可直连。
+    ② 5V 外设一律从 U2-19/20（VIN）取电，与板同开同关；若用独立 5V：
+       先开板、后开外设；断电先关外设、后关板（数据手册 Note 5）。
+    ③ 开发板是借的、赛后收回：只接排针/端子，禁止割线、焊死、拆焊板载器件。
+    ④ 上电前先测：TDS AOUT 对 GND ≤2.4V；分压节点对 GND ≤3.2V；3V3 对 GND 3.25~3.35V。
+    ⑤ 上电先"排空"：代码在 app_main 第一步就把 P104 置成"继电器释放"电平
+       （默认高触发 = LOW），初始化完成前绝不进入回收态。接真阀时 P104 与 GND 之间
+       必须加 10kΩ 下拉（低触发模块改为 10kΩ 上拉到 3.3V，并用 low 版固件）。
+
+3.4 执行器（阀/继电器）：v1.2.0 起已真实接入（本阶段默认启用）
+    - 现接法：P104（U2-8）→ SRD-05VDC-SL-C 单路继电器模块 IN；模块常开触点 COM–NO
+      控制独立 12V 二位三通单线圈阀（断电 = 线圈失电 = 排空，fail-safe）。
+    - 推荐模块接法（A 型带 JD-VCC 跳线）：拆掉 JD-VCC 跳线，VCC→3.3V(U1-12)、
+      JD-VCC→VIN(U2-19/20)、GND→U2-18；P104 与 GND 之间 10kΩ 下拉（高触发）或与
+      3.3V 之间 10kΩ 上拉（低触发，配 low 版固件）。
+    - 完整接线、模块类型判定（A/B 型、3.3V 触发边界、无光耦 PNP 禁直连）、极性判定、
+      构建产物（high/low 两版 hex）、T1~T10 验收与排障：全部见
+      docs_sensor\15_执行器_二位三通电磁阀_SRD-05VDC-SL-C继电器模块.txt（附图 .html）。
+    - 红线提醒：12V 必须独立供电 + 2A 保险丝 + 船型开关；阀线圈必须并 1N4007
+      （阴极→线圈+）；不得从开发板 5V/3V3 给阀取电；先做极性判定再接 12V。
+    - 本文件（00）的串口协议/CSV/接线速查仍有效；执行器细节以 15 文档为准。
+
+
+【4】FSP / RASC 配置（必须做，否则串口/ADC/OLED 都不通、代码也编译不过）
+------------------------------------------------------------------------
+（2026-10-29 22:40 进度核对：4.1 ADC、4.2 UART、4.3 I2C、4.4 ①②③⑤ 引脚全部完成，
+  生成+编译通过（pin_data.c 8 条，Build 22:40:45，text 4896 B / bss 1200 B）。
+  4.3 的生成物与本节参数逐项一致：I2C_MASTER_RATE_FAST（实测 396825 Hz、duty 51%）、
+  slave 0x3C / 7-bit、timeout short、timeout SCL low enabled、回调 i2c_master_callback、
+  IPL 12、DTC disabled；IIC0 中断向量 RXI/TXI/TEI/ERI = IRQ 5/6/7/8。
+  注意：应用代码（第 5 节）还没调用 I2C，链接器 --gc-sections 现在会把 r_iic_master 的
+  函数和 g_i2c_master0 丢弃（map 的 Discarded input sections 里可见），属正常现象；
+  装完 oled.c/display.c 后会自动进镜像，届时若缺 i2c_master_callback 实现会链接报错。）
+代码需要以下 RASC 生成符号（名字必须一致，否则编译/链接不过）：
+    g_adc0 / g_adc0_ctrl / g_adc0_cfg / g_adc0_channel_cfg / adc_callback
+    g_uart9 / g_uart9_ctrl / g_uart9_cfg / user_uart_callback
+    g_i2c_master0 / g_i2c_master0_ctrl / g_i2c_master0_cfg / i2c_master_callback（OLED）
+    g_ioport_ctrl（已有）
+配置步骤（e² studio → 双击 configuration.xml → RA Configurator 打开）：
+
+4.1 添加 ADC（Stacks 选项卡 → New Stack → Analog → ADC (r_adc)）
+    字段                    值
+    ----------------------  ----------------------------------------------
+    Name                    g_adc0
+    Unit                    0
+    Resolution              12 bits
+    Alignment               Right
+    Clearing                Clear after read（ON）
+    Mode                    Single Scan
+    Scan Group A            ☑ AN011（P013，浊度）  ☑ AN012（P014，TDS）
+    Trigger Source          Software
+    Callback                adc_callback
+    Scan End Interrupt      Priority 2（必须开启，回调/完成标志靠它）
+    （Sample Hold States 保持默认）
+    注意：两个通道必须在同一个 Scan Group 里——一次扫描同时转换两路，
+          代码随后分别 R_ADC_Read 两个通道，保证 TDS 与浊度"同一时刻"采样。
+
+4.2 添加 UART（Stacks → New Stack → Connectivity → UART (r_sci_uart)）
+    字段                    值
+    ----------------------  ----------------------------------------------
+    Name                    g_uart9
+    Channel                 9（板载 CH340E，对应 P109=TXD9 / P110=RXD9）
+    Baud Rate               115200
+    Data Bits               8
+    Parity                  None
+    Stop Bits               1
+    Flow Control            None
+    Callback                user_uart_callback
+    RX/TX/Error Interrupt   Priority 12（RX 必须开——串口命令靠它）
+    注意：只加 UART 栈还不够。P109/P110 默认被 Debug0 的 JTAG 功能占着
+          （TDO=P109 / TDI=P110），RASC 不会自动把 UART 分到这两个脚；
+          必须先在 Pins 页把 Debug0 改成 SWD（板上 SWD=P300/P108），
+          再按 4.4 第 ② 步显式把 P109/P110 配成 SCI9 TXD/RXD。
+          （依据已验证固件 tds_mini/configuration.xml：debug0.mode.swd +
+            p109.sci9.txd + p110.sci9.rxd。）
+
+4.3 添加 I2C（板载 OLED，Stacks → New Stack → Connectivity → I2C Master (r_iic_master)）
+    字段                    值
+    ----------------------  ----------------------------------------------
+    Name                    g_i2c_master0
+    Channel                 0（IIC0：P407=SDA0、P408=SCL0，板载 0.96" OLED）
+    Rate                    Fast-mode 400 kHz
+    Rise/Fall Time (ns)     120 / 120
+    Duty Cycle              50
+    Slave Address           0x3C（SSD1306 的 7-bit 地址；填 8-bit 0x78 会不响应）
+    Address Mode            7-bit
+    Timeout mode            short
+    Timeout SCL low         enabled
+    Callback                i2c_master_callback（由 oled.c 提供，名字不可改）
+    Interrupt Priority      12（与 UART 同级即可）
+    注意：① OLED 是板载器件，模块自带 4.7 kΩ 上拉，不需要任何外部接线，禁止拆焊；
+          ② Pins 页 → Connectivity: IIC0 → SDA0=P407、SCL0=P408（加栈后通常自动落位，
+             若没落位就手动在这两行选择，不要抢作 GPIO；与 Debug0 的 SWD 脚不冲突）；
+          ③ 生成后必须出现 g_i2c_master0/g_i2c_master0_ctrl/g_i2c_master0_cfg 与
+             i2c_master_callback，否则 oled.c/display.c 编译不过（见 4.5）。
+
+4.4 引脚配置（Pins 选项卡）—— 必须做，顺序别乱
+    ① Debug0 → SWD：左侧 Debug → Debug0 → Mode 选 SWD
+       （SWCLK=P300、SWDIO=P108；板上 SWD 排针就是这两个脚）。
+       不先做这步，P109/P110 一直被 JTAG 的 TDO/TDI 占着，UART 分配不到引脚。
+    ② SCI9：TXD9 = P109、RXD9 = P110（Mode = Asynchronous / free）。
+       改完 ① 后若 RASC 已自动分配，核对一眼即可；没分配就手动选。
+    ③ ADC0：AN011 = P013（Analog）、AN012 = P014（Analog）。
+       P014 = TDS 模块 AOUT（直连）；P013 = 浊度模块 A(AO) 分压后的信号。
+    ④ P500 / P111 / P000 / P104：保持"未分配 / GPIO 默认"即可——代码运行时
+       用 R_IOPORT_PinCfg 配置（与已验证固件 tds_mini 一致），不用在 RASC 里配。
+       （v1.2.0 起 P104 用于驱动继电器 IN，仍是运行时配置，RASC 里依旧不配；
+        详见 15 文档 §5。）
+    ⑤ IIC0：SDA0 = P407、SCL0 = P408（Mode = I2C）。加了 4.3 的 I2C 栈后通常自动落位，
+       核对一眼即可；没落位就手动选，不要抢作 GPIO。
+    ⚠ 不要把 P013/P014 配成 GPIO 输出或数字外设；也不要把 P500 配成别的外设；
+      不要把 P407/P408 抢作 GPIO 输出（它们是 OLED 唯一的 I2C 总线）。
+    生成后的验收（漏做一眼就能看出来；⑤ 加 I2C 栈时自动完成）：
+        ra_gen/pin_data.c 最终应正好 8 条：
+            P013、P014          → IOPORT_CFG_ANALOG_ENABLE
+            P108、P300          → IOPORT_PERIPHERAL_DEBUG
+            P109、P110          → IOPORT_PERIPHERAL_SCI1_3_5_7_9
+            P407、P408          → IOPORT_PERIPHERAL_IIC（4.3 的 I2C 栈生成）
+        分阶段看：①②③ 做完是 6 条（2026-10-29 20:39 的工程就到这一步）；
+        再加完 4.3 的 I2C 栈才是 8 条（2026-10-29 22:40 已达成，实测正好 8 条）。
+        若只有 4 条 DEBUG 引脚（P108/P109/P110/P300）→ ①②③ 一个都没做成功。
+        configuration.xml 里应出现这些 configSetting：
+            debug0.mode.swd、sci9.txd.p109、sci9.rxd.p110、
+            adc0.an11.p013、adc0.an12.p014、sci9.mode.asynchronous.free，
+            以及 IIC0 的 iic0.sda.p407、iic0.scl.p408（4.3 加栈后自动出现）
+
+4.5 生成与验证
+    ① 点 RASC 的 "Generate Project Content"（生成 ra_gen/hal_data.c/h、pin_data.c 等）；
+    ② 确认 `ra_gen/hal_data.h` 里出现 g_adc0/g_uart9 及 adc_callback/user_uart_callback 声明，
+       以及 g_i2c_master0/g_i2c_master0_ctrl/g_i2c_master0_cfg 与 i2c_master_callback；
+       `ra_gen/hal_data.c` 应出现 i2c_master_on_iic（缺任何一个=I2C 栈没加成功，回 4.3）；
+       另：本工程是"精简 FSP"（ra/fsp 只含用到的驱动，靠 RASC 从 FSP pack 抽取），
+       加 I2C 栈后应自动多出：ra/fsp/inc/instances/r_iic_master.h、
+       ra/fsp/src/r_iic_master/r_iic_master.c、ra_cfg/fsp_cfg/r_iic_master_cfg.h
+       （与 20:17 加 ADC/UART 时自动多出 r_adc/r_sci_uart 的行为一致），不用手工拷；
+       再确认 `ra_gen/pin_data.c` 符合 4.4 的验收（应 8 条；只有 4 条 DEBUG = 引脚没配）；
+    ③ 先编译空工程（此时 hal_entry.cpp 还没改）→ 应通过
+       （2026-10-29 22:40 实测通过：text 4896 B / data 0 / bss 1200 B，无 error/warning）；
+    ④ 按第 5 节装代码 → 再编译；
+    ⑤ 烧录（CH340E + SCI Boot + Renesas Flash Programmer；或 J-Link/EZ-Cube3 走 SWD）。
+
+4.6 如果你的 RASC 版本界面文字略有差异（FSP 6.6 英文版）
+    - "Scan Group A" 有的版本叫 "Channel Scan Mask" / "Scan Group"；
+    - 回调名、中断优先级在 "Interrupts" 子页；
+    - I2C 栈在 Connectivity → "I2C Master (r_iic_master)"（个别版本写作 IIC）；
+      Slave Address 必须按 7-bit 填 0x3C；
+    - 生成后以 ra_gen/hal_data.h 里的符号名为准，必须与上面一致；
+    - 若生成名不同（例如你把 Name 起成别的），二选一：改 RASC 里的 Name，或全局替换
+      文档代码里的 g_adc0/g_uart9（推荐前者，省事且和文档一致）。
+
+
+【5】把代码装进工程
+------------------------------------------------------------------------
+5.1 复制 10 个源文件（.c）+ 11 个头文件（.h）（来自 01~07、10、15 共 9 个 txt 的 FILE 段）到 src/ 下
+    （v1.2.0 执行器：先按 15 文档 §6.2 放好 src/actuator_valve.h/.c，再按 §6.3/§6.4 改
+      app_main.c 的 7 处；本工程里已装好的话跳过复制，只核对文件一致。）
+    建议顺序：sensor_common → sensor_tds/ts300b/ds18b20 → sensor_pipeline →
+    decision → oledfont/oled/display（OLED 显示层）→ actuator_valve →
+    app_main（先底层后上层，边装边编译）。
+    e² studio 的 GCC 工程会按扩展名自动编译 .c，不需要手动加 Makefile 条目；
+    若工程用了"排除构建"设置，检查新文件没有打叉。
+
+5.2 不要改的文件
+    ra_gen/（RASC 生成）、ra_cfg/、configuration.xml、ra/、script/、Debug/ 都不要手改；
+    src/hal_warmstart.c 不需要改。
+    （例外说明：v1.2.0 新增 actuator_valve.c 后，命令行 make 需要在 Debug/src/subdir.mk 里
+      同步源文件清单；在 e² studio 里 Build 会自动重新生成，不用手改，详见 15 文档 §7.4。）
+
+5.3 修改 src/hal_entry.cpp（只改这一处）
+    打开工程现有的 src/hal_entry.cpp，在文件顶部（#include "hal_data.h" 之后）加：
+        extern "C" void app_main(void);     // 由 app_main.c 提供（C 链接）
+    然后把 hal_entry() 函数体的内容替换/追加为：
+        void hal_entry(void)
+        {
+            /* 模板原有的 multicore / TrustZone 判断可保留（本板单核 flat 工程都不成立） */
+            app_main();                     /* 进入传感器应用主循环，正常情况不返回 */
+        }
+    注意：
+    - 必须写 extern "C"：app_main.c 是 C 文件，C++ 默认名字修饰会导致链接找不到；
+    - app_main() 内部是 while(1)，不要再写 return；
+    - 若你把 hal_entry.cpp 改名为 hal_entry.c，去掉 extern "C" 即可（二选一）。
+
+5.4 编译烧录
+    ① Build（Ctrl+B）应 0 error；允许的告警：FSP 库内部告警；我们自己的 .c 不应有告警；
+    ② 烧录：BOOT 拨到 ON → 复位 → Renesas Flash Programmer 连 CH340E（SCI Boot）→
+       选 build 的 .srec → Erase+Program+Verify → BOOT 拨回 OFF → 复位；
+       或用 J-Link/EZ-Cube3 走 SWD 直接下载（不用 BOOT 开关）；
+    ③ 上电后：LED1 快闪 3 下 → 串口出现 "# [BOOT] SENSOR-NODE ..." → 之后每 200 ms
+       一行 CSV。串口没反应时先看 LED1 是否在闪（闪=MCU 在跑，问题在串口/设置）。
+    ④ 首次使用先按 08 文档 T0~T5 做接线/传感器自检，再做 T6 判据实验。
+
+
+【6】串口协议（115200 8N1；SSCOM 勾选"发送新行"）
+------------------------------------------------------------------------
+6.1 命令
+    H 或 ?    打印帮助
+    M         打标记：输出 "# MARK t=... src=UART"，供 PC 分段
+    R         开始一次"洗手事件"：先强制排空 2 s（FLUSH），再进入判别
+    E         结束事件：回 WAIT，动作=排空
+    B         重新采集基线：探头必须浸在"本底水"（自来水）里，约 1 s 完成
+    T24.5     手输水温（DS18B20 不可用时兜底；0~60 ℃）
+    C         重新检测 DS18B20（修线后不用重新烧录）
+    P         打印当前状态：基线、阈值、传感器状态、事件/覆盖、版本
+    V1 / V0 / VA   阀手动覆盖：强制回收（继电器吸合）/ 强制排空（继电器释放）/ 回自动
+    （命令大小写不敏感；APP_USE_VALVE=1 时真实驱动 P104 继电器；=0 时只控制 LED；
+      K2 短按不是串口命令：P1→P2→P3 切 OLED 页；MARK 只由 M 命令发送）
+
+6.2 数据行（每 200 ms 一行；表头以 "# " 开头，便于 PC 跳过注释）
+    # t_ms,t_Cx100,src,tds_adc,tds_mv,tds_mv25x10,tds_ppm_x10,tds_dmvx10,tds_gx1000,ntu_adc,ntu_node_mv,ntu_dpctx10,ec_ratex10,state,level,action,note
+
+    字段          缩放   含义
+    ------------  -----  --------------------------------------------------
+    t_ms          ×1     上电毫秒（SysTick 1 ms 时基）
+    t_Cx100       ×100   当前采用水温，例 2350 → 23.50 ℃
+    src           —      温度来源：DS=实测 / MAN=手输 / FIX=兜底 25℃
+    tds_adc       ×1     TDS 通道中值 ADC 码（0~4095）
+    tds_mv        ×1     TDS 电压 mV（直连 AN12，0~约 2400）
+    tds_mv25x10   ×10    温度补偿到 25℃ 的电压，例 14906 → 1490.6 mV
+    tds_ppm_x10   ×10    参考 TDS ppm（仅参考，禁止当绝对结论）
+    tds_dmvx10    ×10    ΔEC = mv25 − EC0（mV），可负；例 −25 → −2.5 mV
+    tds_gx1000    ×1000  g = mv25 / EC0，例 1002 → 1.002
+    ntu_adc       ×1     浊度通道中值 ADC 码
+    ntu_node_mv   ×1     分压节点电压 mV（真正进 ADC 的电压）
+    ntu_dpctx10   ×10    方向归一化浊度相对变化（%），>0=比基线更脏
+    ec_ratex10    ×10    ΔEC 变化率 mV/s
+    state         —      WAIT / FLUSH / CLEAR / UNCERT / SOAP
+    level         —      L0（可回收）/ L1（拿不准排空）/ L2（含皂液排空）
+    action        —      RECOV（回收）/ DRAIN（排空）
+    note          —      OK / ADC_TIMEOUT / NO_BASE / TDS_RAIL / TDS_SAT / NTU_RAIL
+
+6.3 事件行（以 "# " 开头，PC 当注释；用来做时间轴/分段）
+    # [BOOT] SENSOR-NODE v1.3.0-OLED build <编译日期> <编译时间>
+    # actuator: valve ready (P104 locked at relay-OFF/drain, on_level=HIGH|LOW)
+    # actuator: enabled=1 on_level=HIGH (RECOVER=relay ON) min_dwell=500ms ...
+    # actuator: safe position=DRAIN (relay OFF), P104 initialized before UART (fail-safe)
+    # board: RA4M2_MINI (R7FA4M2AD3CFL) | tick base: SysTick 1 ms
+    # display: OLED OK (SSD1306 128x64, I2C0 @0x3C)       （OLED 初始化成功时打印）
+    # display: SSD1306 128x64 I2C0 addr=0x3C | 3 pages: P1 water / P2 exec / P3 info（启动摘要）
+    # display: K2 short = next page; K2 long >=1.5s = baseline; M (UART) = mark（启动摘要）
+    # WARN: OLED not usable -> UART only (display is NOT safety path)   （OLED 初始化失败）
+    # WARN: OLED lost at t=... ms -> UART only        （运行中连续 3 帧刷新失败，只报一次）
+    # BASELINE start n=20
+    # BASELINE OK ec0=xxxx.xmV ntu0=xxxxmV sigma_ec=x.xx sigma_ntu=x.xx
+    # EVENT t=... start=MANUAL|AUTO        （事件开始）
+    # EVENT t=... end=MANUAL|TIMEOUT        （事件结束）
+    # STATE t=... from=WAIT to=CLEAR reason=CLEAN
+    # ACTION t=... RECOV|DRAIN
+    # VALVE t=... pos=RECOVER|DRAIN relay=0|1 count=N reason=AUTO|MANUAL_RECOVER|DRAIN|MAX_ON
+    # DISPLAY page=n/3 (K2)                       （K2 短按切页时打印，n=1..3）
+    # MARK t=... src=UART        （K2 短按已改为切页，不再产生 src=KEY）
+    # WARN/ERR ...（故障）
+    # WARN: valve pin fault (write/readback failed N times) -> check P104/relay
+    # WARN: valve ON > 120000ms -> forced DRAIN, cooldown 10000ms
+    ⚠ 文档里的示例数值全部是"示意值"，实际以你们台架实测为准；报告只引用实测值。
+
+6.4 典型一次演示的数据流（示意）
+    R  →  # EVENT start=MANUAL → FLUSH（2 s 排空）
+       →  清水段：ΔEC 小且稳定 → CLEAR（LED 常亮、action=RECOV）
+       →  涂皂/揉搓：ΔEC 升高、变化率突增 → SOAP（LED 灭、action=DRAIN）
+       →  冲洗段：ΔEC 回落 → CLEAR（恢复回收）
+       →  E  →  # EVENT start=END → WAIT（排空）
+    没有流量计时 R/E 由人按（串口终端）；后续接流量计后自动触发（文档留升级点）。
+
+
+【7】判别逻辑总览（默认阈值表；详细实现见 06 文档，标定步骤见 08 文档）
+------------------------------------------------------------------------
+状态：WAIT（无事件，排空）→ FLUSH（手动事件后强制排空 2 s）→ CLEAR / UNCERTAIN / SOAP
+动作：只有 CLEAR 才 RECOVER（回收），其余一律 DRAIN（排空）= 安全侧。
+
+候选等级（每个 50 ms 采样算一次，先算候选，再做消抖）：
+    ① 无基线 / TDS 或浊度故障 / ADC 超时 → L1（reason=NO_BASELINE/SENSOR_FAULT）
+    ② 变化率抢先：ΔEC 变化率 > 40 mV/s 且 |ΔEC| > 5 mV，或浊度变化率 > 50 %/s
+       → 立即 L2（RATE_JUMP），不等消抖（皂液到来是阶跃，先"变了"再"变成什么"）
+    ③ ΔEC > d2 或 ΔNTU% > d2_ntu → L2（reason=SOAP_HIGH；先判"明显脏"，任一路越上限即算）
+    ④ ΔEC < d1 且 ΔNTU% < d1_ntu → L0（CLEAN）
+    ⑤ 其余 → L1（UNCERTAIN；拿不准默认排空）
+消抖：200 ms 时间块内采 4 个候选，≥3 个一致才采纳，否则 L1；
+双阈值迟滞：进入/退出改阈值（回差 25%），防止阈值附近反复切换。
+
+默认阈值（全部是"待标定"初值，见 08 文档标定方法；改在 app_main.c 顶部集中配置）：
+    d1(EC) = max(4σ_ec, 8.0 mV) 进入"可清"；d2(EC) = max(8σ_ec, 20.0 mV) 判"含皂液"
+    d1(浊度) = 8.0 %；d2(浊度) = 25.0 %（相对基线 AO 电压）
+    EC 变化率 40 mV/s 且跳变≥5 mV；浊度变化率 50 %/s
+    强制排空 2000 ms；事件超时 30 s；块 200 ms / 4 采样 / 3 一致
+    ADC 中值 5 次/通道/tick；EMA α=0.30；基线 20 点（1 s）；σ 下限 EC 1.5 mV / 浊度 2.0 mV
+    DS18B20：2 s 一次、800 ms 后读、连续 3 次无效停用、兜底 25.0 ℃
+
+时间预算（与项目设想 6.2.1 对齐，报告里用实测值）：
+    采样与滤波 ≤100 ms ｜ 判别 ≤300 ms（变化率抢先）｜ 消抖 ≤200 ms ｜
+    阀动作 ≤100 ms（继电器约 10 ms + 阀 30~100 ms，按实测）｜ 合计力争 ≤1.5 s；
+    台架流量下 1 s 延迟对应误分水量要按实测折算（执行器验收 T9 记录实测值）。
+
+
+【8】关键工程决策与已知限制（写报告/答辩必须如实说）
+------------------------------------------------------------------------
+① 没有流量计：事件边界用串口 R/E（人按）+ 30 s 超时兜底；"刚开龙头的 1~2 s 强制排空"
+   只在手动 R 后生效。自动模式只在"强偏离"时自动开始事件，无法识别清水开始。
+   → 升级路径：P206 接霍尔流量计，用流量突变自动触发（本阶段不实现）。
+② 探头在空气里是"开路伪值"（TDS 约 1.6 V），不是 0 ppm；基线必须在水样中采。
+   → 上电时若探头不在水里，基线是错的：把探头放进本底水后按 B 重采。
+③ DS18B20 用 1-Wire，事务期间会短暂关中断（1~6 ms），SysTick 会丢几个 tick
+   （<0.3% 时基误差，可接受）；串口命令是人工输入，不会同时涌入。
+④ 浊度模块无 NTU 标定、方向可能反相：只输出相对变化 %；方向用清水/浑水对照确定，
+   反相时把 ntu_clear_high 改 false（见 08 文档 T4）。
+⑤ TDS 无标准液时绝对 ppm 不可信：所有对外字段只允许 mV、相对量、σ 倍数；
+   报告禁止写"TDS=xxx ppm 达标"。
+⑥ 水温用 DS18B20 而不是片上 TSN：TSN 是芯片温度，与水温可差 10~15℃，
+   用来温补会引入 20~30% 误差（硬件方案 §4.2/§13.1 明确修正过这条）。
+⑦ 执行器：v1.2.0 起 P104 已真实驱动继电器/12V 阀（默认高触发、断电=排空）；
+   APP_USE_VALVE=0 仍可用 LED1 假执行器演示判别链路（实验 3 兼容）。
+⑧ 酒精免洗凝胶是 ΔEC + 浊度双盲区（项目设想 6.2.2）：务必写进"已知局限"，
+   不要声称"能识别所有污染物"。
+⑨ OLED 显示口径（v1.3.0 三页）：OLED 只是现场指示器（P1 水质 / P2 执行器 / P3 详情，
+   K2 短按切页），不是数据来源、也不是安全执行路径，数据以串口 CSV 为准；汉字字库
+   共 15 个 32x32 字形（清水污待机冲洗故障 + 回收排空手动），不能显示任意中文；
+   刷新 ≤2 Hz（状态变化立即 + 数值最快 200 ms + 1 s 心跳），只刷脏页；
+   OLED 失效不影响判别、CSV、LED 与阀；P2 显示的是阀的实际位置，P1 显示判别结论，
+   二者在手动 V1/V0 或故障时可能不同（以串口 # VALVE 行为准）。
+
+
+【9】红线与报告口径（违反即丢大分）
+------------------------------------------------------------------------
+1. 不编造指标：不写"电导率相差一个数量级"、不写"达到 GB/T 18920 / GB 5749"、
+   不把相对浊度写成 NTU、不声称做了微生物/COD 检测。
+2. 不做过度声称：本方案只测"相对本底的理化偏离"，不识别污染物种类；
+   只能说"判定为含皂液特征的偏离"。
+3. 安全件：主通路常通（阀只切支路）、防倒吸（空气隔断/单向阀）、溢流旁通；
+   阀已按 v1.2.0 接入（断电=排空），报告与讲解里仍要写清 15 文档 §10 的边界。
+4. 酒精免洗凝胶是已知盲区，主动写进局限。
+5. 开发板不可逆改造禁止；5V 直连 ADC 禁止；阀串主水路禁止。
+6. 11/08 功能冻结后只修 bug，不加功能（团队纪律）。
+
+
+【10】快速验收 6 步（详细见 08 文档与 15 文档）
+------------------------------------------------------------------------
+第 1 步：上电 → LED1 快闪 3 下 → 串口出现 "# [BOOT] SENSOR-NODE"；板上 OLED 亮，
+        显示开机页（RA4M2 WATER JUDGE / OLED OK）→ display_task 首次调用后约 800 ms
+        （含上电初始化总约 1.6 s）进基线/待机页；
+        上电后按 K2 短按可切换三页（P1 水质 / P2 执行器 / P3 详情），串口打印 # DISPLAY
+        （OLED 不亮先查 4.3 的 I2C 配置；串口不动先查烧录/串口设置）
+第 2 步：发 H → 出现命令帮助；发 P → 打印基线/阈值/传感器状态
+第 3 步：探头插入自来水，发 B → "# BASELINE OK ... sigma_ec≈x mV"（σ 应明显小于后续 ΔEC）
+第 4 步：发 R → FLUSH 2 s → 把探头从自来水移到"洗手液水"里 → 观察 ΔEC 上升 → SOAP（LED 灭）
+        再移回自来水 → ΔEC 回落 → CLEAR（LED 常亮）→ 发 E 结束
+        （同时看 OLED：大字 冲洗→清水→污水(反显)→清水 随状态切换，详见 08 文档 T10）
+第 5 步：执行器（v1.2.0）：不接 12V，发 V1 → 听继电器"咔哒"、串口出 # VALVE pos=RECOVER；
+        发 V0 → 释放；重复 10 次全对且复位/上电 10 次不动作，再按 15 文档接 12V/阀，
+        验证断电=排空（fail-safe）。串口 P 可看 pos/relay/count/max_on 等执行器状态。
+第 6 步：拔掉 DS18B20 / TDS 的 AOUT（模拟故障）→ CSV 出现 WARN/故障标记，action 仍为 DRAIN
+        （安全侧），且拔掉 DS18B20 后 3 次无效自动回退 25.0℃、发 C 可重新检测。
+
+
+【11】版本与配套
+------------------------------------------------------------------------
+版本：v1.6（2026-11-13，新增 v1.3.0 OLED 三页与 K2 切页：P1 水质/P2 执行器/P3 详情；
+      配套 docs_sensor 01~08、10~12、15、16 及 15/16 附图）
+配套依据：项目设想（第 3 版）6.2/6.3/6.4/9.1；硬件搭建方案 §1.3/§4/§5/§13；实验 2 报告。
+维护约定：阈值/接线/协议若有改动，必须同步改 00/06/08 三处，并记录在文末"修订记录"。
+修订记录：
+    2026-10-29  v1.0  首版：TDS+DS18B20+TS-300B 接入、采集/基线/判别/CSV 协议。
+    2026-10-29  v1.1  新增板载 0.96" OLED（SSD1306 128x64，I2C0 @0x3C）状态页：
+                      RASC 增配 I2C（4.3，原 4.3~4.5 顺延为 4.4~4.6）、工程文件 14→19
+                      （9 .c + 10 .h）、串口 boot/事件行、快速验收与已知限制同步。
+    2026-10-29  v1.2  §4 RASC 配置全部完成并实测：4.3 I2C0（板载 OLED）已添加、
+                      4.4⑤ P407/P408 已落位，pin_data.c 8 条、Generate+Build 通过；
+                      §4 状态行与 4.4/4.5 验收标准按实测更新，4.5 增补 gc-sections 说明。
+    2026-10-31  v1.3  新增 12_硬件电路连接方案.txt（板卡孔位/电源与接地/两路 ADC 分压/
+                      DS18B20 与 OLED/串口/阀预留接口/完整接线表/上电检查/排障/红线）；
+                      §2 文件清单补 12，§3 增加完整方案入口，版本口径升 v1.3。
+    2026-10-31  v1.4  按实物更正浊度模块：4 针 G/A/D/V（D=DO 悬空、4 线探头原配）；
+                       §3.1/§3.2/§3.3 改接线与判据（节点 ≤3.2V，1k+2k 时 3.00~3.13V），
+                       与 12 v1.1、08 v1.2 同步；01~07、10 文档与工程代码未改。
+    2026-11-13  v1.5  v1.2.0 执行器真实接入（P104→SRD-05VDC-SL-C 继电器→12V 二位三通单线圈阀）：
+                      §2 文件清单 19→21（新增 src/actuator_valve.h/.c）、§3.1 接线表、
+                      §3.3⑤、§3.4 执行器小节、§4.4④、§6.1 命令语义、§6.3 事件行（# VALVE 等）、
+                      §7 时间预算、§8⑦、§9-3、§10 快速验收补第 5 步；新增 15 文档（含附图/附录A）。
+    2026-11-13  v1.6  v1.3.0 OLED 三页升级（P1 水质 / P2 执行器 / P3 详情）+ K2 短按切页：
+                      §3.1 K2 行、§6.1 说明、§6.3 事件行（# DISPLAY、boot 版本）、§8⑨、
+                      §10 第 1 步；新增 16 文档（含三页预览图）；oledfont.h 扩到 15 字形。
+                      （审查后同版修正：BIG 页数值行补 200 ms 节流、P1/P3 行宽限幅；
+                        16 文档 T8/T3 判据修正；高/低触发 hex 重编 2026-11-13 19:24。）
+========================================================================

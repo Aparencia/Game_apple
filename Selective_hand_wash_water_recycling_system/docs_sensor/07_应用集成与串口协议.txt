@@ -1,0 +1,1686 @@
+========================================================================
+ 文件：07_应用集成与串口协议.txt
+ 内容：app_main.h / app_main.c（初始化顺序、50 ms 主循环、串口协议、CSV、LED/阀、
+       板载 OLED 状态页、命令）以及文末"使用说明（非文件）"给出的 hal_entry.cpp 集成片段
+ 目标工程：Selective_hand_wash_water_recycling_system（RA4M2_MINI，FSP 6.6.0）
+ 使用方法：把下面两个 FILE 段分别保存为 src/app_main.h、src/app_main.c；
+           文末的 hal_entry 片段不是文件，按说明改 src/hal_entry.cpp；集成步骤见 00 文档
+ 依赖：sensor_common.h / sensor_tds.h / sensor_ts300b.h / sensor_ds18b20.h /
+       sensor_pipeline.h / decision.h / display.h / hal_data.h（作者 A/B/C 交付）
+ 负责人：C（app）  版本：v1.1（新增板载 OLED 状态页集成）
+========================================================================
+ 版本说明（2026-11-13）：本文是 v1.1 源码快照；v1.2.0 起 P104 由 actuator_valve 模块驱动
+            真实阀（见 15 文档），v1.3.0 起 display_task 增加 p_valve 参数、K2 短按改为
+            OLED 三页切换（见 16 文档）；本文 app_main/display 相关描述以 15/16 为准。
+
+本文件交付"应用层"：上电初始化顺序、50 ms 主循环、串口命令协议、200 ms CSV、
+事件日志、LED 假执行器 / P104 阀钩子、板载 OLED 状态页的集成，以及 hal_entry.cpp
+的集成片段。它把作者 A/B 的驱动与流水线、作者 C 的判别状态机与 OLED 显示层
+（oled.c / display.c）串成一台能跑的系统：串口是"数据留痕"通道（CSV/事件行），
+板载 OLED 是"现场指示"通道（大字清水/污水 + 关键数值）；OLED 不是数据来源、
+也不是安全执行路径，数据以串口 CSV 为准。
+
+初始化顺序（每一步都有理由，顺序不能随意调换）：
+  1) P104 输出低=排空：fail-safe 第一步；复位后引脚是高阻，先压到"不动作"电平；
+  2) LED1 初始化：即使串口有问题，也能用灯判断"程序到底跑没跑"；
+  3) UART9 打开 + 关闭 stdout 缓冲 + 立刻打印 "# [BOOT] SENSOR-NODE v1.1 build ..." 与
+     "# board: RA4M2_MINI (R7FA4M2AD3CFL) | tick base: SysTick 1 ms"：先证明链路活着；
+  4) 板载 OLED 初始化（代码里的"步骤 2b"，display_init）：I2C0 @0x3C 写开机页；
+     成功打印 "# display: OLED OK (SSD1306 128x64, I2C0 @0x3C)"，失败只打印
+     WARN 并继续跑（OLED 不是安全路径：串口/判别/CSV/阀都不依赖显示）；
+  5) ADC0 Open + ScanCfg：失败打印 ERR，但继续跑（采样超时→判别 L1 排空）；
+  6) DS18B20 上电自检（约 800 ms 阻塞，仅上电一次）：打印 OK/NOT；不可用时
+     回退 25.0 ℃（CSV src=FIX），可串口 T24.5 手输兜底；
+  7) pipeline_init：双通道 ADC 调度/滤波/基线/特征；decision_init：状态机与阈值；
+  8) pipeline_baseline_begin：上电自动采本底基线（20 点 / 1 s），打印
+     "# BASELINE start n=20"；探头必须已经浸在水样里，否则采到的是空气伪值。
+
+主循环（50 ms tick，timebase_ms 调度，落后不补做、避免时间堆积）顺序固定：
+  ds18b20_task → pipeline_set_water_temp → pipeline_sample → decision_update
+  → 事件/状态日志 → 基线完成日志 → LED/阀 → 板载 OLED(display_task) → 按键 K2
+  → 串口命令 → 200 ms CSV。这样"温度先更新、再温补采样、再判别、最后执行器"，
+  一个 tick 内自洽；显示任务排在执行器/CSV 之前但在判别之后，永远只用同一份判别结果。
+
+OLED 状态页刷新策略（display_task，每 50 ms tick 调一次，非安全路径）：
+  状态/大字变化立即刷新；数值最快 200 ms 刷一次；另有 1 s 心跳刷新；只刷脏页，
+  内容没变就不碰 I2C 总线；单次刷新 I2C 阻塞约 3 ms/页（400 kHz，整屏 ≈25 ms）；
+  连续 3 帧刷新失败 → display_task 返回 false，app 只打印一次
+  "# WARN: OLED lost at t=... ms -> UART only"，之后按 "UART only" 继续跑
+  （判别/CSV/LED/阀完全不受影响）。页面数据来自同一份 pipeline_out_t / decision_out_t，
+  不额外采样、不参与任何判定。
+
+串口协议（115200 8N1、发送新行、大小写不敏感）：
+  H / ? 帮助；M 打标记（# MARK ... src=UART）；R 手动开始事件（先 FLUSH 2 s）；
+  E 结束事件（回 WAIT 排空）；B 重新采基线（探头须浸在本底水中）；
+  T24.5 手输水温（0~60 ℃，DS18B20 不可用时兜底）；C 重新检测 DS18B20；
+  P 打印状态/基线/阈值/参数；V1 / V0 / VA 手动强制回收 / 强制排空 / 回自动。
+  所有命令都有帮助文本；未知命令会提示发 H；命令与打印都是纯 ASCII。
+
+CSV（每 200 ms 一行，纯 ASCII，整数缩放；字段/缩放严格按 00 文档 §6.2）：
+  表头 17 列（t_ms,t_Cx100,src,tds_adc,tds_mv,tds_mv25x10,tds_ppm_x10,tds_dmvx10,
+  tds_gx1000,ntu_adc,ntu_node_mv,ntu_dpctx10,ec_ratex10,state,level,action,note）；
+  代码里表头是单行，这里为排版分两行；事件行以 "# " 开头：
+  EVENT / STATE / ACTION / MARK / BASELINE，PC 端把 "# " 行当注释解析。
+  示例数值一律"示意/待实测"，不是实测结论。
+
+事件行格式（PC 端分段用）：# EVENT t=... start=MANUAL|AUTO、# EVENT t=... end=MANUAL|TIMEOUT；
+  # STATE ... from=... to=... reason=...；# ACTION ... RECOV/DRAIN；
+  # BASELINE start n=20 / # BASELINE OK ec0=... ntu0=... sigma_ec=... sigma_ntu=...。
+
+LED（P111，高电平点亮；假执行器=阀状态）：WAIT 1 Hz 闪、FLUSH 5 Hz 闪、CLEAR 常亮、
+  UNCERTAIN/SOAP 灭，即"回收=亮、排空=灭"；V1/V0 手动覆盖时灯直接跟随手动命令。
+
+执行器（默认假执行器）：
+  APP_USE_VALVE=0 时不驱动 P104，只用 LED 演示；改成 1 才真正写 P104，且
+  P104 低=排空、高=回收（VALVE_RECOVER_LEVEL=HIGH）。接真阀前必须做：P104 10 kΩ 下拉（或按继电器
+  触发极性改上拉）、继电器 VCC 从 VIN 取电、阀线圈并续流二极管、12V 独立供电+
+  保险丝、船型开关在触点上游、单次通电 ≤120 s。禁止把阀串在主排水路上（红线）。
+
+printf 重定向与"串口是数据留痕通道"：__io_putchar/_write 复用 tds_mini v1.2 已验证
+  实现（等 TX_COMPLETE 标志）；上电先吐 boot 行，是为了在碰 ADC/1-Wire/OLED 之前先证明
+  "MCU + 串口链路活着"；OLED 只是现场指示器（串口掉线时仍可从屏幕看状态），但数据留痕
+  仍以串口 CSV/事件行为准，boot 行依旧是最重要的自检证据。
+
+为什么打印全部用缩放整数（不做浮点格式化、不依赖数学库、不做动态内存分配、
+不用变长数组）：避免额外库与链接选项差异；浮点只用于内部计算，打印用
+t_Cx100 / tds_mv25x10 这类缩放整数，PC 端除回去即可；缓冲区全部静态数组。
+
+已知限制（报告口径，禁止写成能力）：无流量计（事件边界靠 R/E + 30 s 超时）；
+  OLED 只是现场指示（大字清水/污水 + 关键数值），不是数据来源、也不是安全执行路径，
+  数据留痕以串口 CSV 为准；OLED 失效不影响判别与阀；
+  基线必须在水样中采（空气是开路伪值）；自动开始只在强偏离（L2）时兜底；
+  阈值默认值必须按 08 文档标定后再写结论；不识别污染物种类、不做达标判定。
+
+/* ===== FILE: src/app_main.h ===== */
+/*
+ * app_main.h —— 应用入口（由 hal_entry 调用，不返回）
+ */
+#ifndef APP_MAIN_H
+#define APP_MAIN_H
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+/* 传感器应用主入口：初始化外设/传感器/判别器，进入 50 ms 主循环。 */
+void app_main(void);
+
+#ifdef __cplusplus
+}
+#endif
+#endif /* APP_MAIN_H */
+
+/* ===== FILE: src/app_main.c ===== */
+/*
+ * app_main.c —— 传感器节点应用层（初始化 / 50 ms 主循环 / 串口协议 / CSV / LED / 阀 /
+ *               板载 OLED 状态页）
+ * ---------------------------------------------------------------------------
+ * 本文件是"唯一做外设初始化 + 唯一打印"的文件：
+ *   - 上电按固定顺序初始化：P104 先置排空（fail-safe）→ LED → UART → 板载 OLED（步骤 2b）→
+ *     ADC → DS18B20 自检 → pipeline → decision → 上电自动基线校准；
+ *   - 主循环由 timebase_ms() 调度成 50 ms tick（落后不补做，避免时间堆积）；
+ *   - 串口是数据留痕通道：115200 8N1，命令 H/M/R/E/B/T/C/P/V1/V0/VA，每 200 ms
+ *     输出一行 CSV，事件行以 "# " 开头；板载 OLED 只做现场指示（不参与判别/安全侧）。
+ *
+ * 为什么上电第一件事是把 P104 置"排空"：
+ *   硬件方案 §5.2 第 1 条约定：复位/配置完成前引脚是高阻，若继电器已接线，
+ *   必须在软件最早时刻把阀置于"不动作"电平；本工程默认 APP_USE_VALVE=0（假执行器），
+ *   但仍然配置 P104=低，保证以后接真阀时上电/复位瞬间就是排空位（fail-safe）。
+ *
+ * printf 重定向（复用 tds_mini v1.2 已验证实现）：
+ *   - __io_putchar() 逐字节调用 R_SCI_UART_Write()，等 TX_COMPLETE 回调置位后才返回；
+ *   - _write() 把 newlib 的输出拆成逐字节写；
+ *   - 顺序必须是：R_SCI_UART_Open() 成功 → setvbuf(stdout, NULL, _IONBF, 0) →
+ *     立刻打印 "# [BOOT] SENSOR-NODE v1.1 build ..."（随后一行
+ *     "# board: RA4M2_MINI (R7FA4M2AD3CFL) | tick base: SysTick 1 ms"）。
+ *     否则前 1 KB 会憋在 C 库缓冲里，现象就是"上电好几秒串口一个字都没有"。
+ *   - 不允许在中断里调用 printf：__io_putchar 会忙等 TX 完成，且不可重入。
+ *
+ * 为什么不用浮点 printf：
+ *   工程约定不使用浮点 printf（避免把 newlib 浮点格式化/软浮点支持拖进来，
+ *   也避免不同链接选项下输出不稳定）；CSV 全部用"缩放整数"打印，
+ *   例如 t_Cx100 = (int)(temp_c * 100 + 0.5)。浮点只用于内部计算。
+ *
+ * 接线（详细见 00 文档与硬件方案 §5.1）：
+ *   TDS AOUT → P014/AN12；TS-300B AO → 1k+2k 分压 → P013/AN11；
+ *   DS18B20 DQ → P500（4.7k 上拉到 3.3V）；UART9 → P109/P110（CH340E，115200 8N1）；
+ *   LED1 → P111（高电平点亮）；K2 → P000（板载上拉，按下为低）；
+ *   阀/继电器 → P104（U2-8；低=排空、高=回收；APP_USE_VALVE=1 才驱动）。
+ *
+ * 执行器安全（接真阀前必须逐条确认，硬件方案 §5.2/§6.4）：
+ *   ① P104 与 GND 之间加 10 kΩ 下拉（若继电器模块是低电平触发，改为上拉到 3.3V），
+ *      保证复位/配置完成前 P104 高阻期继电器不动作；
+ *   ② 继电器模块 VCC 从 U2-19/20（VIN≈4.5~4.7 V）取电、与板同开同关，GND 共地；
+ *   ③ 阀线圈并联 1N4007 续流二极管（阴极朝 +12V），12V 独立供电 + 2 A 保险丝；
+ *   ④ 12V 船型开关装在继电器触点上游，现场可断电覆盖触点粘连；
+ *   ⑤ 单次连续通电不超过 120 s（阀的连续工作制限制），阀发烫立即断电；
+ *   ⑥ 不允许把阀串在主排水路上（红线）：本工程阀只做"回收/排空"换向，
+ *      回收支路断电即关闭（fail-safe），主排水路永远通。
+ *
+ * 时间预算（项目设想 6.2.1）：
+ *   tick 50 ms / 消抖 200 ms（4 采样 3 一致）/ CSV 200 ms / 首段排空 2000 ms /
+ *   事件超时 30000 ms / DS18B20 每 2 s 发起、800 ms 后读数（非阻塞）；
+ *   OLED 状态页：状态变化立即刷、数值最快 200 ms、心跳 1 s，只刷脏页；
+ *   单次刷新 I2C 阻塞约 3 ms/页（400 kHz，整屏 ≈25 ms），失败不影响该 tick 的安全工作。
+ *
+ * 已知限制（报告口径，禁止写成能力）：
+ *   - 无流量计：事件边界靠人按 R/E + 30 s 超时；自动开始只在强偏离（L2）时兜底；
+ *   - OLED 只是现场指示（大字清水/污水 + 关键数值）：数据留痕以串口 CSV 为准，
+ *     OLED 失效（连续 3 帧刷新失败）不影响判别/CSV/阀，安全侧不依赖显示；
+ *   - 掉电/复位后基线要重新采；
+ *   - 浊度只输出"相对基线变化 %"，不是 NTU；TDS 参考 ppm 只作过程量，不作结论；
+ *   - 本文件不识别污染物种类、不做达标判定（红线）。
+ * ---------------------------------------------------------------------------
+ * 参考：spec_design.md §5/§6/§7；spec_headers.md §7/§9；硬件方案 §5.2、§6.4、§7.5。
+ */
+
+#include "app_main.h"
+
+#include "hal_data.h"
+#include "sensor_common.h"
+#include "sensor_pipeline.h"
+#include "sensor_ds18b20.h"
+#include "decision.h"
+#include "display.h"                 /* 板载 OLED 状态页（display_init/display_task） */
+
+#include <stdio.h>
+#include <stdbool.h>
+#include <stdlib.h>
+
+/* ---------- 应用参数（全部集中在这里，便于标定） ---------- */
+#define APP_FW_VERSION          "SENSOR-NODE v1.1"   /* 串口 boot 行版本号（v1.1 含 OLED） */
+#define APP_TICK_MS             50U                  /* 主循环 tick（项目设想 6.2.1） */
+#define APP_CSV_PERIOD_MS       200U                 /* CSV 输出周期：5 行/秒 */
+#define APP_KEY_LONG_MS         1500U                /* K2 长按判据：≥1.5 s 重采基线 */
+#define APP_RX_BUF_SIZE         64U                  /* 串口命令行缓冲（含 '\0'） */
+#define APP_CSV_LINE_MAX        256U                 /* CSV 行缓冲（17 列整数+逗号足够） */
+#define APP_BASELINE_N          20U                  /* 基线点数（20 × 50 ms = 1 s） */
+#define APP_ADC_MEDIAN_N        5U                   /* 每通道每 tick 中值采样次数 */
+#define APP_ADC_TIMEOUT_MS      5U                   /* 单次 ADC 扫描超时 */
+
+/* ---------- 假执行器 / 真阀 ---------- */
+/* APP_USE_VALVE = 0（默认）：不驱动 P104，只用 LED1 演示阀状态（实验 3 做法）；
+ * APP_USE_VALVE = 1        ：真正写 P104 推继电器。切换前务必确认硬件安全项
+ *                            （P104 下拉、继电器供电、续流二极管、独立 12V、船型开关）。 */
+#define APP_USE_VALVE           0
+/* ⚠ RA 引脚命名 P104 = port 1 + pin 4（不是 port 10）；对应 FSP 宏 BSP_IO_PORT_01_PIN_04。
+ *   本板没有 port 10：若误写成 10 号端口的宏，代码仍能编译，但
+ *   R_IOPORT_PinCfg/PinWrite 运行时会失败，而返回值被忽略 → 阀"静默不动"。
+ *   这是安全相关配置，改动引脚前先核对宏与原理图。 */
+#define APP_VALVE_PIN           BSP_IO_PORT_01_PIN_04   /* P104 / U2-8 */
+#define APP_VALVE_RECOVER_LEVEL BSP_IO_LEVEL_HIGH       /* 回收电平 HIGH；有效极性以继电器实测为准 */
+#define APP_VALVE_DRAIN_LEVEL   BSP_IO_LEVEL_LOW        /* 排空电平 LOW（默认位，fail-safe） */
+
+/* ---------- 板载引脚（与已验证固件 tds_mini 一致） ---------- */
+#define APP_LED_PIN             BSP_IO_PORT_01_PIN_11   /* P111 / U2-2，高电平点亮 */
+#define APP_KEY_PIN             BSP_IO_PORT_00_PIN_00   /* P000 / U1-14，K2，按下为低 */
+
+/* ---------- 执行器模式（V1/V0/VA 命令） ---------- */
+typedef enum e_app_valve_mode
+{
+    APP_VALVE_AUTO = 0,        /* 跟随判别结果（默认） */
+    APP_VALVE_FORCE_RECOVER,   /* V1：强制回收（调试/演示） */
+    APP_VALVE_FORCE_DRAIN      /* V0：强制排空（调试/演示） */
+} app_valve_mode_t;
+
+/* ---------- 流水线配置（默认值来源：spec §6，全部"待标定"） ---------- */
+static const pipeline_cfg_t g_app_pipeline_cfg =
+{
+    .p_adc_ctrl         = &g_adc0_ctrl,
+    .tds_channel        = ADC_CHANNEL_12,    /* P014/AN12：TDS AOUT 直连 */
+    .ntu_channel        = ADC_CHANNEL_11,    /* P013/AN11：TS-300B 经 1k+2k 分压 */
+    .adc_median_n       = APP_ADC_MEDIAN_N,
+    .adc_timeout_ms     = APP_ADC_TIMEOUT_MS,
+    .vref_mv            = 3300U,
+    .adc_full_scale     = 4095U,
+    .ema_alpha          = 0.30f,            /* 轻度平滑，配合块内一致消抖 */
+    .tds_cal_k          = 1.0f,             /* 无标准液时保持 1.0 */
+    .ntu_div_r1_ohm     = 1000.0f,          /* 分压上臂（串） */
+    .ntu_div_r2_ohm     = 2000.0f,          /* 分压下臂（对地） */
+    .ntu_clear_high     = true,             /* 清水电压高；反相批次改 false（先做清水/浑水对照） */
+    .baseline_n         = APP_BASELINE_N,
+    .sigma_floor_ec_mv  = 1.5f,             /* σ 下限：防基线"过干净"阈值退化为 0 */
+    .sigma_floor_ntu_mv = 2.0f
+};
+
+/* ---------- 判别器配置（默认值来源：spec §6 参数表，全部"待标定"） ---------- */
+static const decision_cfg_t g_app_decision_cfg =
+{
+    .ec_d1_sigma         = 4.0f,      /* d1 = max(4σ, 8 mV) */
+    .ec_d2_sigma         = 8.0f,      /* d2 = max(8σ, 20 mV) */
+    .ec_d1_min_mv        = 8.0f,
+    .ec_d2_min_mv        = 20.0f,
+    .ec_hyst_ratio       = 0.25f,     /* 25% 迟滞，防阈值附近抖 */
+    .ntu_d1_pct          = 8.0f,      /* 浊度可清上限（相对基线 %） */
+    .ntu_d2_pct          = 25.0f,     /* 浊度明显变脏（相对基线 %） */
+    .ntu_hyst_ratio      = 0.25f,
+    .ec_rate_th_mv_s     = 40.0f,     /* 变化率抢先：EC 40 mV/s 且跳变 >5 mV */
+    .ec_rate_min_jump_mv = 5.0f,
+    .ntu_rate_th_pct_s   = 50.0f,     /* 浊度 50 %/s */
+    .first_flush_ms      = 2000U,     /* 手动 R 后强制排空 2 s */
+    .block_ms            = 200U,      /* 消抖块 200 ms */
+    .block_samples       = 4U,        /* 块内 4 个候选 */
+    .block_agree         = 3U,        /* ≥3 个一致才采纳，否则 L1 */
+    .event_timeout_ms    = 30000U,    /* 事件 30 s 超时兜底 */
+    .auto_start_enable   = true       /* 允许 L2 强偏离自动开始事件 */
+};
+
+/* ---------- 全局对象（单实例；静态分配，无动态内存） ---------- */
+static sensor_pipeline_t g_pipe;   /* 采集/特征流水线（句柄由 app_main 分配） */
+static decision_t        g_dec;    /* 三级判别状态机 */
+static ds18b20_t         g_ds;     /* DS18B20 水温传感器 */
+
+/* ---------- UART 发送 / 接收 ---------- */
+static volatile bool    g_uart_tx_done = true;   /* TX_COMPLETE 回调置 true */
+static char             g_rx_buf[APP_RX_BUF_SIZE];
+static volatile uint8_t g_rx_len       = 0U;
+static volatile bool    g_rx_ready     = false;  /* 收满一整行（\r 或 \n） */
+static volatile bool    g_rx_overflow  = false;  /* 本行超长，丢弃 */
+
+/* ---------- 命令触发的动作标志（主循环里消费，不在 ISR 里执行） ---------- */
+static bool g_force_temp_recheck = false;   /* 命令 C：下一 tick 强制重检 DS18B20 */
+
+/* ---------- 执行器/日志状态 ---------- */
+static app_valve_mode_t g_valve_mode = APP_VALVE_AUTO;
+
+static bool     g_key_prev_down  = false;   /* 按键边沿检测（上一步是否按下） */
+static bool     g_key_long_fired = false;   /* 本次按下是否已触发长按 */
+static uint32_t g_key_press_ms   = 0U;      /* 本次按下时刻（长按计时） */
+
+static bool g_prev_event_active = false;    /* 上一步事件状态（检测 EVENT 边界） */
+static decision_state_t  g_prev_state  = DEC_STATE_WAIT;   /* 上一步状态（检测 STATE 边界） */
+static decision_action_t g_prev_action = DEC_ACTION_DRAIN; /* 上一步动作（检测 ACTION 边界） */
+static bool g_manual_event_started = false; /* 本次事件是否由手动 R 开始（日志来源标注） */
+static bool g_manual_event_ended   = false; /* 本次事件是否由手动 E 结束 */
+static uint32_t g_last_csv_ms = 0U;         /* 上次 CSV 输出时刻 */
+
+static bool g_oled_warned = false;           /* OLED 掉线只报一次（显示不是安全路径） */
+
+/* ---------- 文件内函数声明 ---------- */
+static char        app_to_upper(char c);
+static int32_t     app_scale_int(float value, float scale);
+static void        app_fmt_scaled(char *p_buf, size_t buf_size, float value, int32_t scale, int decimals);
+static void        app_fmt_x10(char *p_buf, size_t buf_size, float value);
+static void        app_fmt_x1000(char *p_buf, size_t buf_size, float value);
+static const char *app_temp_src_str(ds18b20_src_t src);
+static const char *app_valve_mode_str(app_valve_mode_t mode);
+static void        app_led_write(bool on);
+static void        app_led_init(void);
+static void        app_led_boot_blink(void);
+static void        app_fatal_led_forever(void);
+static void        app_valve_init(void);
+static void        app_valve_apply(bool recover);
+static bool        app_valve_recover_requested(const decision_out_t *p_dec);
+static void        app_led_task(const decision_out_t *p_dec, uint32_t now_ms);
+static void        app_baseline_begin(uint32_t now_ms, const char *p_src);
+static void        app_print_mark(const char *p_src, uint32_t now_ms);
+static void        app_key_task(uint32_t now_ms);
+static void        app_print_help(void);
+static void        app_print_baseline_ok(const pipeline_out_t *p_out);
+static void        app_print_status(uint32_t now_ms);
+static void        app_handle_valve_cmd(const char *p_text);
+static bool        app_parse_temperature(const char *p_text, float *p_temp_c);
+static void        app_handle_command(char *p_cmd, uint32_t now_ms);
+static void        app_poll_command(uint32_t now_ms);
+static void        app_log_changes(uint32_t now_ms, const decision_out_t *p_dec);
+static void        app_print_csv(uint32_t now_ms, const pipeline_out_t *p_out,
+                                const decision_out_t *p_dec);
+static void        app_print_boot_summary(void);
+static bool        app_adc_init(void);
+static bool        app_uart_init(void);
+static void        app_tick(uint32_t now_ms);
+
+/* ---------- printf 重定向到 UART9（复用 tds_mini v1.2 已验证实现） ---------- */
+#ifdef __GNUC__
+    #define APP_PUTCHAR_PROTOTYPE int __io_putchar(int ch)
+#else
+    #define APP_PUTCHAR_PROTOTYPE int fputc(int ch, FILE * f)
+#endif
+
+int __io_putchar(int ch);
+int _write(int fd, char *pBuffer, int size);
+
+/*
+ * 函数名：__io_putchar
+ * 作用：newlib 的底层单字符输出，把 1 个字节写进 UART9 并等发送完成。
+ * 参数：ch —— 待发送字符（低 8 位有效）。
+ * 返回：ch（newlib 约定）。
+ * 时序/边界：115200 下 1 字节约 87 µs，忙等 TX_COMPLETE 标志；
+ *             只在主循环上下文调用（printf），中断里禁止调用。
+ * 注意：写失败（UART 未打开/忙）也要置回标志并返回，绝不在此死循环。
+ */
+APP_PUTCHAR_PROTOTYPE
+{
+    g_uart_tx_done = false;
+    if (FSP_SUCCESS != R_SCI_UART_Write(&g_uart9_ctrl, (uint8_t *)&ch, 1U))
+    {
+        g_uart_tx_done = true;   /* 放行，避免主循环卡死（丢字符比卡死好） */
+        return ch;
+    }
+
+    while (!g_uart_tx_done)
+    {
+        ;   /* 等 TX_COMPLETE 回调置位（中断上下文只置标志，不做别的事） */
+    }
+    return ch;
+}
+
+/*
+ * 函数名：_write
+ * 作用：newlib 的 write() 钩子：把一段缓冲区拆成逐字节 __io_putchar。
+ * 参数：fd —— 文件描述符（忽略）；pBuffer —— 数据；size —— 字节数。
+ * 返回：写入字节数 size。
+ * 时序/边界：printf 每次格式化后调用；长度受单行格式串限制（本文件最长约 200 B）。
+ * 注意：逐字节写会慢（每字节一次中断+等待），但 115200 下 200 B ≈ 17 ms，
+ *       远小于 200 ms CSV 周期；如需提速应改成 DMA/一次 Write 整段，暂不做。
+ */
+int _write(int fd, char *pBuffer, int size)
+{
+    int i;
+
+    (void)fd;
+    for (i = 0; i < size; i++)
+    {
+        (void)__io_putchar((int)(*pBuffer));
+        pBuffer++;
+    }
+    return size;
+}
+
+/* ---------- FSP 回调（名字由 RASC 配置指定，不可改） ---------- */
+/*
+ * 函数名：adc_callback
+ * 作用：ADC0 扫描完成回调，通知流水线"本 tick 的扫描结束了"。
+ * 参数：p_args —— FSP 回调参数（只看 event）。
+ * 返回：无。
+ * 时序/边界：中断上下文；流水线在 pipeline_sample() 里等这个标志（带超时）。
+ * 注意：只置位，绝不做耗时操作；pipeline_on_adc_complete 是唯一允许的调用。
+ */
+void adc_callback(adc_callback_args_t *p_args)
+{
+    if (ADC_EVENT_SCAN_COMPLETE == p_args->event)
+    {
+        pipeline_on_adc_complete();
+    }
+}
+
+/*
+ * 函数名：user_uart_callback
+ * 作用：UART9 回调：TX 完成置发送标志；RX 字节拼成命令行（\r 或 \n 结束一行）。
+ * 参数：p_args —— FSP 回调参数（event + data）。
+ * 返回：无。
+ * 时序/边界：中断上下文，每字节一次；行缓冲 64 B（含 '\0'），超长置 overflow 标志。
+ * 注意：不收"半行"——只有收到行尾才置 g_rx_ready，主循环整行解析；
+ *       主循环处理完之前，后续字节会被丢弃（人工输入不会同时涌入，够用）。
+ */
+void user_uart_callback(uart_callback_args_t *p_args)
+{
+    char c;
+
+    if (UART_EVENT_TX_COMPLETE == p_args->event)
+    {
+        g_uart_tx_done = true;
+        return;
+    }
+
+    /* 没有调用 R_SCI_UART_Read() 时，收到的每个字节都会以 RX_CHAR 事件进来 */
+    if (UART_EVENT_RX_CHAR == p_args->event)
+    {
+        c = (char)p_args->data;
+
+        if (('\r' == c) || ('\n' == c))
+        {
+            if (g_rx_len > 0U)
+            {
+                g_rx_ready = true;   /* 通知主循环：有一整行命令了 */
+            }
+        }
+        else if (!g_rx_ready)
+        {
+            if (g_rx_len < (uint8_t)(APP_RX_BUF_SIZE - 1U))
+            {
+                g_rx_buf[g_rx_len] = c;
+                g_rx_len++;
+            }
+            else
+            {
+                g_rx_overflow = true;
+            }
+        }
+        else
+        {
+            ;   /* 主循环还没取走上一条命令：本行剩余字符直接丢弃 */
+        }
+    }
+}
+
+/* ---------- 小工具 ---------- */
+/*
+ * 函数名：app_to_upper
+ * 作用：ASCII 小写转大写（命令大小写不敏感，避免 ctype.h 依赖）。
+ * 参数：c —— 输入字符。
+ * 返回：大写字符（非小写原样返回）。
+ * 时序/边界：纯函数。
+ * 注意：只处理 ASCII 字母；其他字节原样返回（命令都是 ASCII）。
+ */
+static char app_to_upper(char c)
+{
+    if ((c >= 'a') && (c <= 'z'))
+    {
+        return (char)((c - 'a') + 'A');
+    }
+    return c;
+}
+
+/*
+ * 函数名：app_scale_int
+ * 作用：浮点按给定比例缩放成四舍五入的整数（CSV 的"缩放整数"打印靠它）。
+ * 参数：value —— 浮点值；scale —— 比例（10/100/1000）。
+ * 返回：缩放并四舍五入后的 int32。
+ * 时序/边界：负数按远离 0 四舍五入（-0.55 → -0.6），保证 ΔEC 负值打印正确。
+ * 注意：不使用 libm（roundf）；值域受传感器量程限制，不会溢出 int32。
+ */
+static int32_t app_scale_int(float value, float scale)
+{
+    float scaled = value * scale;
+
+    if (scaled >= 0.0f)
+    {
+        return (int32_t)(scaled + 0.5f);
+    }
+    return (int32_t)(scaled - 0.5f);
+}
+
+/*
+ * 函数名：app_fmt_scaled
+ * 作用：把浮点按比例缩放后格式化成"固定小数位"的字符串（整数格式化，不碰浮点 printf）。
+ * 参数：p_buf —— 输出缓冲（建议 ≥20 B）；buf_size —— 缓冲大小；
+ *       value —— 浮点值；scale —— 比例（10 / 1000）；decimals —— 小数位数。
+ * 返回：无（结果写入 p_buf）。
+ * 时序/边界：纯函数；先四舍五入成整数再拆整数/小数部分，避免 "%.1f" 这类浮点格式化。
+ * 注意：负数必须先取符号再取绝对值——否则 -0.3 会被拆成 whole=0、frac=3 而丢掉负号
+ *       （P 状态里 ΔEC 常为小负数，丢负号会误导判读）；p_buf 必须非 NULL。
+ */
+static void app_fmt_scaled(char *p_buf, size_t buf_size, float value, int32_t scale, int decimals)
+{
+    int32_t scaled   = app_scale_int(value, (float)scale);
+    const char *sign = "";
+    int32_t whole;
+    int32_t frac;
+
+    if (scaled < 0)
+    {
+        sign   = "-";
+        scaled = -scaled;
+    }
+    whole = scaled / scale;
+    frac  = scaled % scale;
+    (void)snprintf(p_buf, buf_size, "%s%ld.%0*ld", sign, (long)whole, decimals, (long)frac);
+}
+
+/*
+ * 函数名：app_fmt_x10
+ * 作用：格式化成"一位小数"的整数字符串：value×10 后取整（mV / ℃ / % 等用）。
+ * 参数：p_buf —— 输出缓冲（建议 ≥20 B）；buf_size —— 缓冲大小；value —— 浮点值。
+ * 返回：无（结果写入 p_buf）。
+ * 时序/边界：纯函数；内部走 app_fmt_scaled，负数 -0.x 也会带负号。
+ * 注意：结果用 %s 拼进日志/状态行，避免浮点 printf。
+ */
+static void app_fmt_x10(char *p_buf, size_t buf_size, float value)
+{
+    app_fmt_scaled(p_buf, buf_size, value, 10, 1);
+}
+
+/*
+ * 函数名：app_fmt_x1000
+ * 作用：格式化成"三位小数"的整数字符串（P 状态里的 g=mv25/EC0，1.0 显示为 1.000）。
+ * 参数：p_buf —— 输出缓冲（建议 ≥20 B）；buf_size —— 缓冲大小；value —— 浮点值。
+ * 返回：无（结果写入 p_buf）。
+ * 时序/边界：纯函数；内部走 app_fmt_scaled（value×1000，三位小数）。
+ * 注意：g 是比值，一位小数分不开 1.02 与 1.08，所以 P 状态里单独用三位小数。
+ */
+static void app_fmt_x1000(char *p_buf, size_t buf_size, float value)
+{
+    app_fmt_scaled(p_buf, buf_size, value, 1000, 3);
+}
+
+/*
+ * 函数名：app_temp_src_str
+ * 作用：温度来源枚举 → CSV 的 src 字段（DS / MAN / FIX）。
+ * 参数：src —— ds18b20_src_t。
+ * 返回：静态字符串（不返回 NULL）。
+ * 时序/边界：纯函数。
+ * 注意：CSV 协议（00 文档 §5.2）规定取值就是 DS/MAN/FIX 三个大写短词，
+ *       所以这里自己映射，不依赖别的模块的字符串大小写。
+ */
+static const char *app_temp_src_str(ds18b20_src_t src)
+{
+    switch (src)
+    {
+        case DS18B20_SRC_SENSOR:
+            return "DS";
+
+        case DS18B20_SRC_MANUAL:
+            return "MAN";
+
+        case DS18B20_SRC_FIX:
+        default:
+            return "FIX";
+    }
+}
+
+/*
+ * 函数名：app_valve_mode_str
+ * 作用：执行器模式 → 静态字符串（P 命令/日志用）。
+ * 参数：mode —— app_valve_mode_t。
+ * 返回："AUTO" / "MANUAL_RECOVER" / "MANUAL_DRAIN"（未知按 AUTO）。
+ * 时序/边界：纯函数。
+ * 注意：只影响显示，真正的阀电平由 app_valve_recover_requested 决定。
+ */
+static const char *app_valve_mode_str(app_valve_mode_t mode)
+{
+    switch (mode)
+    {
+        case APP_VALVE_FORCE_RECOVER:
+            return "MANUAL_RECOVER";
+
+        case APP_VALVE_FORCE_DRAIN:
+            return "MANUAL_DRAIN";
+
+        case APP_VALVE_AUTO:
+        default:
+            return "AUTO";
+    }
+}
+
+/* ---------- LED（P111 假执行器） ---------- */
+/*
+ * 函数名：app_led_write
+ * 作用：写 LED 电平（高电平点亮）。
+ * 参数：on —— true 亮 / false 灭。
+ * 返回：无。
+ * 时序/边界：R_IOPORT_PinWrite 为寄存器写，微秒级，可在主循环里随便调用。
+ * 注意：LED 是本阶段的"假执行器"：亮=回收、灭=排空。
+ */
+static void app_led_write(bool on)
+{
+    (void)R_IOPORT_PinWrite(&g_ioport_ctrl, APP_LED_PIN,
+                            on ? BSP_IO_LEVEL_HIGH : BSP_IO_LEVEL_LOW);
+}
+
+/*
+ * 函数名：app_led_init
+ * 作用：把 P111 配成推挽输出、初值低（灭）。
+ * 参数：无。
+ * 返回：无。
+ * 时序/边界：上电调用一次；必须在任何 LED 写之前。
+ * 注意：用运行时 R_IOPORT_PinCfg（与已验证固件一致），不依赖 RASC 的引脚配置。
+ */
+static void app_led_init(void)
+{
+    (void)R_IOPORT_PinCfg(&g_ioport_ctrl, APP_LED_PIN,
+                          (uint32_t)IOPORT_CFG_PORT_DIRECTION_OUTPUT |
+                          (uint32_t)IOPORT_CFG_PORT_OUTPUT_LOW);
+}
+
+/*
+ * 函数名：app_led_boot_blink
+ * 作用：上电快闪 3 下，表示"固件确实在跑"（与串口能否通信无关）。
+ * 参数：无。
+ * 返回：无。
+ * 时序/边界：阻塞约 0.72 s（3 × 240 ms），只在上电初始化阶段调用。
+ * 注意：串口异常时这是最直接的自检证据；看到快闪 3 下再排串口问题。
+ */
+static void app_led_boot_blink(void)
+{
+    uint32_t i;
+
+    for (i = 0U; i < 3U; i++)
+    {
+        app_led_write(true);
+        R_BSP_SoftwareDelay(120U, BSP_DELAY_UNITS_MILLISECONDS);
+        app_led_write(false);
+        R_BSP_SoftwareDelay(120U, BSP_DELAY_UNITS_MILLISECONDS);
+    }
+}
+
+/*
+ * 函数名：app_fatal_led_forever
+ * 作用：致命错误（UART/时基初始化失败）时用 10 Hz 快闪报警，不返回。
+ * 参数：无。
+ * 返回：不返回（死循环）。
+ * 时序/边界：进入后不再有串口/采样功能，只能复位。
+ * 注意：这是"程序没跑起来"与"程序跑了但串口坏"的最后区分手段。
+ */
+static void app_fatal_led_forever(void)
+{
+    app_led_init();
+    while (1)
+    {
+        app_led_write(true);
+        R_BSP_SoftwareDelay(80U, BSP_DELAY_UNITS_MILLISECONDS);
+        app_led_write(false);
+        R_BSP_SoftwareDelay(80U, BSP_DELAY_UNITS_MILLISECONDS);
+    }
+}
+
+/* ---------- 阀（P104） ---------- */
+/*
+ * 函数名：app_valve_init
+ * 作用：fail-safe 第一步——把 P104 配成输出低电平（排空位）。
+ * 参数：无。
+ * 返回：无。
+ * 时序/边界：必须是 app_main 的第一条外设操作（早于 LED/UART/ADC）。
+ * 注意：APP_USE_VALVE=0 时也配置：保证以后接上继电器，复位/上电瞬间也是排空电平；
+ *       硬件上仍需 P104 的 10 kΩ 下拉（高阻期保护），软件不能替代。
+ */
+static void app_valve_init(void)
+{
+    (void)R_IOPORT_PinCfg(&g_ioport_ctrl, APP_VALVE_PIN,
+                          (uint32_t)IOPORT_CFG_PORT_DIRECTION_OUTPUT |
+                          (uint32_t)IOPORT_CFG_PORT_OUTPUT_LOW);
+}
+
+/*
+ * 函数名：app_valve_apply
+ * 作用：按"回收/排空"写 P104（仅 APP_USE_VALVE=1 时真正驱动）。
+ * 参数：recover —— true=回收位 / false=排空位。
+ * 返回：无。
+ * 时序/边界：每个 50 ms tick 调用一次；写同一电平无副作用。
+ * 注意：APP_USE_VALVE=0（默认）时本函数不碰引脚，只有 LED 假执行器动作；
+ *       切换真阀前先看文件头"执行器安全"6 条。
+ */
+static void app_valve_apply(bool recover)
+{
+#if (APP_USE_VALVE != 0)
+    (void)R_IOPORT_PinWrite(&g_ioport_ctrl, APP_VALVE_PIN,
+                            recover ? APP_VALVE_RECOVER_LEVEL : APP_VALVE_DRAIN_LEVEL);
+#else
+    (void)recover;   /* 假执行器：状态只由 LED 显示，不驱动 P104 */
+#endif
+}
+
+/*
+ * 函数名：app_valve_recover_requested
+ * 作用：决定本 tick 的阀目标：手动覆盖优先，否则跟随判别动作。
+ * 参数：p_dec —— 判别输出（可为 NULL）。
+ * 返回：true=回收 / false=排空。
+ * 时序/边界：纯函数；VA 回自动后立刻跟随 decision。
+ * 注意：安全侧——拿不到判别输出时返回排空。
+ */
+static bool app_valve_recover_requested(const decision_out_t *p_dec)
+{
+    if (APP_VALVE_FORCE_RECOVER == g_valve_mode)
+    {
+        return true;
+    }
+    if (APP_VALVE_FORCE_DRAIN == g_valve_mode)
+    {
+        return false;
+    }
+    if (NULL == p_dec)
+    {
+        return false;
+    }
+    return (DEC_ACTION_RECOVER == p_dec->action);
+}
+
+/*
+ * 函数名：app_led_task
+ * 作用：按状态刷 LED 图案：WAIT 1 Hz 闪 / FLUSH 5 Hz 闪 / CLEAR 常亮 /
+ *       UNCERTAIN/SOAP 灭；手动 V1/V0 时直接跟随手动命令。
+ * 参数：p_dec —— 判别输出；now_ms —— 当前时间（时基 ms）。
+ * 返回：无。
+ * 时序/边界：每 50 ms 调用一次；闪烁用 now_ms 取模，不占定时器。
+ * 注意：约定"回收=亮、排空=灭"；WAIT/FLUSH 闪是为了区分"在等"与"强制排空段"。
+ */
+static void app_led_task(const decision_out_t *p_dec, uint32_t now_ms)
+{
+    bool on;
+
+    if (APP_VALVE_FORCE_RECOVER == g_valve_mode)
+    {
+        on = true;    /* 手动强制回收：常亮，便于空载看继电器 */
+    }
+    else if (APP_VALVE_FORCE_DRAIN == g_valve_mode)
+    {
+        on = false;
+    }
+    else if (NULL == p_dec)
+    {
+        on = false;   /* 安全侧：没有判别结果就当排空 */
+    }
+    else
+    {
+        switch (p_dec->state)
+        {
+            case DEC_STATE_WAIT:
+                on = ((now_ms % 1000U) < 500U);   /* 1 Hz：亮 0.5 s / 灭 0.5 s */
+                break;
+
+            case DEC_STATE_FLUSH:
+                on = ((now_ms % 200U) < 100U);    /* 5 Hz：强制排空段 */
+                break;
+
+            case DEC_STATE_CLEAR:
+                on = true;                        /* 可回收：常亮 */
+                break;
+
+            case DEC_STATE_UNCERTAIN:
+            case DEC_STATE_SOAP:
+            default:
+                on = false;                       /* 排空：灭 */
+                break;
+        }
+    }
+
+    app_led_write(on);
+}
+
+/* ---------- 基线 / 标记 ---------- */
+/*
+ * 函数名：app_baseline_begin
+ * 作用：开始一次基线采集（上电自动 / 命令 B / K2 长按），并打印事件行。
+ * 参数：now_ms —— 当前时间（日志时间戳）；p_src —— 触发来源字符串
+ *       （"UART"/"KEY"，上电传 NULL 表示不需要额外提示行）。
+ * 返回：无。
+ * 时序/边界：pipeline 会连续采 baseline_n 个 tick 完成（默认 20 × 50 ms = 1 s），
+ *             期间 baseline_valid=false → 判别层安全侧 L1 排空。
+ * 注意：探头必须在水中！空气里 TDS 是开路伪值（约 1.6 V），采出来的基线是错的。
+ */
+static void app_baseline_begin(uint32_t now_ms, const char *p_src)
+{
+    pipeline_baseline_begin(&g_pipe, now_ms);
+    printf("# BASELINE start n=%u\r\n", (unsigned)g_pipe.cfg.baseline_n);
+    if (NULL != p_src)
+    {
+        printf("# BASELINE trigger=%s (keep probe in background water)\r\n", p_src);
+    }
+}
+
+/*
+ * 函数名：app_print_mark
+ * 作用：打印一条标记行，供 PC 端把连续数据分段（与按 K2 等效）。
+ * 参数：p_src —— 来源（"UART"/"KEY"）；now_ms —— 当前时间。
+ * 返回：无。
+ * 时序/边界：任意时刻可调用（主循环上下文）。
+ * 注意：格式 "# MARK t=... src=..." 与 00 文档事件行约定一致。
+ */
+static void app_print_mark(const char *p_src, uint32_t now_ms)
+{
+    printf("# MARK t=%lu src=%s\r\n", (unsigned long)now_ms, p_src);
+}
+
+/* ---------- 按键 K2 ---------- */
+/*
+ * 函数名：app_key_task
+ * 作用：扫描板载 K2：短按（释放时）打 MARK；按住 ≥1.5 s 触发基线校准（只触发一次）。
+ * 参数：now_ms —— 当前时间（时基 ms）。
+ * 返回：无。
+ * 时序/边界：每 50 ms 调一次；软件消抖靠"边沿 + 长按计时"，板上已有 4.7 kΩ 上拉。
+ * 注意：长按在"按住期间"就触发（不必等松开），松开时不再补 MARK；
+ *       短按在松手时判定，避免长按/短按互相干扰。
+ */
+static void app_key_task(uint32_t now_ms)
+{
+    bsp_io_level_t level = BSP_IO_LEVEL_HIGH;
+    bool down;
+
+    (void)R_IOPORT_PinRead(&g_ioport_ctrl, APP_KEY_PIN, &level);
+    down = (BSP_IO_LEVEL_LOW == level);   /* 按下为低 */
+
+    if (down && (!g_key_prev_down))
+    {
+        g_key_press_ms   = now_ms;
+        g_key_long_fired = false;
+    }
+
+    if (down && (!g_key_long_fired) &&
+        ((uint32_t)(now_ms - g_key_press_ms) >= APP_KEY_LONG_MS))
+    {
+        g_key_long_fired = true;
+        printf("# KEY: long press -> baseline recalibration\r\n");
+        app_baseline_begin(now_ms, "KEY");
+    }
+
+    if ((!down) && g_key_prev_down)
+    {
+        if (!g_key_long_fired)
+        {
+            app_print_mark("KEY", now_ms);   /* 短按：松手时打标记 */
+        }
+        g_key_long_fired = false;
+    }
+
+    g_key_prev_down = down;
+}
+
+/* ---------- 打印：帮助 / 基线完成 / 状态 ---------- */
+/*
+ * 函数名：app_print_help
+ * 作用：打印全部串口命令的简要帮助（纯 ASCII，串口助手不乱码）。
+ * 参数：无。
+ * 返回：无。
+ * 时序/边界：上电打印一次，命令 H/? 再打印；任何命令都必须在这里有说明。
+ * 注意：命令大小写不敏感；发送新行（\r 或 \n）结束一行。
+ */
+static void app_print_help(void)
+{
+    printf("# ---------- commands (115200 8N1, newline, case-insensitive) ----------\r\n");
+    printf("#  H  or  ?      print this help\r\n");
+    printf("#  M             mark now (# MARK t=... src=UART)\r\n");
+    printf("#  R             start a hand-wash event (manual): flush 2 s, then judge\r\n");
+    printf("#  E             end current event -> WAIT, drain\r\n");
+    printf("#  B             capture a new baseline (probe MUST be in background water)\r\n");
+    printf("#  T24.5         manual water temp 0..60 C (used when DS18B20 is absent)\r\n");
+    printf("#  C             re-detect DS18B20\r\n");
+    printf("#  P             print status / baseline / thresholds / parameters\r\n");
+    printf("#  V1 / V0 / VA  manual valve: force RECOVER / force DRAIN / auto\r\n");
+    printf("# ---------------------------------------------------------------------\r\n");
+}
+
+/*
+ * 函数名：app_print_baseline_ok
+ * 作用：基线采集完成时打印一次 "# BASELINE OK ..."（本底、σ），供 PC 复核。
+ * 参数：p_out —— 流水线输出（含 ec0_mv25/ntu0_ao_mv/σ）。
+ * 返回：无。
+ * 时序/边界：由 pipeline_out_t.baseline_updated 触发，每个基线周期只打印一次。
+ * 注意：示例数值只是格式示意；本底数值以现场实测为准（不能拿文档数字当结论）。
+ */
+static void app_print_baseline_ok(const pipeline_out_t *p_out)
+{
+    char ec0[20];
+    char sig_ec[20];
+    char sig_ntu[20];
+
+    app_fmt_x10(ec0, sizeof(ec0), p_out->ec0_mv25);
+    app_fmt_x10(sig_ec, sizeof(sig_ec), p_out->ec_sigma_mv);
+    app_fmt_x10(sig_ntu, sizeof(sig_ntu), p_out->ntu_sigma_mv);
+
+    printf("# BASELINE OK ec0=%smV ntu0=%lumV sigma_ec=%s sigma_ntu=%s\r\n",
+           ec0, (unsigned long)p_out->ntu0_ao_mv, sig_ec, sig_ntu);
+}
+
+/*
+ * 函数名：app_print_status
+ * 作用：命令 P：打印当前状态/基线/自适应阈值/特征/水温/执行器模式。
+ * 参数：now_ms —— 当前时间。
+ * 返回：无。
+ * 时序/边界：同步打印约 8 行（约 200 B ≈ 17 ms），不影响 50 ms tick。
+ * 注意：全部整数/字符串打印，无浮点 printf。
+ */
+static void app_print_status(uint32_t now_ms)
+{
+    const pipeline_out_t *p_out = pipeline_get_out(&g_pipe);
+    const decision_out_t *p_dec = decision_get_out(&g_dec);
+    char s1[20];
+    char s2[20];
+    char s3[20];
+    char s4[20];
+
+    printf("# ---------- STATUS t=%lums ----------\r\n", (unsigned long)now_ms);
+    printf("# fw=%s tick=%ums\r\n", APP_FW_VERSION, (unsigned)APP_TICK_MS);
+
+    if (NULL != p_dec)
+    {
+        printf("# dec: state=%s level=%s action=%s event=%u changed=%u reason=%s\r\n",
+               decision_state_str(p_dec->state),
+               decision_level_str(p_dec->level),
+               decision_action_str(p_dec->action),
+               (unsigned)p_dec->event_active,
+               (unsigned)p_dec->changed,
+               p_dec->reason);
+        app_fmt_x10(s1, sizeof(s1), p_dec->d1_ec_mv);
+        app_fmt_x10(s2, sizeof(s2), p_dec->d2_ec_mv);
+        app_fmt_x10(s3, sizeof(s3), p_dec->d1_ntu_pct);
+        app_fmt_x10(s4, sizeof(s4), p_dec->d2_ntu_pct);
+        printf("# th: ec d1=%s d2=%s mV | ntu d1=%s d2=%s %%\r\n", s1, s2, s3, s4);
+    }
+
+    if (NULL != p_out)
+    {
+        app_fmt_x10(s1, sizeof(s1), p_out->ec0_mv25);
+        app_fmt_x10(s2, sizeof(s2), p_out->ec_sigma_mv);
+        app_fmt_x10(s3, sizeof(s3), p_out->ntu_sigma_mv);
+        printf("# base: valid=%u capturing=%u n=%u ec0=%smV sigma_ec=%s ntu0=%lumV sigma_ntu=%s\r\n",
+               (unsigned)p_out->baseline_valid,
+               (unsigned)pipeline_baseline_capturing(&g_pipe),
+               (unsigned)p_out->baseline_n,
+               s1,
+               s2,
+               (unsigned long)p_out->ntu0_ao_mv,
+               s3);
+
+        printf("# out: adc_timeout=%u tds_status=%s ntu_status=%s note=%s\r\n",
+               (unsigned)p_out->adc_timeout,
+               sensor_status_str(p_out->tds_status),
+               sensor_status_str(p_out->ntu_status),
+               p_out->note);
+
+        app_fmt_x10(s1, sizeof(s1), p_out->d_ec_mv);
+        app_fmt_x1000(s2, sizeof(s2), p_out->g_ec);
+        app_fmt_x10(s3, sizeof(s3), p_out->d_ntu_pct);
+        app_fmt_x10(s4, sizeof(s4), p_out->ec_rate_mv_s);
+        printf("# feat: d_ec=%smV g=%s d_ntu_pct=%s %% ec_rate=%smV/s\r\n", s1, s2, s3, s4);
+    }
+
+    app_fmt_x10(s1, sizeof(s1), ds18b20_get_temp_c(&g_ds));
+    printf("# temp: %sC src=%s dv_ok=%u recheck_pending=%u\r\n",
+           s1,
+           app_temp_src_str(ds18b20_get_src(&g_ds)),
+           (unsigned)ds18b20_sensor_ok(&g_ds),
+           (unsigned)g_force_temp_recheck);
+
+    printf("# valve: mode=%s app_use_valve=%u (0=fake LED only, 1=P104)\r\n",
+           app_valve_mode_str(g_valve_mode), (unsigned)APP_USE_VALVE);
+}
+
+/* ---------- 串口命令处理 ---------- */
+/*
+ * 函数名：app_parse_temperature
+ * 作用：解析 T 命令后面的水温（0~60 ℃，允许空格/等号前缀）。
+ * 参数：p_text —— 命令首字符之后的部分（如 "24.5"）；p_temp_c —— 输出温度。
+ * 返回：true=解析成功且在范围内；false=格式错/越界。
+ * 时序/边界：strtod 解析 double；范围严格 0.0~60.0（与 00 文档命令表一致）。
+ * 注意：不使用浮点 printf；越界/空串都返回 false，由调用方打印示例。
+ */
+static bool app_parse_temperature(const char *p_text, float *p_temp_c)
+{
+    const char *p = p_text;
+    char *p_end = NULL;
+    double value;
+
+    while ((' ' == *p) || ('\t' == *p) || ('=' == *p))
+    {
+        p++;
+    }
+    if ('\0' == *p)
+    {
+        return false;
+    }
+
+    value = strtod(p, &p_end);
+    if (p_end == p)
+    {
+        return false;   /* 一个数字都没解析出来 */
+    }
+    if ((value < 0.0) || (value > 60.0))
+    {
+        return false;   /* 水温范围保护：-? / >60 都拒绝，防止温补系数被拉飞 */
+    }
+
+    *p_temp_c = (float)value;
+    return true;
+}
+
+/*
+ * 函数名：app_handle_valve_cmd
+ * 作用：解析 V 命令：V1 强制回收 / V0 强制排空 / VA 回自动。
+ * 参数：p_text —— 命令首字符之后的部分（如 "1"）。
+ * 返回：无。
+ * 时序/边界：立即生效；手动覆盖一直保持到 VA 或复位。
+ * 注意：手动覆盖优先于判别结果（调试/演示用）；调试完记得发 VA 回自动。
+ */
+static void app_handle_valve_cmd(const char *p_text)
+{
+    const char *p = p_text;
+    char sub;
+    bool changed_cmd = true;
+
+    while ((' ' == *p) || ('\t' == *p) || ('=' == *p))
+    {
+        p++;
+    }
+    sub = app_to_upper(*p);
+
+    if ('1' == sub)
+    {
+        g_valve_mode = APP_VALVE_FORCE_RECOVER;
+        printf("# valve: FORCE RECOVER\r\n");
+    }
+    else if ('0' == sub)
+    {
+        g_valve_mode = APP_VALVE_FORCE_DRAIN;
+        printf("# valve: FORCE DRAIN\r\n");
+    }
+    else if ('A' == sub)
+    {
+        g_valve_mode = APP_VALVE_AUTO;
+        printf("# valve: AUTO (follow decision action)\r\n");
+    }
+    else
+    {
+        changed_cmd = false;
+        printf("# ERR: use V1 / V0 / VA\r\n");
+    }
+
+    if (changed_cmd)
+    {
+        printf("# valve mode=%s app_use_valve=%u\r\n",
+               app_valve_mode_str(g_valve_mode), (unsigned)APP_USE_VALVE);
+    }
+}
+
+/*
+ * 函数名：app_handle_command
+ * 作用：解析一行命令并执行（H/?、M、R、E、B、T、C、P、V1/V0/VA）。
+ * 参数：p_cmd —— 以 '\0' 结尾的整行命令（可含前后空格）；now_ms —— 当前时间。
+ * 返回：无。
+ * 时序/边界：在主循环上下文执行，命令间至少间隔一个 tick；未知命令打印提示。
+ * 注意：大小写不敏感；命令只改状态/打印，不在本函数里做阻塞动作。
+ */
+static void app_handle_command(char *p_cmd, uint32_t now_ms)
+{
+    char *p = p_cmd;
+    char first;
+
+    while ((' ' == *p) || ('\t' == *p))
+    {
+        p++;
+    }
+    if ('\0' == *p)
+    {
+        return;
+    }
+
+    first = app_to_upper(*p);
+
+    switch (first)
+    {
+        case 'H':
+        case '?':
+            app_print_help();
+            break;
+
+        case 'M':
+            app_print_mark("UART", now_ms);
+            break;
+
+        case 'R':
+        {
+            const decision_out_t *p_dec = decision_get_out(&g_dec);
+            bool was_active = (NULL != p_dec) && p_dec->event_active;
+
+            decision_start_event(&g_dec, now_ms);
+            if (was_active)
+            {
+                /* 事件已在进行：R 等价"重新开始"，重新计 FLUSH 与 30 s 超时 */
+                printf("# NOTE: event restarted (manual, flush %lums)\r\n",
+                       (unsigned long)g_dec.cfg.first_flush_ms);
+            }
+            else
+            {
+                g_manual_event_started = true;
+                printf("# NOTE: event start requested (manual, flush %lums)\r\n",
+                       (unsigned long)g_dec.cfg.first_flush_ms);
+            }
+        }
+        break;
+
+        case 'E':
+        {
+            const decision_out_t *p_dec = decision_get_out(&g_dec);
+
+            if ((NULL != p_dec) && p_dec->event_active)
+            {
+                decision_end_event(&g_dec, now_ms);
+                g_manual_event_ended = true;
+                printf("# NOTE: event end requested (manual)\r\n");
+            }
+            else
+            {
+                printf("# NOTE: no active event to end\r\n");
+            }
+        }
+        break;
+
+        case 'B':
+            app_baseline_begin(now_ms, "UART");
+            break;
+
+        case 'C':
+            g_force_temp_recheck = true;
+            printf("# DS18B20: re-detect requested\r\n");
+            break;
+
+        case 'T':
+        {
+            char temp_text[20];
+            float temp_c = 0.0f;
+
+            if (app_parse_temperature(p + 1, &temp_c))
+            {
+                ds18b20_set_manual_temp(&g_ds, temp_c);
+                app_fmt_x10(temp_text, sizeof(temp_text), temp_c);
+                printf("# manual water temp = %s C (used when DS18B20 is not available)\r\n",
+                       temp_text);
+            }
+            else
+            {
+                printf("# ERR: bad temperature, example T24.5 (range 0..60 C)\r\n");
+            }
+        }
+        break;
+
+        case 'P':
+            app_print_status(now_ms);
+            break;
+
+        case 'V':
+            app_handle_valve_cmd(p + 1);
+            break;
+
+        default:
+            printf("# ERR: unknown command '%c' (send H for help)\r\n", first);
+            break;
+    }
+}
+
+/*
+ * 函数名：app_poll_command
+ * 作用：主循环里检查是否收到一整行命令；有则"短暂关中断"复制出来再解析。
+ * 参数：now_ms —— 当前时间（传给命令处理）。
+ * 返回：无。
+ * 时序/边界：复制关键区 <100 µs（115200 下 1 字节 87 µs），不会丢字节。
+ * 注意：关中断只为消除"主循环读到一半、回调又追加"的竞态；解析仍在开中断下做。
+ */
+static void app_poll_command(uint32_t now_ms)
+{
+    char local[APP_RX_BUF_SIZE];
+    uint8_t len;
+    uint8_t i;
+    bool overflow;
+    uint32_t primask;
+
+    if (!g_rx_ready)
+    {
+        return;
+    }
+
+    primask = __get_PRIMASK();
+    __disable_irq();
+
+    len           = g_rx_len;
+    overflow      = g_rx_overflow;
+    for (i = 0U; i < len; i++)
+    {
+        local[i] = g_rx_buf[i];
+    }
+    local[len]    = '\0';
+    g_rx_len      = 0U;
+    g_rx_ready    = false;
+    g_rx_overflow = false;
+
+    if (0U == primask)
+    {
+        __enable_irq();
+    }
+
+    if (0U == len)
+    {
+        return;   /* 防御：只有行尾没有内容 */
+    }
+
+    if (overflow)
+    {
+        printf("# ERR: command line too long (max %u), ignored\r\n",
+               (unsigned)(APP_RX_BUF_SIZE - 1U));
+        return;
+    }
+
+    app_handle_command(local, now_ms);
+}
+
+/* ---------- 事件/状态日志 ---------- */
+/*
+ * 函数名：app_log_changes
+ * 作用：检测事件/状态/动作边界，打印 "# EVENT / # STATE / # ACTION" 事件行。
+ * 参数：now_ms —— 当前时间；p_dec —— 判别输出。
+ * 返回：无。
+ * 时序/边界：每 tick 调用一次；只在"边界变化"时打印，稳态不刷屏。
+ * 注意：手动 R/E 命令会设置 g_manual_* 标志，用来在 EVENT 行标注 MANUAL/TIMEOUT；
+ *       事件行顺序固定 EVENT → STATE → ACTION，PC 端按行解析。
+ */
+static void app_log_changes(uint32_t now_ms, const decision_out_t *p_dec)
+{
+    if (NULL == p_dec)
+    {
+        return;
+    }
+
+    if (p_dec->event_active != g_prev_event_active)
+    {
+        if (p_dec->event_active)
+        {
+            printf("# EVENT t=%lu start=%s\r\n",
+                   (unsigned long)now_ms,
+                   g_manual_event_started ? "MANUAL" : "AUTO");
+        }
+        else
+        {
+            printf("# EVENT t=%lu end=%s\r\n",
+                   (unsigned long)now_ms,
+                   g_manual_event_ended ? "MANUAL" : "TIMEOUT");
+        }
+        g_prev_event_active   = p_dec->event_active;
+        g_manual_event_started = false;
+        g_manual_event_ended   = false;
+    }
+
+    if (p_dec->state != g_prev_state)
+    {
+        printf("# STATE t=%lu from=%s to=%s reason=%s\r\n",
+               (unsigned long)now_ms,
+               decision_state_str(g_prev_state),
+               decision_state_str(p_dec->state),
+               p_dec->reason);
+        g_prev_state = p_dec->state;
+    }
+
+    if (p_dec->action != g_prev_action)
+    {
+        printf("# ACTION t=%lu %s\r\n",
+               (unsigned long)now_ms,
+               decision_action_str(p_dec->action));
+        g_prev_action = p_dec->action;
+    }
+}
+
+/* ---------- CSV ---------- */
+/*
+ * 函数名：app_print_csv
+ * 作用：拼一行 17 列 CSV 并打印（纯 ASCII、逗号分隔、整数缩放）。
+ * 参数：now_ms —— 当前时间（t_ms 列）；p_out —— 流水线输出；p_dec —— 判别输出。
+ * 返回：无。
+ * 时序/边界：每 200 ms 调用一次；用 snprintf 拼进 256 B 静态栈缓冲，再 printf("%s\r\n")。
+ * 注意：字段顺序/缩放严格按 00 文档 §5.2：
+ *       t_ms,t_Cx100,src,tds_adc,tds_mv,tds_mv25x10,tds_ppm_x10,tds_dmvx10,
+ *       tds_gx1000,ntu_adc,ntu_node_mv,ntu_dpctx10,ec_ratex10,state,level,action,note
+ *       全部整数或有界短字符串；不出现浮点 printf。
+ */
+static void app_print_csv(uint32_t now_ms, const pipeline_out_t *p_out,
+                          const decision_out_t *p_dec)
+{
+    char line[APP_CSV_LINE_MAX];
+    int32_t t_c_x100;
+    int32_t mv25_x10;
+    int32_t ppm_x10;
+    int32_t dmv_x10;
+    int32_t g_x1000;
+    int32_t ntu_pct_x10;
+    int32_t ec_rate_x10;
+
+    if ((NULL == p_out) || (NULL == p_dec))
+    {
+        return;
+    }
+
+    t_c_x100     = app_scale_int(ds18b20_get_temp_c(&g_ds), 100.0f);
+    mv25_x10     = app_scale_int(p_out->tds_mv25, 10.0f);
+    ppm_x10      = app_scale_int(p_out->tds_ppm25, 10.0f);
+    dmv_x10      = app_scale_int(p_out->d_ec_mv, 10.0f);
+    g_x1000      = app_scale_int(p_out->g_ec, 1000.0f);
+    ntu_pct_x10  = app_scale_int(p_out->d_ntu_pct, 10.0f);
+    ec_rate_x10  = app_scale_int(p_out->ec_rate_mv_s, 10.0f);
+
+    (void)snprintf(line, sizeof(line),
+                   "%lu,%ld,%s,%u,%lu,%ld,%ld,%ld,%ld,%u,%lu,%ld,%ld,%s,%s,%s,%s",
+                   (unsigned long)now_ms,
+                   (long)t_c_x100,
+                   app_temp_src_str(ds18b20_get_src(&g_ds)),
+                   (unsigned)p_out->tds_raw,
+                   (unsigned long)p_out->tds_mv,
+                   (long)mv25_x10,
+                   (long)ppm_x10,
+                   (long)dmv_x10,
+                   (long)g_x1000,
+                   (unsigned)p_out->ntu_raw,
+                   (unsigned long)p_out->ntu_node_mv,
+                   (long)ntu_pct_x10,
+                   (long)ec_rate_x10,
+                   decision_state_str(p_dec->state),
+                   decision_level_str(p_dec->level),
+                   decision_action_str(p_dec->action),
+                   p_out->note);
+
+    printf("%s\r\n", line);
+}
+
+/* ---------- 启动摘要 ---------- */
+/*
+ * 函数名：app_print_boot_summary
+ * 作用：上电打印参数摘要（tick/CSV/阈值/执行器模式/OLED 显示/操作提示），便于现场核对配置。
+ * 参数：无。
+ * 返回：无。
+ * 时序/边界：初始化全部完成后调用一次（此时 g_pipe/g_dec 配置已生效）。
+ * 注意：打印的阈值/参数默认值都是"待标定"，不能当实测结论。
+ */
+static void app_print_boot_summary(void)
+{
+    char s1[20];
+    char s2[20];
+    char s3[20];
+    char s4[20];
+    char s5[20];
+    char s6[20];
+    char s7[20];
+    char s8[20];
+
+    printf("# timing: tick=%ums csv=%ums flush=%lums timeout=%lums block=%lums samples=%u agree=%u\r\n",
+           (unsigned)APP_TICK_MS,
+           (unsigned)APP_CSV_PERIOD_MS,
+           (unsigned long)g_dec.cfg.first_flush_ms,
+           (unsigned long)g_dec.cfg.event_timeout_ms,
+           (unsigned long)g_dec.cfg.block_ms,
+           (unsigned)g_dec.cfg.block_samples,
+           (unsigned)g_dec.cfg.block_agree);
+
+    app_fmt_x10(s1, sizeof(s1), g_dec.cfg.ec_d1_sigma);
+    app_fmt_x10(s2, sizeof(s2), g_dec.cfg.ec_d1_min_mv);
+    app_fmt_x10(s3, sizeof(s3), g_dec.cfg.ec_d2_sigma);
+    app_fmt_x10(s4, sizeof(s4), g_dec.cfg.ec_d2_min_mv);
+    app_fmt_x10(s5, sizeof(s5), g_dec.cfg.ec_hyst_ratio * 100.0f);
+    printf("# thresholds(default, TO BE CALIBRATED): ec d1=max(%s*sigma,%smV) d2=max(%s*sigma,%smV) hyst=%s%%\r\n",
+           s1, s2, s3, s4, s5);
+
+    app_fmt_x10(s6, sizeof(s6), g_dec.cfg.ntu_d1_pct);
+    app_fmt_x10(s7, sizeof(s7), g_dec.cfg.ntu_d2_pct);
+    app_fmt_x10(s8, sizeof(s8), g_dec.cfg.ntu_hyst_ratio * 100.0f);
+    printf("# ntu d1=%s%% d2=%s%% of baseline (relative only, NOT NTU) hyst=%s%%\r\n",
+           s6, s7, s8);
+
+    printf("# actuator: APP_USE_VALVE=%u P104 low=drain high=recover (0=fake LED only)\r\n",
+           (unsigned)APP_USE_VALVE);
+    printf("# display: SSD1306 128x64 I2C0 addr=0x3C (site indicator; CSV remains the record)\r\n");
+    printf("# IMPORTANT: baseline must be captured in water; TDS probe in air is a fake ~1.6V value\r\n");
+    printf("# operation: send R (start) / E (end) / B (baseline) / P (status) / H (help)\r\n");
+    printf("# CSV header:\r\n");
+    printf("# t_ms,t_Cx100,src,tds_adc,tds_mv,tds_mv25x10,tds_ppm_x10,tds_dmvx10,tds_gx1000,ntu_adc,ntu_node_mv,ntu_dpctx10,ec_ratex10,state,level,action,note\r\n");
+}
+
+/* ---------- 外设初始化 ---------- */
+/*
+ * 函数名：app_uart_init
+ * 作用：打开 UART9（CH340E，115200 8N1），关闭 stdout 缓冲。
+ * 参数：无。
+ * 返回：true=成功；false=失败（调用方用 LED 快闪报警）。
+ * 时序/边界：必须在任何 printf 之前；R_SCI_UART_Open 由 RASC 生成的 g_uart9_cfg 配置。
+ * 注意：setvbuf 必须紧跟 Open——否则 boot 行会憋在 C 库缓冲里（tds_mini 踩过的坑）。
+ */
+static bool app_uart_init(void)
+{
+    fsp_err_t err;
+
+    err = R_SCI_UART_Open(&g_uart9_ctrl, &g_uart9_cfg);
+    if (FSP_SUCCESS != err)
+    {
+        return false;
+    }
+
+    (void)setvbuf(stdout, NULL, _IONBF, 0U);
+    return true;
+}
+
+/*
+ * 函数名：app_adc_init
+ * 作用：打开 ADC0 并配置扫描组（AN11 浊度 + AN12 TDS，单次扫描）。
+ * 参数：无。
+ * 返回：true=Open/ScanCfg 都成功；false=任一失败（失败也继续跑，安全侧 L1）。
+ * 时序/边界：上电调用一次；pipeline_sample() 每 tick 触发扫描并读结果。
+ * 注意：ADC 失败不能死机：采样会超时 → 判别层 SENSOR_FAULT → L1 → 排空（安全侧）。
+ */
+static bool app_adc_init(void)
+{
+    fsp_err_t err;
+    bool ok = true;
+
+    err = R_ADC_Open(&g_adc0_ctrl, &g_adc0_cfg);
+    if (FSP_SUCCESS != err)
+    {
+        printf("# ERR: R_ADC_Open = %d\r\n", (int)err);
+        ok = false;
+    }
+
+    err = R_ADC_ScanCfg(&g_adc0_ctrl, &g_adc0_channel_cfg);
+    if (FSP_SUCCESS != err)
+    {
+        printf("# ERR: R_ADC_ScanCfg = %d\r\n", (int)err);
+        ok = false;
+    }
+
+    if (!ok)
+    {
+        printf("# WARN: ADC unusable -> samples time out -> decision falls back to L1 (drain)\r\n");
+    }
+    return ok;
+}
+
+/* ---------- 一个 50 ms tick 的全部工作 ---------- */
+/*
+ * 函数名：app_tick
+ * 作用：主循环的一个 tick：温度任务 → 温补设置 → 采样 → 判别 → 日志 → 执行器
+ *       → 板载 OLED 状态页 → 按键 → 串口命令 → 200 ms CSV。
+ * 参数：now_ms —— 本 tick 的时间戳（timebase_ms）。
+ * 返回：无。
+ * 时序/边界：每 50 ms 一次；顺序不能调换（温度先更新，判别才会用对温补值）。
+ * 注意：本函数必须"非阻塞"——所有底层调用（DS18B20/ADC 采样）都由驱动做成
+ *       短事务/带超时，绝不在这里 delay 等待（唯一例外是 printf 的 TX 忙等，µs 级）。
+ */
+static void app_tick(uint32_t now_ms)
+{
+    const pipeline_out_t *p_out;
+    const decision_out_t *p_dec;
+    bool recover;
+
+    /* 1) 温度非阻塞状态机：每 2 s 发起转换、800 ms 后读数；命令 C 强制重检 */
+    ds18b20_task(&g_ds, now_ms, g_force_temp_recheck);
+    g_force_temp_recheck = false;
+
+    /* 2) 把当前采用水温交给流水线（TDS 温补用；from_sensor=false 表示手输/兜底） */
+    pipeline_set_water_temp(&g_pipe, ds18b20_get_temp_c(&g_ds), ds18b20_sensor_ok(&g_ds));
+
+    /* 3) 采样 + 换算 + 滤波 + 基线/特征（双通道中值、EMA、ΔEC/ΔNTU、变化率） */
+    (void)pipeline_sample(&g_pipe, now_ms);
+    p_out = pipeline_get_out(&g_pipe);
+    if (NULL == p_out)
+    {
+        return;   /* 防御：正常不会发生（pipeline 句柄是静态分配的） */
+    }
+
+    /* 4) 判别（内部 200 ms 块内一致消抖；changed 只反映 state/level/action 变化） */
+    decision_update(&g_dec, &g_pipe, now_ms);
+    p_dec = decision_get_out(&g_dec);
+    if (NULL == p_dec)
+    {
+        return;
+    }
+
+    /* 5) 事件/状态/动作变化 → "# EVENT / # STATE / # ACTION" 事件行 */
+    app_log_changes(now_ms, p_dec);
+
+    /* 6) 基线采集完成 → 打印一次 "# BASELINE OK ..."（由 pipeline 的 updated 标志触发） */
+    if (p_out->baseline_updated)
+    {
+        app_print_baseline_ok(p_out);
+    }
+
+    /* 7) 执行器：LED 假执行器（P111）+ 可选真阀（P104，APP_USE_VALVE=1） */
+    recover = app_valve_recover_requested(p_dec);
+    app_valve_apply(recover);
+    app_led_task(p_dec, now_ms);
+
+    /* 8) 板载 OLED 状态页（只做现场指示；I2C 阻塞 <30 ms，失败不影响安全侧） */
+    if (!display_task(now_ms, p_out, p_dec) && (!g_oled_warned))
+    {
+        g_oled_warned = true;
+        printf("# WARN: OLED lost at t=%lu ms -> UART only\r\n", (unsigned long)now_ms);
+    }
+
+    /* 9) 按键 K2：短按 MARK / 长按 ≥1.5 s 重新采基线 */
+    app_key_task(now_ms);
+
+    /* 10) 串口命令：整行解析，命令只改状态，耗时 <1 ms */
+    app_poll_command(now_ms);
+
+    /* 11) CSV：每 200 ms 一行（5 行/秒）；用 now_ms 直接对齐，落后不补打多行 */
+    if ((uint32_t)(now_ms - g_last_csv_ms) >= APP_CSV_PERIOD_MS)
+    {
+        g_last_csv_ms = now_ms;
+        app_print_csv(now_ms, p_out, p_dec);
+    }
+}
+
+/* ---------- 应用入口 ---------- */
+/*
+ * 函数名：app_main
+ * 作用：传感器节点入口（由 hal_entry.cpp 调用，正常情况下永不返回）：
+ *       按安全顺序初始化外设/传感器/流水线/判别器，然后进入 50 ms 主循环。
+ * 参数：无。
+ * 返回：无（死循环）。
+ * 时序/边界：初始化总耗时约 1.5~2 s（DS18B20 boot_test ≈800 ms + LED 快闪 ≈0.72 s
+ *             + OLED 上电页 I2C 写 ≈几十 ms + ADC/UART 打开 ≈ms 级），之后主循环
+ *             严格 50 ms tick。
+ * 注意：初始化顺序是安全设计的一部分（P104 排空 → LED → UART → OLED → ADC →
+ *       DS18B20 → pipeline → decision → 基线），不要随意调换。
+ */
+void app_main(void)
+{
+    char s1[20];
+    uint32_t now_ms;
+    uint32_t next_tick_ms;
+
+    /* ----- 步骤 0：fail-safe 第一件事：P104=排空 ----- */
+    app_valve_init();
+
+    /* ----- 步骤 1：LED（串口坏了也能看灯判断程序是否在跑） ----- */
+    app_led_init();
+
+    /* ----- 步骤 2：UART（唯一数据通道）+ 立即吐 boot 行 ----- */
+    if (!app_uart_init())
+    {
+        app_fatal_led_forever();   /* 串口都打不开：LED 10 Hz 报警，不静默死等 */
+    }
+    printf("\r\n\r\n# [BOOT] %s build " __DATE__ " " __TIME__ "\r\n", APP_FW_VERSION);
+    printf("# board: RA4M2_MINI (R7FA4M2AD3CFL) | tick base: SysTick 1 ms\r\n");
+    app_led_boot_blink();
+
+    /* ----- 步骤 2b：板载 OLED（I2C0 @0x3C 写开机页；失败只 WARN，不算致命） ----- */
+    if (display_init())
+    {
+        printf("# display: OLED OK (SSD1306 128x64, I2C0 @0x3C)\r\n");
+    }
+    else
+    {
+        printf("# WARN: OLED not usable -> UART only (display is NOT safety path)\r\n");
+    }
+
+    /* ----- 步骤 3：1 ms 时基（必须在任何 timebase_ms 调用之前） ----- */
+    if (!timebase_init())
+    {
+        printf("# ERR: timebase_init failed (SysTick), halting\r\n");
+        app_fatal_led_forever();
+    }
+
+    /* ----- 步骤 4：ADC0 Open + ScanCfg（失败打印 ERR，但继续跑） ----- */
+    (void)app_adc_init();
+
+    /* ----- 步骤 5：DS18B20 初始化 + 上电自检（约 800 ms，仅上电一次） ----- */
+    ds18b20_init(&g_ds, NULL);
+    if (ds18b20_boot_test(&g_ds))
+    {
+        app_fmt_x10(s1, sizeof(s1), ds18b20_get_temp_c(&g_ds));
+        printf("# DS18B20 boot: OK temp=%s C src=%s\r\n",
+               s1, app_temp_src_str(ds18b20_get_src(&g_ds)));
+    }
+    else
+    {
+        printf("# DS18B20 boot: NOT USABLE -> fallback 25.0 C\r\n");
+        printf("#   no DS18B20 is fine: send T<value> (e.g. T24.5) to set water temp manually\r\n");
+        printf("#   if you did wire it: check DQ (P500/U1-17), VDD=3.3V, GND; then send C\r\n");
+    }
+
+    /* ----- 步骤 6：K2（P000）输入 + 上拉（板上已有 4.7 kΩ，内部上拉作冗余） ----- */
+    (void)R_IOPORT_PinCfg(&g_ioport_ctrl, APP_KEY_PIN,
+                          (uint32_t)IOPORT_CFG_PORT_DIRECTION_INPUT |
+                          (uint32_t)IOPORT_CFG_PULLUP_ENABLE);
+
+    /* ----- 步骤 7：采集/特征流水线 ----- */
+    pipeline_init(&g_pipe, &g_app_pipeline_cfg);
+
+    /* ----- 步骤 8：三级判别器 ----- */
+    decision_init(&g_dec, &g_app_decision_cfg);
+
+    /* ----- 步骤 9：上电自动采集基线（探头必须已浸在水样中） ----- */
+    app_baseline_begin(timebase_ms(), NULL);
+
+    /* ----- 步骤 10：打印参数摘要/帮助/CSV 表头 ----- */
+    app_print_boot_summary();
+    app_print_help();
+
+    g_last_csv_ms          = timebase_ms();
+    g_prev_event_active    = false;
+    g_prev_state           = DEC_STATE_WAIT;
+    g_prev_action          = DEC_ACTION_DRAIN;
+    g_manual_event_started = false;
+    g_manual_event_ended   = false;
+
+    /* ----- 主循环：timebase_ms 调度 50 ms tick；落后不补做（时间不堆积） ----- */
+    now_ms       = timebase_ms();
+    next_tick_ms = now_ms + APP_TICK_MS;
+
+    while (1)
+    {
+        uint32_t now = timebase_ms();
+
+        /* 无符号差值比较：< 0x80000000 表示"已到或已过 deadline"，跨 49.7 天回绕安全 */
+        if ((uint32_t)(now - next_tick_ms) < 0x80000000U)
+        {
+            next_tick_ms += APP_TICK_MS;
+
+            if ((uint32_t)(now - next_tick_ms) < 0x80000000U)
+            {
+                /* 落后超过一个 tick（例如串口大量打印/2 s 温度事务）：直接对齐当前时间，
+                 * 不补打"欠下"的 tick——补做只会让积压越来越多。 */
+                next_tick_ms = now + APP_TICK_MS;
+            }
+
+            app_tick(now);
+        }
+    }
+}
+
+/* ===== 使用说明（非文件）：hal_entry.cpp 修改 ===== */
+
+说明：本段不是 src 文件，不要保存成文件；按下面步骤修改工程模板 src/hal_entry.cpp。
+app_main.h / app_main.c 由上面的 FILE 段生成，复制到 src/ 即可。
+
+1) 打开 src/hal_entry.cpp（e² studio 模板），保留模板原有的 include 与 R_BSP_WarmStart() 等内容。
+2) 在文件顶部（include 之后）加 C 链接声明（app_main.c 是 C 文件，C++ 里必须用 extern "C"）：
+       extern "C" void app_main(void);
+   也可以直接写：#include "app_main.h"   （该头文件自带 extern "C" 保护）。
+3) 在 hal_entry() 里调用 app_main()；如果模板有 multicore / TrustZone 分支
+   （如 #if BSP_TZ_SECURE_BUILD），把 app_main(); 放在这些 #if 块之后即可
+   （本板是单核 flat 工程，这些分支都不成立）。
+4) 不要重复定义 R_BSP_WarmStart()：沿用模板自带的那一份，它负责 R_IOPORT_Open 等板级初始化。
+5) RASC 里 ADC0 的回调必须是 adc_callback、UART9 的回调必须是 user_uart_callback
+   （这两个函数由 app_main.c 提供，名字不可改；RASC 配置步骤见 00 文档）。
+6) 典型改法（片段，示意；不是完整文件）：
+
+    #include "hal_data.h"
+
+    extern "C" void app_main(void);   /* 声明 C 链接入口 */
+
+    void hal_entry(void)
+    {
+        /* 模板原有的 multicore / TrustZone 判断保留不动 */
+
+        app_main();      /* 进入应用主循环，正常情况下永不返回 */
+    }
+
+7) 构建注意：app_main.c / decision.c / sensor_*.c 都是 C 文件，直接加入 src/ 参与编译；
+   e² studio 工程按扩展名自动选择编译器（.c 用 C 编译器，.cpp 用 C++ 编译器）。
+8) 上电验证顺序：串口出现 "# [BOOT] SENSOR-NODE v1.1 ..." → LED 快闪 3 下
+   → "# display: OLED OK ..."（此时 OLED 显示开机页，约 0.8 s 后进基线/待机页）
+   → "# BASELINE start n=20" → 约 1 s 后 "# BASELINE OK ..." → 每 200 ms 一行 CSV。
+   若串口无输出但 LED 正常闪：先查 CH340E 驱动 / COM 口 / 波特率 115200 8N1；
+   若 LED 也不亮：查供电与烧录（见 00 / 08 文档排障）。

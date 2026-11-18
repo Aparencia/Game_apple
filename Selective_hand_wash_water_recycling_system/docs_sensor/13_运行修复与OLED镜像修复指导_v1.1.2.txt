@@ -1,0 +1,429 @@
+================================================================================
+ 13 运行修复与 OLED 镜像修复指导（固件 v1.1.2 / fix2）
+ --------------------------------------------------------------------------------
+ 工程：Selective_hand_wash_water_recycling_system
+ 板卡：RA4M2_MINI（R7FA4M2AD3CFL）
+ 编写：2026-11-01
+ 适用固件：Debug\Selective_hand_wash_water_recycling_system_fix2.hex
+ 本文档对应的源码：src\app_main.c、src\oled.c、src\oled.h、
+                   ra_cfg\fsp_cfg\bsp\bsp_cfg.h（均已改好并重编验证）
+================================================================================
+
+
+0. 先看结论（TL;DR）
+--------------------------------------------------------------------------------
+0.1 烧哪个文件：
+    Debug\Selective_hand_wash_water_recycling_system_fix2.hex
+      - 大小 141765 字节
+      - SHA-256 f4da1b16a841313a1a1f59bf054020306e4460017cfa851dda6fc252c3d1fc14
+      - 烧录后用 RFP 做 Erase + Program + Verify，然后按一下复位
+
+0.2 串口指纹（看到这一行才说明烧的是 fix2）：
+    # [BOOT] SENSOR-NODE v1.1.2-DBG build Nov  1 2026 14:31:33
+    （日期里的两个空格是 GCC 的 __DATE__ 格式，不是笔误；
+      如果你在 e2 studio 里自己重编，这一行的时间会变成"你编译的那一刻"，属正常）
+
+0.3 本次改了什么（相对 fix1 / v1.1.1）：
+    - 只修一个现场问题：OLED 整屏文字"左右反了"（镜像）
+    - 根因：SSD1306 的"列重映射 Segment Re-map"命令字用错（0xA1 -> 0xA0）
+    - 代码改动量：oled.h 新增 1 个宏（OLED_SEG_REMAP_CMD=0xA0U）；
+                  oled.c 初始化序列 1 行（0xA1U -> OLED_SEG_REMAP_CMD）；
+                  app_main.c 版本号 v1.1.1-DBG -> v1.1.2-DBG
+    - 与 fix1 的二进制差异：6 个字节（版本号 1 + 编译时间 4 + 0xA1->0xA0 1），
+      没有其它任何功能改动（逐字节比对见 §5.3）
+    - display.c / 字库 / 布局 / 显存坐标：零改动
+    - 顺手同步 RASC 配置：configuration.xml 主栈 0x400 -> 0x2000，
+      以后在 RASC 里 Generate Project Content 不会再把栈退回 1 KB（见 §7.2）
+
+0.4 一句话原因：
+    "字镜像"不是字库错、不是排版错、更不是接错线，而是面板的 SEG 走线与常见
+    0.96" 模块相反，初始化时必须发 0xA0（常见模块发 0xA1）。换屏只改这个宏即可。
+
+
+1. 版本对应关系（别烧混）
+--------------------------------------------------------------------------------
+   构建              时间              解决了什么                     状态
+   ----------------  ----------------  -----------------------------  ------------------
+   v1.1  （原始）    10-31 23:38        —（"三无"：灯不闪/屏黑/串口不出） 仅留档，不要烧
+   v1.1.1（fix1）    11-01 14:17        修好三无：灯闪+串口+屏亮；        已被 fix2 取代
+                                       但屏幕文字左右镜像（不可读）
+   v1.1.2（fix2）    11-01 14:31        修好镜像（本次）                  ★ 推荐烧这个
+
+   原始 hex：Debug\Selective_hand_wash_water_recycling_system.hex（137294 B，v1.1）
+   fix1 hex：Debug\Selective_hand_wash_water_recycling_system_fix1.hex（141765 B）
+   fix2 hex：Debug\Selective_hand_wash_water_recycling_system_fix2.hex（141765 B）
+   fix2 elf：Debug\Selective_hand_wash_water_recycling_system_fix2.elf（687720 B）
+
+
+2. 烧录 fix2 之后，整机（不接任何传感器）应该是什么样
+--------------------------------------------------------------------------------
+2.1 LED1（P111）
+    上电 ~10 ms 起：快闪 3 下（3 × (120 ms 亮 + 120 ms 灭) = 约 0.72 s）  ← 第一证据
+    随后进入主循环，LED1 按判别状态指示：
+        WAIT（待机/无事件）      1 Hz 闪
+        FLUSH（冲洗/排空段）     5 Hz 闪
+        CLEAR（清水）            常亮
+        SOAP/UNCERTAIN（污水/不确定） 灭
+    说明：上电 3 连闪只出现一次，它证明"CPU 在跑我们的代码"，与串口/屏幕好坏无关。
+
+2.2 串口（UART9，115200 8N1，CH340E）
+    上电后应依次出现（★ 标记的是每次必出的固定行）：
+      ★ # [BOOT] SENSOR-NODE v1.1.2-DBG build Nov  1 2026 14:31:33
+      ★ # board: RA4M2_MINI (R7FA4M2AD3CFL) | tick base: SysTick 1 ms
+      ★ # display: OLED OK (SSD1306 128x64, I2C0 @0x3C)
+          （若屏幕异常这里会变成 "# WARN: OLED not usable -> UART only ..."）
+        # DS18B20 boot: NOT USABLE -> fallback 25.0 C        （没接水温探头时）
+        #   no DS18B20 is fine: send T<value> (e.g. T24.5) to set water temp manually
+        #   if you did wire it: check DQ (P500/U1-17), VDD=3.3V, GND; then send C
+        # timing: tick=50ms csv=200ms flush=... timeout=... block=... samples=... agree=...
+        # thresholds(default, TO BE CALIBRATED): ec d1=max(...) ...
+        # ntu d1=...% d2=...% of baseline (relative only, NOT NTU) hyst=...%
+        # actuator: APP_USE_VALVE=0 P104 low=drain high=recover (0=fake LED only)
+      ★ # uart: 115200 8N1 polled-TX | tx_poll_fail=0 (0=正常, >0=发送异常)
+      ★ # display: SSD1306 128x64 I2C0 addr=0x3C (site indicator; CSV remains the record)
+      ★ # IMPORTANT: baseline must be captured in water; TDS probe in air is a fake ~1.6V value
+      ★ # operation: send R (start) / E (end) / B (baseline) / P (status) / H (help)
+      ★ # CSV header:
+      ★ # t_ms,t_Cx100,src,tds_adc,tds_mv,tds_mv25x10,tds_ppm_x10,tds_dmvx10,tds_gx1000,
+          ntu_adc,ntu_node_mv,ntu_dpctx10,ec_ratex10,state,level,action,note
+    （实际是一整行，上面为排版换行）
+
+    之后主循环：每秒 5 行 CSV（200 ms 一行），每行 t_ms 递增约 200。
+
+2.3 OLED（128x64，I2C0 @0x3C）
+    - 上电先显示约 0.8 s 的开机页（5 行小字）：
+          RA4M2 WATER JUDGE
+          OLED OK
+          SSD1306 128x64
+          I2C0 0x3C 400kHz
+          SENSOR-NODE v1.1
+    - 然后切状态页（布局，全部 8 像素对齐）：
+          第 0 行         （6x8）  : 页头，如 "EC0=2753 s1.5 T25.0"
+          第 8~39 行      （32x32）: 两个汉字大字（清水/污水/待机/冲洗/故障），
+                                    x=32 与 x=64（居中）；"污水"为反显（白底黑字）
+          第 40~55 行     （8x16） : 第二行，如 "L2 SOAP DRAIN" / 基线进度 "BASELINE 12/20"
+          第 56 行        （6x8）  : 第三行数值，如 "dEC+37mV g1.013 N-1"
+    - ★ 方向必须正确：文字从左到右可读、行序从上到下正常。
+      如果又出现"字是左右反的"，说明你烧的不是 fix2（旧 fix1/v1.1），或换了另一种模块（见 §4.8）。
+    - 不接传感器时显示内容随 ADC 读数变化：可能显示"故 障"大字（ADC 悬空/超时 → 故障页），
+      也可能有数值但状态是"待机/污水"；判读以"方向正确 + 大字/两行有内容"为准，
+      具体状态由判别逻辑决定，不影响本修复的验收。
+    - 现场照片实测例子（v1.1.1 时画面内容本身是对的，只是整体镜像）：
+          EC0=2753 s1.5 T25.0
+          污 水（反显大字）
+          L2 SOAP DRAIN
+          dEC+37mV g1.013 N-1
+      修复后应该和"照片左右翻转后的样子"完全一致 —— 见：
+          docs_sensor\13_图1_镜像现象与修复对照.png
+          docs_sensor\13_图2_修复后预期画面.png
+
+2.4 上电验收清单（照勾，5 条硬指标）
+    [ ] ① LED1 上电快闪 3 下
+    [ ] ② 串口出现 "# [BOOT] SENSOR-NODE v1.1.2-DBG ... 14:31:33"
+    [ ] ③ 串口摘要行 tx_poll_fail=0（不是 0 说明发送通道异常，见 §6.4）
+    [ ] ④ OLED 方向正确、文字可读（对照 docs_sensor\13_图2_修复后预期画面.png）
+    [ ] ⑤ 每秒约 5 行 CSV（t_ms 递增），LED1 按状态闪/亮
+
+
+3. v1.1.1（fix1）已修好的"三无"根因（复盘，便于以后排查）
+--------------------------------------------------------------------------------
+   现场最初现象：烧 v1.1 后 LED1 不闪、OLED 黑、串口无输出（"三无"）。
+   查下来是 3 个真实缺陷叠加，修好后才有"灯闪 + 屏亮 + 串口"。
+
+3.1 主栈只有 1 KB（最致命的隐患）
+    文件：ra_cfg\fsp_cfg\bsp\bsp_cfg.h 第 31 行
+        改前：#define BSP_CFG_STACK_MAIN_BYTES (0x400)      // 1 KB
+        改后：#define BSP_CFG_STACK_MAIN_BYTES (0x2000)     // 8 KB
+    证据（旧 elf）：g_main_stack 大小 0x400，起点 0x200001E0；
+                   紧贴其下方就是 _impure_data（0x20000194，0x4C 字节，newlib 的
+                   FILE 结构），栈一溢出就踩坏 printf 的内部状态。
+    栈需求（静态深调用分析，fix2 elf 复测）：
+         app_main 最深路径 = 1144 B
+             app_main(576) -> display_task(152) -> sniprintf(136)
+             -> _svfiprintf_r(152) -> __ssputs_r(32) -> _realloc_r(24)
+             -> _malloc_r(32) -> sbrk_aligned(16) -> _sbrk_r(16) -> _sbrk(8)
+         1144 B > 1024 B —— 旧栈必溢出。
+    修复后：8 KB，剩余 ≈ 7048 B（8 KB - 1144 B），彻底消除隐患。
+    校验方法：arm-none-eabi-nm -S xxx.elf | grep g_main_stack  应显示 00002000
+
+3.2 printf 卡死在上电第一行
+    文件：src\app_main.c 第 260~295 行（__io_putchar）
+    旧实现：每字节 R_SCI_UART_Write() + 忙等 TX_COMPLETE 中断回调置位。
+            若 TXI/TEI 中断没进来（RASC 回调名/向量/中断屏蔽任一不对），
+            第一行 printf 就永久卡死 —— 表现恰好是"灯不闪、屏黑、串口漏 1~2 个字节"。
+    新实现：轮询 SCI9 的 SSR.TDRE（bit7 = 0x80）后直接写 TDR，不依赖任何中断；
+            带自旋上限（APP_UART_TX_WAIT_LOOPS=300000 次）；
+            连续 8 次等不到 → 判串口异常，丢弃后续字符继续跑（APP_UART_TX_FAIL_LIMIT=8）；
+            失败计数 g_uart_tx_timeouts 会打印在启动摘要的 tx_poll_fail 字段里。
+    代价：逐字节轮询比中断慢一点，但 115200 下 1 字节约 87 µs，
+          一行 200 B ≈ 17 ms，远小于 200 ms CSV 周期，可接受。
+
+3.3 上电闪灯提前到"碰串口"之前
+    文件：src\app_main.c 第 1551 行（app_led_boot_blink 调用点）
+    旧顺序：先 printf 再闪灯 → 串口一卡，人连"灯是否在跑"都看不到。
+    新顺序：app_valve_init() → app_led_init() → app_led_boot_blink() → app_uart_init()
+            → printf boot 行 → display_init() ...
+    意义：上电 ~10 ms 就能看到 3 连闪；灯闪了但没串口 = 问题锁定 UART 段。
+
+3.4 115200 波特率改为运行时复算（防御性修复）
+    文件：src\app_main.c 第 1388~1405 行（app_uart_init）
+    事实：ra_gen\hal_data.c 里的 g_uart9_baud_setting 是 RASC 生成那一刻算出的固定值
+          （brr=47、mddr=0 不调制；生成文件自己的注释写着 "calculated with 1.725% error"）。
+          本工程 PCLKA=90 MHz（XTAL 12 MHz → PLL ×30/2 = 180 MHz，PCLKA /2 = 90 MHz；
+          SCI 的时钟源就是 PCLKA，见 ra/fsp/src/bsp/mcu/ra4m2/bsp_feature.h:517）。
+          90e6 / (16 × 48) = 117187.5 baud → 偏差 +1.725%，已贴着 ±2% 容差边缘；
+          以后若再改时钟而没重新 Generate，偏差会更大甚至不可通。
+    修复：R_SCI_UART_Open 之前调用 FSP 自带 R_SCI_UART_BaudCalculate(115200, true, 15000, &s_baud)，
+          用当前真实时钟复算（带位调制）。按本工程 90 MHz 推算应得：
+          brr=32、mddr=173、实际 115190 baud（误差 0.009%）。
+          若复算失败则退回 ra_gen 原配置，不影响启动。
+    注意：15000 这个参数是 FSP 的"可接受误差"门限（单位 x1000，即 15%），
+          函数内部仍会遍历所有分频/BRR 取误差最小者，所以最终拿到的是最优解。
+
+
+4. ★ 本次修复：OLED 整屏文字左右镜像（v1.1.2）
+--------------------------------------------------------------------------------
+4.1 现象（用户反馈 + 照片证据）
+    v1.1.1 烧进去后：屏幕能亮、内容也对（页头/大字/两行数值都在正确的位置），
+    但整屏文字是"左右翻过来"的，人眼读不出来。用户原话："led 显示字体好像左右反了"。
+    照片证据（逐字比对）：
+      - 照片原样：文字镜像、不可读（但模块丝印 "GND VCC SCK SDA" 是正的，
+        说明相机没有镜像、模块也没有装反，纯粹是屏幕内容被左右翻转）
+      - 把同一张照片左右翻转后：逐字可读 →
+          EC0=2753 s1.5 T25.0
+          污 水（反显大字）
+          L2 SOAP DRAIN
+          dEC+37mV g1.013 N-1
+    见：docs_sensor\13_图1_镜像现象与修复对照.png
+
+4.2 为什么可以断定"只是面板左右方向"，而不是字库/排版/代码逻辑错
+    (1) 左右翻转后每个字都能读、笔画正确 → 字库没镜像；
+    (2) 翻转后行序完全正常（页头在第 0 行、大字在中间、L2 行/数值行在下面），
+        且每行业务位置与 display.c 的布局一致 → 显存/布局/坐标没错；
+    (3) 若字库或显存翻转，会连带影响"数值格式、反显区域、清屏区域"等，
+        但现场只有"整屏左右"一个症状 → 只可能是面板的 SEG（列）映射方向；
+    (4) 用户照片里模块丝印、pin 号都是正的 → 不是模块装反/照片镜像。
+
+4.3 根因：SSD1306 列重映射命令字选错
+    SSD1306 两条命令（datasheet "Set Segment Re-map"）：
+      0xA0：显存列地址 0  → SEG0      （本板必须用这条）
+      0xA1：显存列地址 127 → SEG0     （大部分常见 0.96" 模块的配方）
+    本批模块的玻璃/软排线走线与常见模块相反：发 0xA1 时整屏左右镜像，
+    发 0xA0 时方向正确。旧代码照抄"常见模块"的 0xA1，所以第一次点亮就是镜像的
+    （v1.1.1 之前屏是黑的，根本看不到这个问题，所以它属于"修好三无后才暴露"的第二层缺陷）。
+    上下方向（行扫描 0xC8）本来就是对的：现场没有"上下颠倒"，
+    所以只改列映射，绝不能顺手把 0xC8 改 0xC0（那会变成上下颠倒）。
+
+4.4 代码改动（2 个文件；功能改动净 1 行）
+    文件 1：src\oled.h（第 48~56 行，新增宏）
+        /* 面板左右方向：SSD1306 的"列重映射 Segment Re-map"命令字（软件里唯一的镜像开关）。
+         *   0xA0 = 显存列地址 0 → SEG0；
+         *   0xA1 = 显存列地址 127 → SEG0（大部分 0.96" 模块的配方）。
+         * 本板实测（2026-11-01，照片逐字比对）：写 0xA1 时整屏文字左右镜像
+         * （"L2 SOAP DRAIN" 反着写、读不出来），改 0xA0 后方向正常。
+         * 原因是这块面板的玻璃/软排线走线与常见模块相反，与固件其它部分无关
+         * （显存坐标、字库、布局都不用动）。
+         * 换模块/换批次后如果左右又反了，只改这一个宏（0xA0 <-> 0xA1），
+         * 不用改 oled.c/display.c。
+         * 注意：这只是面板硬件级的左右翻转，不改变显存语义：x=0 永远是"逻辑最左列"。 */
+        #define OLED_SEG_REMAP_CMD   0xA0U
+
+    文件 2：src\oled.c（初始化命令序列 g_oled_init_cmds，第 61~79 行）
+        改前： 0x20U, 0x00U,
+               0xA1U,                    // 列重映射（常见模块配方）
+               0xC8U,
+        改后： 0x20U, 0x00U,
+               OLED_SEG_REMAP_CMD,       // 列重映射（本板必须 0xA0）
+               0xC8U,
+        其余命令（0xAE/0xD5/0xA8/0xD3/0x40/0x8D/0x20/0xDA/0x81/0xD9/0xDB/0xA4/0xA6/0xAF）不变。
+
+    文件 3：src\app_main.c（第 90 行）
+        #define APP_FW_VERSION "SENSOR-NODE v1.1.1-DBG"  ->  "SENSOR-NODE v1.1.2-DBG"
+        （只为让串口 boot 行能区分 fix1/fix2，避免烧混）
+
+    文件 4：docs_sensor\10_OLED状态显示.txt（第 392~411 行，同步注释/命令字）
+        （文档跟着代码走，防止以后照旧文档又改回 0xA1）
+
+    未改：src\display.c、src\oledfont.h、src\decision.c、src\sensor_*、src\hal_entry.cpp、
+          ra_gen/*、ra_cfg 其它文件、RASC 配置（I2C0 不用动：地址 0x3C/400 kHz 一直是对的）。
+
+4.5 为什么用"面板命令"而不是"软件里把 x 反过来"
+    - 改一行初始化命令：零 CPU、零 RAM、零风险，刷屏时序完全不变；
+    - 软件镜像要么每次写显存时算 127-x（每像素多一次减法，且 32x32 汉字/8x16 等
+      所有绘图函数都要改，回归面大），要么整屏 bytes 反转（多一份 1 KB 缓冲/拷贝）。
+    - 硬件级翻转后显存语义不变：x=0 仍是逻辑最左列，display.c 一个字符都不用动。
+
+4.6 换屏 / 换批次的适配速查表（以后只改 OLED_SEG_REMAP_CMD 或对应命令字）
+    现象                     原因                         改法
+    ------------------------ ---------------------------- --------------------------
+    整屏文字左右镜像          列映射反了                    0xA0 <-> 0xA1（本表第 1 行）
+    整屏上下颠倒              行扫描方向反了                0xC8 <-> 0xC0
+    整屏 180°（既左右又上下）  两者都反                      0xA0+C0 <-> 0xA1+C8
+    黑白反了（黑底白字变白底） 显示极性反了                  0xA6 <-> 0xA7
+    图像整体右移 2 列/花边     控制器不是 SSD1306 而是 SH1106  列地址起始改 0x02（需改驱动）
+    全黑/全白/随机点           初始化序列或 I2C 物理层问题   先看串口有没有 OLED WARN
+    花屏/错位                  页寻址/起始行不对              检查 0x20/0x00、0x40、0xB0 页地址
+    注意：本板坐标布局是按"横放"设计的，不要为了换屏去改 display.c 的坐标。
+
+4.7 "不是这些原因"（避免下次走弯路）
+    - 不是 RASC 的 I2C 配置错（地址/速率/回调都对，屏能亮能刷就是证明）；
+    - 不是字库镜像（翻转照片后每个字都对）；
+    - 不是"照片/模块装反"（模块丝印与 pin 号在照片里是正的）；
+    - 不是显示缓冲区大小/坐标问题（页头/大字/两行都落在正确区域）；
+    - 不是电源/对比度（0x81/0xCF 下亮度正常，文字清晰）。
+
+4.8 现场快速判定（30 秒）
+    看到屏 → 盯住 "L2 SOAP DRAIN" 或 "RA4M2 WATER JUDGE"：
+        能顺读  → 方向正确（v1.1.2）
+        反着读  → 还是旧固件或换屏了：先确认 boot 行是不是 v1.1.2；
+                  是 v1.1.2 仍反 → 见 4.6，改 OLED_SEG_REMAP_CMD 为 0xA1
+        上下颠倒 → 改 0xC8 为 0xC0
+        黑屏但串口有 "# display: OLED OK" → I2C 线/供电/对比度问题，不是本修复范围
+
+
+5. 文件清单与逐字节证据（可复现）
+--------------------------------------------------------------------------------
+5.1 烧录产物
+    Debug\Selective_hand_wash_water_recycling_system_fix2.hex
+        141765 字节
+        SHA-256 f4da1b16a841313a1a1f59bf054020306e4460017cfa851dda6fc252c3d1fc14
+    Debug\Selective_hand_wash_water_recycling_system_fix2.elf
+        687720 字节
+        SHA-256 7cb0056668f23b31b85c3d591618dc3bb16bbd3bfc4d7262e56adc5e36df61bc
+    （fix1 hex 的 SHA-256 = 096e40b6...c758d28c，与 fix2 不同，可通过它确认没烧错）
+
+5.2 源码改动清单
+    ----------------------------------------------------------------------------
+    文件                                    行号        改动
+    ----------------------------------------------------------------------------
+    ra_cfg\fsp_cfg\bsp\bsp_cfg.h            31          STACK_MAIN 0x400 -> 0x2000（生成文件）
+    configuration.xml                       103         RASC 配置源 config.bsp.common.main 0x400 -> 0x2000
+    src\app_main.c                          90          版本号 -> v1.1.2-DBG
+    src\app_main.c                          182         g_uart_tx_timeouts 计数器（fix1）
+    src\app_main.c                          260~295     __io_putchar 改轮询 TDRE（fix1）
+    src\app_main.c                          599~614     app_led_boot_blink 函数（fix1）
+    src\app_main.c                          1551        app_led_boot_blink 调用点提前（fix1）
+    src\app_main.c                          1388~1405   BaudCalculate 运行时复算（fix1）
+    src\oled.h                              48~56       新增 OLED_SEG_REMAP_CMD=0xA0U
+    src\oled.c                              61~79       初始化序列用 OLED_SEG_REMAP_CMD
+    docs_sensor\10_OLED状态显示.txt          392~411     同步注释与命令字
+    docs_sensor\13_运行修复与OLED镜像修复指导_v1.1.2.txt  本文档
+    docs_sensor\13_图1_镜像现象与修复对照.png            证据图（原样 vs 翻转）
+    docs_sensor\13_图2_修复后预期画面.png                修复后屏幕应有的样子
+    ----------------------------------------------------------------------------
+
+5.3 与 fix1 的逐字节差异（证明"只改了该改的"）
+    方法：两份 hex 各 objcopy 成 bin（16818820 B），逐字节比较，仅 6 处不同：
+        偏移 0x00A349: 31 -> 32   （版本串 "v1.1.1" -> "v1.1.2"）
+        偏移 0x00A375: 31 -> 33   （build 时间 14:17:24 -> 14:31:33 的 4 个数字）
+        偏移 0x00A376: 37 -> 31
+        偏移 0x00A378: 32 -> 33
+        偏移 0x00A379: 34 -> 33
+        偏移 0x00B264: A1 -> A0   （OLED 初始化序列里的列重映射命令字）★ 唯一的功能性改动
+    即：镜像修复本身就是把 0xA1 改成 0xA0 这一个字节。
+
+5.4 构建质量
+    工具链：Arm GNU Toolchain arm-none-eabi 13.2 Rel1（与 e2 studio 工程一致）
+    方法：沿用 Debug\compile_commands.json 里同一条编译命令，只重编
+          src\app_main.c、src\oled.c；其余 .o 沿用原有（来源/参数一致）；
+          再用 Debug 的链接响应文件重新链接，objcopy 输出 fix2.hex。
+    结果：2 个文件编译 0 error / 0 warning；链接成功；hex 141765 字节。
+
+5.5 关键符号复测（fix2 elf）
+    g_main_stack：地址 0x200001E0，大小 0x2000（8 KB）   ← 栈修复生效
+    _impure_data：地址 0x20000194，大小 0x4C（在栈底之下，不再被踩）
+    g_oled_init_cmds（.rodata，0xB258 起，25 字节）：
+        AE D5 80 A8 3F D3 00 40 8D 14 20 00 A0 C8 DA 12
+        81 CF D9 F1 DB 40 A4 A6 AF
+                                       ^^ 第 13 字节 = A0（修复生效）
+
+
+6. 烧录与分诊（照做）
+--------------------------------------------------------------------------------
+6.1 烧录（Renesas Flash Programmer）
+    1) 板子 USB 接电脑（CH340E 那个口），确认 RFP 里能看到 COM 口/仿真器；
+    2) 选 Debug\..._fix2.hex（不要再选 ..._fix1.hex 或旧的 ...system.hex）；
+    3) Erase → Program → Verify；
+    4) 按一下复位（或断电重上）。
+
+6.2 串口工具
+    COM 口（CH340E）→ 115200 → 8 → None → 1 → 无流控；
+    打开串口后按复位，应看到 §2.2 的 boot 行（带 v1.1.2-DBG 与 14:31:33）。
+
+6.3 60 秒验收
+    - 3 连闪（上电 ~0.7 s 内完成）
+    - boot 行（约 0.8 s 内出现，就在 3 连闪之后）+ OLED OK 行
+    - 屏上文字方向正确（对照 docs_sensor\13_图2_修复后预期画面.png）
+    - tx_poll_fail=0
+    - 5 行/秒 CSV
+
+6.4 分诊表（按"灯/串口/屏"三个独立证据定位）
+    灯 3 闪  串口有  屏正确   → 全部正常，进入标定/验收（08 文档）
+    灯 3 闪  串口有  屏黑     → 查 I2C（P407 SDA / P408 SCL / 0x3C / 3.3V）；
+                               串口应有 "# WARN: OLED not usable" 或 "# WARN: OLED lost"
+    灯 3 闪  串口无  屏正确   → UART 物理层/CH340 驱动/TX 线；看 tx_poll_fail 是否 >0
+    灯 3 闪  串口无  屏黑     → 同上，先修串口（屏只是没刷新）
+    灯 3 闪  串口乱码         → 波特率/时钟：确认串口工具 115200，且 boot 行是 v1.1.2；
+                               本版已运行时复算 115200（0.009% 误差）
+    灯不闪（10 Hz 急闪）      → app_uart_init 失败分支（app_fatal_led_forever）
+    灯完全不闪                → 卡在 main() 之前：SystemInit/时钟/启动段，
+                               或 hex 没烧进去（确认打了 3 连闪+串口指纹）
+
+
+7. 如何保持修复、怎么回滚
+--------------------------------------------------------------------------------
+7.1 源码已改好：直接在 e2 studio 里 Build 就会带上全部修复
+    （bsp_cfg.h/configuration.xml 的 0x2000、app_main.c 的四处、oled.h/oled.c 的列映射）。
+    这时 hex 会输出到 Debug\Selective_hand_wash_water_recycling_system.hex（覆盖旧名），
+    boot 时间戳会变成你编译的时间，属正常。
+
+7.2 ⚠ 如果你在 RASC 里点 "Generate Project Content"：
+    - 主栈设置已经同步改到 RASC 工程配置里：
+        configuration.xml 第 103 行  <property id="config.bsp.common.main" value="0x2000"/>
+      所以正常 Generate 不会再退回 1 KB；但换机器/重新导入工程时要确认这一项
+      （RASC 界面 BSP 标签 → Main stack size 应显示 0x2000 / 8192，单位字节）。
+    - ra_gen\*、ra_cfg\* 会被重新生成：其它配置若与手写代码约定不一致，以本工程
+      Debug\compile_commands.json 的编译结果为准重新核对；串口波特率结构体被重置也没关系，
+      app_main.c 的运行时复算会兜底。
+    - oled.h/oled.c/app_main.c 是手写文件，Generate 不会覆盖；但 oled.c 里的
+      列重映射宏来自 oled.h，也安全。
+
+7.3 备份/回滚
+    改前（v1.1 原始）备份：
+        C:\Users\Administrator\AppData\Local\Temp\dsh_sensor_work\fix2_backup\
+            （原 elf/hex/map/app_main.c/bsp_cfg.h）
+    fix1（v1.1.1）源码/镜像备份：
+        C:\Users\Administrator\AppData\Local\Temp\dsh_sensor_work\fix2_backup1\
+            （app_main.c / oled.c / oled.h / fix1 hex / fix1 elf）
+    回滚到 fix1：直接烧 ..._fix1.hex（但屏幕会镜像）；
+    回滚到 v1.1：烧 Debug\...system.hex（会"三无"，不建议）。
+
+
+8. 限制与未覆盖项
+--------------------------------------------------------------------------------
+8.1 本文档的"方向正确"无法由软件自证（SSD1306 没有读回玻璃方向的命令），
+    编写者只能依据现场照片逐字比对 + SSD1306 命令语义来定论；
+    最终以现场一眼确认（§2.3）为准，这属于"结论强、但必须现场验收"的一条。
+8.2 字库只有 9 个汉字（清水污待机冲洗故障），不支持任意中文；这是设计约束。
+8.3 工程禁 libm：温度/浮点格式都用手写整数格式化，显示位数有限（见 display.c 注释）。
+8.4 换屏批次差异未做自动检测（SSD1306 没有"读回玻璃方向"的手段），用 §4.6 速查表人工适配。
+8.5 本修复不涉及传感器判别、CSV、阀门逻辑：这些在 v1.1 已验证，本次零改动。
+
+
+9. 一句话总结
+--------------------------------------------------------------------------------
+    v1.1.2 = v1.1.1（修好三无：8 KB 栈 + 轮询串口 + 提前闪灯 + 波特率复算）
+             + 把 OLED 列重映射命令从 0xA1 改成 0xA0（修整屏左右镜像，净 1 行代码）。
+    烧 Debug\Selective_hand_wash_water_recycling_system_fix2.hex，
+    看到 "# [BOOT] SENSOR-NODE v1.1.2-DBG build Nov  1 2026 14:31:33" 且屏幕文字
+    从左到右可读，即修复完成。
+
+================================================================================
+ 附：本文档与其它文档的关系
+   - 00_总览_接线与FSP配置.txt      ：接线/RASC 配置总览（不变）
+   - 07_应用集成与串口协议.txt      ：串口协议/CSV 字段（不变）
+   - 08_验收测试与标定指引.txt      ：运行后的标定与验收流程（推荐接着做）
+   - 10_OLED状态显示.txt            ：OLED 页面/字库/驱动细节（已同步列映射改动）
+   - 11_编译报错修复指引.txt        ：编译/链接报错处理（不变）
+   - 13_本文档                      ：v1.1.2 运行修复 + OLED 镜像修复（最新）
+================================================================================

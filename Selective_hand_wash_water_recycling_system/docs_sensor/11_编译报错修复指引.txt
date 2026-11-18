@@ -1,0 +1,344 @@
+========================================================================
+ 文件：11_编译报错修复指引.txt
+ 内容：e² studio 构建报错（链接错误 + 严格告警）的逐条根因、改法、验证证据
+ 目标工程：Selective_hand_wash_water_recycling_system（RA4M2_MINI，FSP 6.6.0）
+ 性质：修复指引（不含 FILE 段、不参与代码提取；对应工程 src/ 2026-10-30 构建版）
+ 版本：v1.0（2026-10-30，修复后 clean 重建 0 error / 0 warning）
+========================================================================
+
+【0】一句话结论
+------------------------------------------------------------------------
+2026-10-30 23:26 的构建失败已修复：改了工程 src/ 下 6 个文件、15 处精确修改，
+`make clean && make` 全量重建结果 **0 error / 0 warning**，链接通过，
+.elf/.hex/.map 已生成（text 48284 B / data 480 B / bss 3540 B / dec 52304 B）。
+
+修复分三类：
+  A. 链接错误：timebase_init / sensor_clampf / sensor_absf 未定义   → 实现函数名与头文件不一致
+  B. 链接错误：_close / _lseek / _read / _fstat / _isatty 未定义     → newlib printf 的系统调用空桩缺失
+  C. 告警与 1 个真 bug：
+     - -Wfloat-equal ×4（NaN 自检用了 x != x）
+     - -Wmissing-declarations ×4（SysTick_Handler / 3 个被改名的函数）
+     - -Wtype-limits ×1（sensor_sort_u16 的 `j < 0U` 恒假 → 排序实际没执行，真 bug）
+     - -Waggregate-return ×1（sensor_stats_f32 返回结构体，设计如此）
+
+【1】修复前报错摘要（来自 e² studio 构建日志）
+------------------------------------------------------------------------
+1.1 链接错误（ld 报 undefined reference，共 20 余条）
+    ./src/app_main.o:     undefined reference to `timebase_init'      （app_main.c:1475）
+    ./src/sensor_tds.o:   undefined reference to `sensor_clampf'      （sensor_tds.c:148/157）
+    ./src/decision.o:     undefined reference to `sensor_clampf' / `sensor_absf'
+    ./src/sensor_ds18b20.o: undefined reference to `sensor_absf' / `sensor_clampf'
+    ./src/sensor_pipeline.o: undefined reference to `sensor_clampf'
+    ./src/sensor_common.o: undefined reference to `sensor_clampf'     （sensor_ema 内部调用）
+    libg_nano.a(libc_a-closer.o):  undefined reference to `_close'
+    libg_nano.a(libc_a-lseekr.o):  undefined reference to `_lseek'
+    libg_nano.a(libc_a-readr.o):   undefined reference to `_read'
+    libg_nano.a(libc_a-fstatr.o):  undefined reference to `_fstat'
+    libg_nano.a(libc_a-isattyr.o): undefined reference to `_isatty'
+    → collect2.exe: error: ld returned 1 exit status
+
+1.2 编译告警（10 条，修复前）
+    sensor_tds.c:144       -Wfloat-equal      （temp_c != temp_c）
+    sensor_common.c:74     -Wmissing-declarations（SysTick_Handler）
+    sensor_common.c:92     -Wmissing-declarations（timebase_int）
+    sensor_common.c:166    -Wtype-limits      （while((j < 0U) ...)）
+    sensor_common.c:280    -Wmissing-declarations（sensor_clamp）
+    sensor_common.c:310    -Wmissing-declarations（sensor_abs）
+    sensor_common.c:405    -Waggregate-return （sensor_stats_f32 返回结构体）
+    sensor_pipeline.c:229  -Wfloat-equal      （alpha != alpha）
+    sensor_pipeline.c:879  -Wfloat-equal      （t != t）
+    sensor_ds18b20.c:866   -Wfloat-equal      （t != t）
+    说明：这些告警来自 e² studio 工程编译选项里较严的一组开关：
+          -Wall -Wextra -Wmissing-declarations -Wconversion -Wpointer-arith
+          -Wshadow -Wlogical-op -Waggregate-return -Wfloat-equal
+          （比 01~06 文档当初验证用的 -Wall -Wextra 更严格，所以历史代码里
+            藏着的写法问题这次才暴露出来——其中 -Wtype-limits 那条是真 bug。）
+
+【2】修复 A：undefined reference to timebase_init / sensor_clampf / sensor_absf
+------------------------------------------------------------------------
+2.1 现象
+    头文件 sensor_common.h 里声明、6 个 .c 文件里调用的名字是
+        timebase_init() / sensor_clampf() / sensor_absf()
+    但工程 src/sensor_common.c 里实际定义的名字是
+        timebase_int()  / sensor_clamp()  / sensor_abs()
+    → 编译每个文件都能过（各自包含头文件、只查声明），链接时才发现"声明的函数没人定义"。
+
+2.2 根因
+    "改名只改了一半"：工程 src/ 在 2026-10-30 被局部改写时，把 3 个实现函数的
+    名字改回了旧名（去掉 f 后缀 / int→init 反向），但头文件和所有调用点没跟着改。
+    注意：交付文档 01_公共库_sensor_common.txt 的 FILE 段里名字本来是正确的
+    （sensor_clampf / sensor_absf / timebase_init），是工程副本漂移了。
+
+2.3 改法（只改 src/sensor_common.c 的 3 行定义；调用方一个字都不动）
+    - bool timebase_int(void)                                  → bool timebase_init(void)
+    - float sensor_clamp(float value,float min_value,float max_value)
+                                                              → float sensor_clampf(...)
+    - float sensor_abs(float value)                            → float sensor_absf(float value)
+
+2.4 为什么改实现、不改头文件
+    头文件 = 接口契约：01 文档 FILE 段、全部 6 个调用方（app_main.c / decision.c /
+    sensor_tds.c / sensor_ds18b20.c / sensor_pipeline.c / sensor_common.c 内部）
+    用的都是带 f 的新名。改实现是 3 行；改头文件要动 6 个文件几十处，风险大且没必要。
+
+【3】修复 B：undefined reference to _close / _lseek / _read / _fstat / _isatty
+------------------------------------------------------------------------
+3.1 现象
+    链接到 newlib-nano（libg_nano.a）时，libc 自己的 closer.c / lseekr.c /
+    readr.c / fstatr.c / isattyr.c 反过来找不到 _close / _lseek / _read /
+    _fstat / _isatty。
+
+3.2 根因
+    app_main.c 用 printf 打日志，并已实现 __io_putchar + _write 把输出重定向到
+    UART9——但 newlib 的 stdio 不是"只调 _write"：初始化流、判断是否终端、
+    关闭/定位流时会调用一整套 POSIX 系统调用。本工程没有文件系统，也没有提供
+    这些空桩，于是 5 个符号悬空。
+    历史上 v1.0 的沙箱链接能过，是因为沙箱链接加了 newlib 的 nosys 规格
+    （-specs=nosys.specs 提供全部空桩）；而用户工程直接用默认链接脚本，没有这层兜底。
+
+3.3 改法（app_main.c，3 处）
+    ① 增加头文件（放在 <stdlib.h> 之后）：
+        #include <sys/types.h>               /* off_t：newlib 系统调用原型 */
+        #include <sys/stat.h>                /* struct stat / S_IFCHR */
+    ② 在 _write 原型旁补 5 个原型：
+        int   _read(int fd, void *pBuffer, int size);
+        int   _close(int fd);
+        off_t _lseek(int fd, off_t offset, int whence);
+        int   _fstat(int fd, struct stat *pStat);
+        int   _isatty(int fd);
+    ③ 在 _write 函数之后加 5 个空桩：
+        int _close(int fd)
+        {
+            (void) fd;
+            return -1;              /* 没有可关闭的文件 */
+        }
+
+        off_t _lseek(int fd, off_t offset, int whence)
+        {
+            (void) fd;
+            (void) offset;
+            (void) whence;
+            return (off_t) 0;       /* 不可定位（字符设备） */
+        }
+
+        int _read(int fd, void *pBuffer, int size)
+        {
+            (void) fd;
+            (void) pBuffer;
+            (void) size;
+            return 0;               /* 没有输入流：串口命令走中断行缓冲，不经过 stdio */
+        }
+
+        int _fstat(int fd, struct stat *pStat)
+        {
+            (void) fd;
+            pStat->st_mode = S_IFCHR;   /* 必须：告诉 printf 这是字符设备 */
+            return 0;
+        }
+
+        int _isatty(int fd)
+        {
+            (void) fd;
+            return 1;               /* 当成终端：printf 不整块缓冲，串口才能及时看到输出 */
+        }
+
+3.4 三个容易写错的点
+    ① _fstat 里不写 st_mode = S_IFCHR：printf 会按"普通文件"整块缓冲，
+       串口日志要等缓冲满/程序退出才出来（现场表现为"串口没输出"）；
+    ② _isatty 返回 0：同上，行缓冲退化；
+    ③ 只写 _write 不写其余 5 个：链接必然失败——这就是本次报错 B 的全部原因。
+
+3.5 为什么不直接加 -specs=nosys.specs
+    nosys 会把 _write 也定义成"丢弃"版本，和本工程自己的 _write 冲突/覆盖风险高；
+    而且 e² studio 的链接选项在多版本 FSP 模板里容易被覆盖，不可见。
+    自己写 5 个空桩：显式、可控、跟着源码走，换工程也不丢。
+
+【4】修复 C1：-Wtype-limits 暴露的真 bug（sensor_sort_u16 排序没执行）
+------------------------------------------------------------------------
+4.1 现象
+    sensor_common.c:166
+        while((j < 0U) && (p_values[j - 1U] > key))
+
+4.2 根因
+    j 是 uint16_t（无符号），`j < 0U` 永远为假 → 内层循环一次都不进 →
+    函数实际上没有排序（元素只在原地写回）。
+    后果：sensor_median_u16 取的是"未排序数组的中间元素"，基线 EC0、σ、中值
+    都会被脏样本带偏——不会崩溃，但数值悄悄变差，属于最难查的一类 bug。
+    （交付文档 01 的 FILE 段里本来是正确的 `j > 0U`，工程副本被改坏了。）
+
+4.3 改法
+        while((j < 0U) && (p_values[j - 1U] > key))
+     →  while((j > 0U) && (p_values[j - 1U] > key))
+    这是插入排序向 0 回退的标准写法：j-- 到 0 停止，不会越界访问 j-1。
+
+4.4 复验
+    改后 -Wtype-limits 告警消失；逐步推演 n=3、[30,10,20] 得 [10,20,30]（正确升序）。
+
+【5】修复 C2：-Wfloat-equal ×4（NaN 自检写法）
+------------------------------------------------------------------------
+5.1 现象
+    sensor_tds.c:144      if (temp_c != temp_c)
+    sensor_pipeline.c:229 if (alpha != alpha)
+    sensor_pipeline.c:879 if (t != t)
+    sensor_ds18b20.c:866  if (t != t)
+    GCC：comparing floating-point with '==' or '!=' is unsafe
+
+5.2 根因
+    x != x 是 C 里判断 NaN 的经典惯用法，但 -Wfloat-equal 认为浮点相等比较在
+    某些优化/扩展精度场景不可靠，一律告警。工程红线又规定"不依赖 libm/math.h"
+    （不能用 isnan），所以不能简单换 isnan。
+
+5.3 改法（两步）
+    ① sensor_common.h 增加按位判 NaN 的公共内联函数（零依赖，语义等价 isnan）：
+        /* NaN 判定：按 IEEE-754 位型检查（不用 x != x，避免 -Wfloat-equal 告警；
+         * 也不依赖 math.h 的 isnan）。外部传入的 float 都应先过这一层清洗。 */
+        static inline bool sensor_is_nan_f32(float value)
+        {
+            union
+            {
+                float    f;
+                uint32_t u;
+            } bits;
+
+            bits.f = value;
+
+            return (bool) (((bits.u & 0x7F800000UL) == 0x7F800000UL) &&
+                           ((bits.u & 0x007FFFFFUL) != 0UL));
+        }
+        （原理：IEEE-754 里 NaN ⇔ 指数位全 1 且尾数位非 0；对 float 就是
+          0x7F800000 掩码。inf 的尾数是 0，所以不会被误判成 NaN。）
+    ② 4 处调用点改为：
+        if (sensor_is_nan_f32(temp_c)) / (alpha) / (t)
+        （只替换判断条件，判断后的处理逻辑/回退温度一字未动。）
+
+【6】修复 C3：-Wmissing-declarations ×4
+------------------------------------------------------------------------
+6.1 SysTick_Handler（sensor_common.c:74）
+    它是 CMSIS 启动文件里的弱符号，被向量表引用；本文件给的是强定义。
+    但 C 语言里"没有可见原型"就会告警。改法：在 include 之后加前置声明
+        /* SysTick 中断入口由本文件定义（覆盖 FSP 启动文件里的弱符号）：
+         * 提前声明，满足 -Wmissing-declarations，也告诉读代码的人这是被向量表调用的函数。 */
+        void SysTick_Handler(void);
+6.2 timebase_int / sensor_clamp / sensor_abs（3 条）
+    这 3 条是【2】的连带告警：函数名与头文件不一致时，编译器认为它们"没有声明"。
+    按【2】改名后，头文件里的声明自动生效，3 条告警一起消失，不需要额外改动。
+
+【7】修复 C4：-Waggregate-return（sensor_stats_f32 返回结构体）
+------------------------------------------------------------------------
+7.1 现象
+    sensor_common.c:405  GCC：function returns an aggregate [-Waggregate-return]
+
+7.2 根因
+    sensor_stats_t 是 5 字段小结构体（mean/std/min/max/n，20 B）。AAPCS 下
+    由调用方提供隐藏指针返回，效率与出参写法几乎相同。这是本工程刻意的 API
+    设计（01 文档契约），不是误用。编译器只是"提示风险"。
+
+7.3 改法（就地屏蔽，不动接口）
+    在函数定义前后加：
+        /* -Waggregate-return 会把"函数返回结构体"当风险提示；本函数返回 5 字段的小结构体
+         * （20 B，AAPCS 用隐藏指针返回），是刻意的 API 设计、不是误用，所以就地屏蔽。 */
+        #pragma GCC diagnostic push
+        #pragma GCC diagnostic ignored "-Waggregate-return"
+        sensor_stats_t sensor_stats_f32(const float *p_values, uint16_t n)
+        {
+            ...
+        }
+        #pragma GCC diagnostic pop
+    备选方案（改成出参 void sensor_stats_f32(..., sensor_stats_t *p_out)）要改
+    头文件 + 所有调用方，收益为零，不采纳。
+
+【8】重建验证（2026-10-30 23:26）
+------------------------------------------------------------------------
+8.1 环境
+    - e² studio v2026-07 + FSP 6.6.0（工程内 RASC 生成物：ADC/UART/I2C 已加）
+    - ARM GNU Toolchain 13.2.rel1（arm-none-eabi-gcc 13.2.1）
+    - GNU Make 4.4（e² studio 自带：eclipse/plugins/com.renesas.ide.exttools.gnumake.../mk/make.exe）
+
+8.2 命令（等价于 e² studio 里 Project → Clean → Build）
+    cd Debug
+    <e2studio>/eclipse/plugins/com.renesas.ide.exttools.gnumake.win32.x86_64_4.3.1.v20240909-0854/mk/make.exe -r -j12 clean
+    <同上 make.exe> -r -j12 all
+
+8.3 结果
+    - 37 个编译单元全部通过；**0 error / 0 warning**；
+    - 链接通过，arm-none-eabi-size：
+        text 48284 B / data 480 B / bss 3540 B / dec 52304 B
+    - 产物：Debug/Selective_hand_wash_water_recycling_system.elf（681364 B）
+            Debug/Selective_hand_wash_water_recycling_system.hex（137294 B）
+            Debug/Selective_hand_wash_water_recycling_system.map（223519 B）
+    - nm 复核（修复的符号都已进 ELF）：
+        T _write / T _read / T _close / T _lseek / T _fstat / T _isatty
+        T SysTick_Handler / T timebase_init / T sensor_clampf / T sensor_absf
+
+8.4 完整日志
+    C:\Users\Administrator\AppData\Local\Temp\dsh_sensor_work\fix_build\
+        build_clean_after_fix.log   （clean 后全量重建，0 error/0 warning）
+        build_after_fix.log         （增量重建，0 error/0 warning）
+        clean.log
+
+【9】为什么会发生 / 以后怎么避免
+------------------------------------------------------------------------
+9.1 为什么会发生
+    工程 src/ 与交付文档 txt 是两套副本。2026-10-30 工程 src/ 被局部改写时：
+      - 3 个实现函数被改回旧名（timebase_int / sensor_clamp / sensor_abs）；
+      - 插入排序条件被改反（`j > 0U` → `j < 0U`）；
+      - 其余文件被大改但头文件/调用点没同步。
+    而"单文件编译（-c）"只查声明、不查定义，所以问题攒到链接期才爆；
+    同时工程编译选项比文档验证时更严，把 x != x、返回结构体、无原型声明等
+    历史写法问题全暴露出来（其中 j < 0U 是真 bug）。
+
+9.2 以后避免
+    ① 单一副本原则：以交付文档的 FILE 段为权威版本；要改代码先改文档，再整体拷回
+       工程（或反过来，改完工程立刻回写文档），不要两边各改一半；
+    ② 每轮改完跑一次 full build：e² studio → Project → Clean → Build
+       （不要只 hit Build，增量编译不查链接、也不重报旧文件告警）；
+    ③ 告警当 bug 处理：本次 -Wtype-limits 一条告警背后就是一个排序失效；
+    ④ 工程里新增/删除源文件后，e² studio 要 Refresh（F5）让 Debug/subdir.mk 收录；
+       纯命令行 make 不会自动发现新文件。
+
+【10】下次从文档重新拷代码时的补丁清单（重要）
+------------------------------------------------------------------------
+如果以后又从 docs_sensor 的 FILE 段重新拷代码进 src/，请先把下面几项补上，
+否则相同报错会再来一遍：
+    ① 07_应用集成与串口协议.txt 的 app_main.c 段：缺 5 个 newlib 系统调用空桩
+       （见【3.3】③）；不补 → 链接失败（_close/_lseek/_read/_fstat/_isatty 未定义）。
+    ② 07 的 app_main.c 段：也缺新的 #include <sys/types.h>/<sys/stat.h> 与 5 个原型（见【3.3】①②）。
+    ③ 01_公共库_sensor_common.txt 的 sensor_common.c 段：缺 SysTick_Handler 前置声明
+       （见【6.1】）；只是告警，不影响链接。
+    ④ 01 的 sensor_common.h/.c 段：缺 sensor_is_nan_f32() 内联函数（见【5.3】①）、
+       缺 -Waggregate-return 的 pragma（见【7.3】）；只是告警。
+    ⑤ 02/04/05 的 sensor_tds / sensor_ds18b20 / sensor_pipeline 段：NaN 判断仍是
+       x != x（见【5.3】②）；只是告警。
+    —— 本工程 src/ 已按本文件修好，直接从当前工程继续开发即可；文档侧同步见 09 文档
+       的迭代记录（v1.2 计划项）。
+
+【11】本次改动清单（6 个文件 / 15 处，2026-10-30 23:26 构建版）
+------------------------------------------------------------------------
+文件（行数）                       改动点                                  SHA-256（前 16）
+  src/sensor_common.h  108 行        +sensor_is_nan_f32() 内联函数           2f22df4191ed9d1e
+  src/sensor_common.c  503 行        +SysTick_Handler 声明、3 个函数改名、
+                                     排序条件 j<0U→j>0U、统计函数 pragma     ad87c32e0f52e278
+  src/sensor_tds.c     220 行        NaN 判断改 sensor_is_nan_f32            bbc9306730d33eae
+  src/sensor_pipeline.c 1041 行      2 处 NaN 判断改 sensor_is_nan_f32       13331eac73a95891
+  src/sensor_ds18b20.c 964 行        1 处 NaN 判断改 sensor_is_nan_f32       d9369172db325ea9
+  src/app_main.c       1603 行       +sys 头文件、5 个原型、5 个系统调用空桩  4ac1823b2a8dee9c
+未改动：src/ 其余 15 个文件（含 hal_entry.cpp、hal_warmstart.c、decision/display/
+oled/ts300b 等）、ra_gen/、ra_cfg/、ra/、configuration.xml——FSP 生成物与本修复无关。
+
+【12】回滚方法
+------------------------------------------------------------------------
+如需回到修复前（不推荐，构建会重新失败）：按【2】【3】【4】【5】【6】【7】给出的
+"改法"反向替换即可（15 处精确字符串替换，互不交叉）。回滚后必须重新 Clean + Build
+验证；或者从交付文档 FILE 段重新拷代码，但请先按【10】补丁。
+
+【13】附录：clean 重建日志尾部（原样，2026-10-30 23:26）
+------------------------------------------------------------------------
+    Building file: ../ra/fsp/src/bsp/cmsis/Device/RENESAS/Source/startup.c
+    Building file: ../ra/fsp/src/bsp/cmsis/Device/RENESAS/Source/system.c
+    Building target: Selective_hand_wash_water_recycling_system.elf
+    arm-none-eabi-objcopy -O ihex "Selective_hand_wash_water_recycling_system.elf"  "Selective_hand_wash_water_recycling_system.hex"
+    arm-none-eabi-size --format=berkeley "Selective_hand_wash_water_recycling_system.elf"
+       text	   data	    bss	    dec	    hex	filename
+      48284	    480	   3540	  52304	   cc50	Selective_hand_wash_water_recycling_system.elf
+    （完整日志见【8.4】；全日志中 error: 0 条、warning: 0 条、undefined reference 0 条。）
+
+========================================================================

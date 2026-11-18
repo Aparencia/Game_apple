@@ -1,0 +1,24 @@
+* text=auto
+
+*.c      text
+*.h      text
+*.cpp    text
+*.md     text
+*.txt    text
+*.xml    text
+*.yml    text
+*.yaml   text
+*.json   text
+*.mk     text
+*.ld      text
+
+*.png    binary
+*.jpg    binary
+*.jpeg   binary
+*.gif    binary
+*.docx   binary
+*.xlsx   binary
+*.pptx   binary
+*.pdf    binary
+*.hex    binary
+*.elf    binary

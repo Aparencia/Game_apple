@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>接线速查卡 · 洗手水选择性回收装置（RA4M2_MINI）</title>
+<style>
+  :root{--ink:#0f172a;--muted:#475569;--bg:#f8fafc;--line:#cbd5e1;
+        --red:#b91c1c;--redbg:#fee2e2;--orange:#b45309;--orangebg:#fef3c7;
+        --green:#047857;--greenbg:#d1fae5;--blue:#1d4ed8;--bluebg:#dbeafe;
+        --purple:#6d28d9;--purplebg:#ede9fe;--gray:#e2e8f0}
+  *{box-sizing:border-box}
+  body{margin:0;padding:22px 24px 30px;background:var(--bg);color:var(--ink);
+       font-family:"Microsoft YaHei","PingFang SC",system-ui,sans-serif;font-size:13.5px;line-height:1.5}
+  h1{margin:0 0 2px;font-size:22px}
+  .sub{color:var(--muted);font-size:12.5px;margin-bottom:12px}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  @media print{body{background:#fff} .grid{grid-template-columns:1fr 1fr}}
+  .card{background:#fff;border:1px solid var(--line);border-radius:10px;padding:12px 14px;margin-bottom:14px;
+        box-shadow:0 1px 2px rgba(15,23,42,.04)}
+  h2{font-size:15px;margin:0 0 8px;padding-left:8px;border-left:4px solid var(--blue)}
+  h3{font-size:13.5px;margin:10px 0 4px}
+  table{border-collapse:collapse;width:100%;font-size:12.5px}
+  th,td{border:1px solid var(--line);padding:3px 6px;text-align:left;vertical-align:top}
+  th{background:#eef2ff;font-weight:600}
+  tbody tr:nth-child(even){background:#f8fafc}
+  code{font-family:Consolas,monospace;font-size:12px;background:#f1f5f9;padding:0 3px;border-radius:3px}
+  .chip{display:inline-block;border-radius:999px;padding:0 7px;font-size:11.5px;font-weight:700}
+  .c-red{background:var(--redbg);color:var(--red)} .c-org{background:var(--orangebg);color:var(--orange)}
+  .c-grn{background:var(--greenbg);color:var(--green)} .c-blu{background:var(--bluebg);color:var(--blue)}
+  .c-pur{background:var(--purplebg);color:var(--purple)}
+  ul{margin:4px 0 4px 18px;padding:0} li{margin:2px 0}
+  .box-red{border:1px solid #fca5a5;background:var(--redbg);border-radius:8px;padding:8px 10px;font-size:12.5px}
+  .box-grn{border:1px solid #6ee7b7;background:var(--greenbg);border-radius:8px;padding:8px 10px;font-size:12.5px}
+  .box-blu{border:1px solid #93c5fd;background:var(--bluebg);border-radius:8px;padding:8px 10px;font-size:12.5px}
+  pre{margin:4px 0;font-family:Consolas,monospace;font-size:12px;background:#f8fafc;border:1px dashed var(--line);
+      border-radius:6px;padding:8px;line-height:1.35;white-space:pre-wrap}
+  .foot{color:var(--muted);font-size:11.5px;text-align:right;margin-top:6px}
+</style>
+</head>
+<body>
+<h1>接线速查卡 · 洗手水选择性回收装置（RA4M2_MINI，固件 v1.3.0-OLED）</h1>
+<div class="sub">汇总 docs_sensor/00、12、15、16 的接线口径｜2026-11-14｜与旧文档冲突时以 15/16/17 为准</div>
+
+<div class="card">
+  <h2>① 孔位总表（U1/U2 均从板子下端往 Type-C 方向数：第 9 孔 = U1-12）</h2>
+  <table>
+    <thead><tr><th>孔位</th><th>芯片/网络</th><th>接什么</th><th>要点</th></tr></thead>
+    <tbody>
+      <tr><td><code>U1-5</code></td><td>P013 / AN11</td><td>浊度分压节点</td><td>经 1k+2k 分压后才可进；D(DO) 不接</td></tr>
+      <tr><td><code>U1-6</code></td><td>P014 / AN12</td><td>TDS AOUT</td><td>直连安全（0~2.3V）</td></tr>
+      <tr><td><code>U1-12</code></td><td>3V3</td><td>TDS VCC / DS18B20 VDD / A 型继电器 VCC</td><td>3.3V 总取电点</td></tr>
+      <tr><td><code>U1-16</code></td><td>GND</td><td>TDS GND / DS18B20 GND</td><td>就近模块地</td></tr>
+      <tr><td><code>U1-17</code></td><td>P500</td><td>DS18B20 DQ</td><td>4.7k 上拉到 3.3V</td></tr>
+      <tr><td><code>U2-8</code></td><td>P104</td><td>继电器模块 IN</td><td>3.3V 逻辑；P104 10k 方向按触发极性</td></tr>
+      <tr><td><code>U2-18</code></td><td>GND</td><td>继电器模块 GND</td><td>必须共地</td></tr>
+      <tr><td><code>U2-19/20</code></td><td>VIN ≈4.5~4.7V</td><td>浊度 VCC；A 型继电器 JD-VCC / B 型 VCC</td><td>只取不灌；选一个孔</td></tr>
+      <tr><td>U1-1/8/16、U2-4/6/11/14/18</td><td>GND</td><td>全部汇到端子排</td><td>星形单点接地</td></tr>
+    </tbody>
+  </table>
+  <div class="box-blu" style="margin-top:6px">板载不用接线：OLED（P407/P408 I2C0）、CH340E（P109/P110 UART）、LED1（P111）、K2（P000）。这些脚不要再挪作他用。</div>
+</div>
+
+<div class="grid">
+  <div class="card">
+    <h2>② 三路传感器</h2>
+    <table>
+      <thead><tr><th>信号</th><th>接线</th></tr></thead>
+      <tbody>
+        <tr><td>TDS VCC</td><td><code>U1-12</code>（3V3，严禁 5V）</td></tr>
+        <tr><td>TDS GND</td><td><code>U1-16</code></td></tr>
+        <tr><td>TDS AOUT</td><td><code>U1-6</code>（P014/AN12）直连</td></tr>
+        <tr><td>浊度 V</td><td><code>U2-19/20</code>（VIN 5V）</td></tr>
+        <tr><td>浊度 G</td><td>GND 地排 / <code>U2-18</code></td></tr>
+        <tr><td>浊度 A(AO)</td><td>→ R1 1k → 节点 → <code>U1-5</code>；节点 → R2 2k → GND；节点 → 0.1µF → GND</td></tr>
+        <tr><td>浊度 D(DO)</td><td><span class="chip c-red">悬空不接</span> 5V 电平，接 3.3V 脚会超压</td></tr>
+        <tr><td>DS18B20 VDD</td><td><code>U1-12</code>（3V3，严禁 5V）</td></tr>
+        <tr><td>DS18B20 GND</td><td><code>U1-16</code></td></tr>
+        <tr><td>DS18B20 DQ</td><td><code>U1-17</code>（P500），4.7k 上拉到 3.3V</td></tr>
+      </tbody>
+    </table>
+    <pre>浊度分压：
+A(AO) ──[R1=1k]──┬──► U1-5 (P013/AN11)
+                 ├──[R2=2k]── GND
+                 └──[0.1µF]── GND
+分压比 2/3：AO 4.5~4.7V → 节点 3.0~3.13V；上板前量 ≤3.2V</pre>
+  </div>
+
+  <div class="card">
+    <h2>③ 继电器 + 12V 二位三通阀</h2>
+    <h3>控制侧（按模块类型二选一）</h3>
+    <table>
+      <thead><tr><th>模块</th><th>接线（全部接板）</th></tr></thead>
+      <tbody>
+        <tr><td><b>A 型</b><br>带 JD-VCC，推荐</td>
+            <td>拆 JD-VCC 跳线：VCC→U1-12(3V3)；JD-VCC→U2-19/20(VIN)；GND→U2-18；IN→U2-8(P104)；就近并 100µF+0.1µF</td></tr>
+        <tr><td><b>B 型</b><br>三针</td>
+            <td>VCC→U2-19/20(VIN)；GND→U2-18；IN→U2-8(P104)；仅限光耦输入型，优先高触发</td></tr>
+      </tbody>
+    </table>
+    <div class="box-red" style="margin:5px 0">P104 下拉/上拉：高触发（high 版）P104→10k→GND；低触发（low 版）P104→10k→3V3。<br>
+      无光耦 PNP 低触发模块 <b>禁止直连 P104</b>（IN 会被抬到约 4.3V，超 3.3V IO 耐压）。</div>
+    <h3>功率侧（独立 12V，先空载验证再接阀）</h3>
+    <pre>12V/3A 适配器(+) ─ 2A 保险丝 ─ 船型开关 ─ 继电器 COM
+                                            NO ── 阀线圈(+)
+                                            阀线圈(−) ── 12V(−)
+1N4007 并在线圈两端：阴极(色环)→线圈+，阳极→线圈−；NC 悬空不接
+阀：单线圈弹簧复位、直动式、通径≥4mm、断电=排空；0.4~1.1A</pre>
+    <div class="box-grn">先做极性判定（不接 12V）：上电/复位 10 次继电器不动 + V1/V0 各 10 次 10/10 → 再接 12V/阀。断电=排空是 fail-safe。</div>
+  </div>
+</div>
+
+<div class="grid">
+  <div class="card">
+    <h2>④ 无源件清单</h2>
+    <table>
+      <thead><tr><th>元件</th><th>用途</th><th>数量</th></tr></thead>
+      <tbody>
+        <tr><td>1kΩ 1%</td><td>浊度分压 R1（串）</td><td>1</td></tr>
+        <tr><td>2kΩ 1%</td><td>浊度分压 R2（对地）</td><td>1</td></tr>
+        <tr><td>0.1µF 瓷片</td><td>浊度节点滤波 / 模块去耦</td><td>2</td></tr>
+        <tr><td>100µF/25V</td><td>继电器 VCC 去耦</td><td>1</td></tr>
+        <tr><td>4.7kΩ</td><td>DS18B20 上拉（座自带可免）</td><td>1</td></tr>
+        <tr><td>10kΩ</td><td>P104 下拉/上拉（按极性）</td><td>1</td></tr>
+        <tr><td>1N4007</td><td>阀线圈续流</td><td>1</td></tr>
+        <tr><td>2A 慢熔保险丝+座</td><td>12V 阀回路</td><td>1 套</td></tr>
+        <tr><td>船型开关 / 端子排</td><td>12V 总断 / 星形地</td><td>各 1</td></tr>
+        <tr><td>12V/3A、5V/2A 适配器</td><td>阀独立 12V；板+传感器 5V</td><td>各 1</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="card">
+    <h2>⑤ 上电前 10 项检查（缺一不上电）</h2>
+    <table>
+      <tbody>
+        <tr><td>1</td><td>断电接线完成，端子无松动/短路</td></tr>
+        <tr><td>2</td><td>U1-12 对 GND = 3.25~3.35V</td></tr>
+        <tr><td>3</td><td>U2-19/20 对 GND = 4.5~4.7V</td></tr>
+        <tr><td>4</td><td>TDS AOUT ≤2.4V，TDS VCC=3.3V</td></tr>
+        <tr><td>5</td><td>浊度分压节点 ≤3.2V；D(DO) 悬空</td></tr>
+        <tr><td>6</td><td>DS18B20 VDD=3.3V，DQ 4.7k 上拉</td></tr>
+        <tr><td>7</td><td>P104 10k 方向与固件极性一致</td></tr>
+        <tr><td>8</td><td>1N4007 阴极(色环)→线圈+，反向不通</td></tr>
+        <tr><td>9</td><td>12V：保险丝/船型开关/COM-NO/NC悬空</td></tr>
+        <tr><td>10</td><td>星形单点地；湿电分离；防水盒到位</td></tr>
+      </tbody>
+    </table>
+    <div class="box-red" style="margin-top:6px">上电顺序：先 5V（板+传感器）→ 自检/量压 → 再 12V（继电器/阀）；断电相反。首次上电不接阀，先空载听继电器。</div>
+  </div>
+</div>
+
+<div class="card">
+  <h2>⑥ 红线与固件对应</h2>
+  <div class="grid">
+    <div>
+      <div class="box-red">
+        <b>红线</b>
+        <ul>
+          <li>3.3V 引脚（P104/P013/P014/P500 等）不耐 5V；浊度 D(DO) 永久悬空；</li>
+          <li>浊度 AO 必须 1k+2k 分压，TDS/DS18B20 必须 3.3V 供电；</li>
+          <li>阀 12V 独立供电（2A 保险丝+船型开关），严禁从板取电；</li>
+          <li>星形单点共地，阀/继电器大电流地不经过开发板；</li>
+          <li>开发板只接排针/端子，禁止割线/焊板/拆焊板载器件。</li>
+        </ul>
+      </div>
+    </div>
+    <div>
+      <div class="box-blu">
+        <b>固件 v1.3.0-OLED（烧录前核对）</b>
+        <ul>
+          <li>high：<code>..._v1.3.0_high.hex</code>（161909 B，SHA 9A09F29C…，boot 19:24:30）</li>
+          <li>low ：<code>..._v1.3.0_low.hex</code>（161880 B，SHA EBE26BFC…，boot 19:24:29）</li>
+          <li>串口 115200 8N1：<code># [BOOT] SENSOR-NODE v1.3.0-OLED …</code>；<code># actuator: … on_level=HIGH|LOW</code></li>
+          <li>K2 短按切 OLED 三页（P1 水质/P2 执行器/P3 详情）；长按重采基线；MARK 用串口 <code>M</code></li>
+          <li>V1/V0/VA 手动驱动阀；P 打印状态；B 重采基线；R/E 事件开始/结束</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="foot">接线速查卡 v1.0（2026-11-14）｜依据 docs_sensor/00、12、15、16；完整细节见 17_接线总表_整理版.txt 与 12/15 文档</div>
+</body>
+</html>

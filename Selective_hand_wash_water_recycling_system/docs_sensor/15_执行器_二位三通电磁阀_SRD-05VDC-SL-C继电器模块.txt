@@ -1,0 +1,1507 @@
+================================================================================
+ 15 执行器接入：二位三通电磁阀 + SRD-05VDC-SL-C 单路继电器模块（固件 v1.2.0-VALVE）
+ --------------------------------------------------------------------------------
+ 工程：Selective_hand_wash_water_recycling_system
+ 板卡：RA4M2_MINI（R7FA4M2AD3CFL，FSP 6.6.0，离线 GCC 构建）
+ 编写：2026-11-13
+ 适用固件：Debug\Selective_hand_wash_water_recycling_system_v1.2.0_high.hex（默认，高触发）
+           Debug\Selective_hand_wash_water_recycling_system_v1.2.0_low.hex（低触发模块用）
+ 本文档对应源码：src\actuator_valve.h、src\actuator_valve.c、src\app_main.c
+ 配套文档：00_总览_接线与FSP配置.txt（总览/串口协议）、08_验收测试与标定指引.txt（整机验收）、
+           12_硬件电路连接方案.txt（电气细节）、13/14（v1.1.2 现场修复背景）、
+           15_附图_执行器接线图_SRD继电器与二位三通阀.html（接线图，浏览器打开；预览图 PNG 见 §0.5）、
+           15_附录A_执行器硬件资料核实.txt（厂商数据/模块电路/来源 URL，施工前建议先读）
+ 定位：v1.2.0 把"假执行器"（LED1 演示）升级为真实执行器——
+       P104 → SRD-05VDC-SL-C 单路继电器模块 IN → 常开触点 → 12V 二位三通阀单线圈。
+       安全底线：断电/复位/程序跑飞 → 继电器释放 → 阀线圈失电 → 弹簧复位到排空口。
+================================================================================
+
+
+0. 先看结论（TL;DR）
+--------------------------------------------------------------------------------
+0.1 一句话结论
+    v1.2.0 起 P104 不再是"预留钩子"：固件把逻辑位置 DRAIN/RECOVER 映射成继电器
+    释放/吸合，继电器常开触点把独立 12V 电源接到二位三通阀的（单）线圈。
+    断电 = 线圈失电 = 弹簧复位 = 排空口通（fail-safe）；默认固件按"高电平触发
+    模块"构建（回收=HIGH、排空=LOW）。本阶段只适配"单线圈弹簧复位"阀；双线圈
+    两位自锁阀单继电器驱动不了，也不满足 fail-safe（见 §1.3）。
+
+0.2 烧哪个文件（两版 hex；先看 boot 指纹，确认没烧混）
+
+  版本    文件（都在工程 Debug\ 目录下）                                字节数    用于
+  ------  ----------------------------------------------------------  --------  ----------------
+  高触发  Selective_hand_wash_water_recycling_system_v1.2.0_high.hex  146969    默认；高电平触发模块
+  低触发  Selective_hand_wash_water_recycling_system_v1.2.0_low.hex   146969    低电平触发模块
+
+  SHA-256（PowerShell：Get-FileHash <file> -Algorithm SHA256）：
+    高触发 8F15D194684407EA363EB8E485E0A17D10B372C95664FEF1AEF81A0D04CD1C3E
+    低触发 0AFA85618D3AFCF25FD21BC1A4524BCACFA63B1D98C08BA530800D0686C3E043
+  串口 boot 指纹（看到这一行才说明烧的是哪个版本）：
+    高触发 # [BOOT] SENSOR-NODE v1.2.0-VALVE build Nov 13 2026 18:26:17
+    低触发 # [BOOT] SENSOR-NODE v1.2.0-VALVE build Nov 13 2026 18:26:11
+  （boot 行日期来自 __DATE__；自己重编时时间会变，属正常现象——判断版本只认
+    "v1.2.0-VALVE" 与固件内电平配置；下一条 # actuator: 行的 on_level=HIGH/LOW 也
+    直接告诉你这版按哪种模块编的。）
+  两版 hex 字节数相同（只差一个宏），不能只看大小区分：用 SHA-256 或 boot 行确认。
+
+  默认构建 = 高触发；只有 §4 实测判定为低电平触发模块时，才改用 low 版（或改宏重编），
+  并同步把 P104 下拉改成上拉。
+
+0.3 构建结果（可复验，细节见 §7）
+    工具链  arm-none-eabi-gcc 13.2.1（Arm GNU Toolchain 13.2.Rel1，离线）
+    构建    Debug 目录 make ... -j4 all，0 error / 0 warning
+            （严格告警集：-Wall -Wextra -Wconversion -Wmissing-declarations
+              -Wpointer-arith -Wshadow -Wlogical-op -Waggregate-return -Wfloat-equal
+              -std=c99，见 Debug\src\subdir.mk 的 C 编译规则）
+    size    text 51724 / data 480 / bss 10836（arm-none-eabi-size --format=berkeley）
+    elf     702024 字节；arm-none-eabi-nm 可查到 valve_init / valve_request /
+            valve_task / valve_get_out / valve_pos_str 五个全局符号
+    注意    本工程没有浮点 printf、没有动态内存；执行器模块不 printf、不 delay，
+            可在 50 ms tick 里直接调用。
+
+0.4 本阶段"能做什么 / 不能做什么"（报告口径，禁止把"不能"写成"能"）
+    ✅ 真实电气换向：判别为"可回收"→ 继电器吸合 → 12V 到阀线圈 → 回收口；
+       其余状态（WAIT/FLUSH/UNCERTAIN/SOAP/L1/L2/无基线/传感器故障）→ 释放 → 排空
+    ✅ 继电器动作计数 switch_count、本次/累计通电时长 on_time_ms / total_on_ms
+    ✅ fail-safe：上电第一条外设操作即把 P104 锁"继电器释放"电平；写/回读失败锁存
+       告警，逻辑位置保持排空（七层链条见 §6.6）
+    ✅ 驻留防抖 min_dwell=500 ms、单次连续吸合上限 max_on=120000 ms（120 s）、
+       超时强制释放后冷却 cooldown=10000 ms（10 s）
+    ✅ 数据留痕：# VALVE 事件行 + P 状态两条 # valve: 行 + 上电摘要三行 # actuator:
+    ⏳ 不能：一只单继电器不能驱动"双线圈两位自锁"阀（见 §1.3）；
+       触点粘连/阀机械卡在回收位时方向不保证（船型开关是现场最终手段）；
+       OLED 显示的是"判别状态"，不是继电器触点实测位置（见 §10.2）；
+       CSV 仍是 17 列、不加阀列（决策与理由见 §6.8）。
+
+0.5 交付清单
+
+    文件                                                        类型   字节数    说明
+    ----------------------------------------------------------  ----  --------  --------------------------
+    src\actuator_valve.h                                        新增    7473     执行器 API/配置/输出结构
+    src\actuator_valve.c                                        新增   13344     执行器状态机实现
+    src\app_main.c                                              修改   74789     7 处改动，见 §6.3
+    Debug\..._v1.2.0_high.hex                                   产物  146969     默认（高触发）
+    Debug\..._v1.2.0_low.hex                                    产物  146969     低触发模块用
+    Debug\..._v1.2.0_high.elf / ..._low.elf                     产物  702024     调试符号（可选）
+    docs_sensor\15_执行器_二位三通电磁阀_SRD-05VDC-SL-C继电器模块.txt  文档  本文件    施工/验收/排障
+    docs_sensor\15_附图_执行器接线图_SRD继电器与二位三通阀.html     文档  30 KB     接线图（浏览器打开）
+    docs_sensor\15_附图_执行器接线图.png                          文档 623 KB     接线图预览（PNG）
+    docs_sensor\15_附录A_执行器硬件资料核实.txt                    文档  51 KB     数据手册/模块电路/来源
+    Debug\src\subdir.mk                                         修改  —        已手动同步新源文件（§7.4）
+
+0.6 施工顺序（照这个顺序做；任何一步没过，不要进下一步）
+    ① §1 确认器件类型（单线圈弹簧复位阀 + 单路 5V 继电器模块 + 模块输入类型）
+    → ② §7 只接 USB、烧 high 版，核对 boot 指纹与 # actuator 行（此时不接 12V/阀）
+    → ③ §3 断电接控制侧（P104/供电/GND + 10 kΩ + 去耦；优先 A 型拆 JD-VCC）
+    → ④ §4 端口/极性判定（此时绝不接 12V/阀；上电/复位 10 次不动作 + V1/V0 10/10）
+    → ⑤ §3.4 接功率侧（12V→保险丝→船型开关→COM；NO→阀+；1N4007；
+       12V 适配器最后插、船型开关保持断开）
+    → ⑥ §8 T1~T10 逐项验收（T2 上电不动作、T5 阀方向、T6 断电 fail-safe 必须过）
+    → ⑦ 最后接水、试漏、闭环联调。
+    顺序关键：② 烧固件必须在 ③④ 之前（§4.3 的判定要用 high 版固件）；⑤ 接 12V 必须
+    在 ④ 之后（T2/T4 的"不动作"判据必须在 12V 未接时做）。
+    红线：未经 §4 判定就接 12V 上电，是本阶段唯一会"上电瞬间阀误吸合"的路径；
+          更危险的是"无光耦 PNP 低触发模块直连 P104"（IN 电压会被抬到约 4.3 V，
+          超过 RA4M2 的 3.3V IO 耐压）——必须按 §1.2/§4 判型后再接。
+
+0.7 与其它文档的关系
+    00 文档：总览/接线速查/串口协议；本阶段已在 00 §2/§3.4/§6/§10 做同步；
+    08 文档：整机验收 T0~T10；本阶段执行器专项验收见本文 §8（本文 T1~T10 是执行器/
+             电气专项，编号与 08 的 T0~T10 不同，引用时请写明出处）；
+    12 文档：电气连接方案；其 §6"预留接口"的执行器口径以本文为准；§3.2 的继电器
+             功耗预算（45~55 mA）已偏小，以本文 §2.3 的 65~80 mA 为准；
+    13/14：v1.1.2 与"三无"修复背景；本阶段不改它们的结论与烧录步骤。
+
+
+1. 器件与选型确认（先对实物，再接线）
+--------------------------------------------------------------------------------
+1.1 继电器本体：Songle SRD-05VDC-SL-C（SRD/T73 系列，厂商规格书数据）
+    型号拆解：SRD(T73) 系列，05VDC=5V 线圈，SL=标准 0.36 W 密封型，C=SPDT 转换触点；
+    尺寸 19.2×15.5×15.8 mm Max，约 9 g。厂商规格书关键参数（23°C）：
+
+      项目                        值                                 备注
+      额定线圈电压                5 VDC                              同系列 3/6/9/12/… 可选
+      线圈功率 / 电阻             0.36 W / 69.4 Ω ±10%               "70Ω/70mA"是近似说法
+      线圈电流（5V / 4.5V）       约 72 mA / 约 65 mA                4.5V 时 P≈0.29W
+      吸合电压 Pick-up（Max）     3.75 V = 75% 额定                  低于它必须吸合（常温）
+      释放电压 Drop-out（Min）    0.5 V = 10% 额定                   高于它必须保持
+      允许最大电压                6.5 V = 130% 额定
+      吸合 / 释放时间             ≤10 ms / ≤5 ms（无二极管）         模块板带续流二极管
+      触点形式                    SPDT：COM / NO / NC（C 型）         本工程只用 COM–NO
+      触点额定（阻性）            10 A 250 VAC / 10 A 28 VDC          最大切换 277VAC/30VDC
+      最大切换功率                2770 VA / 300 W                    安全认证另有 3A/125VAC 感性
+      接触电阻 / 绝缘电阻         ≤100 mΩ / 100 MΩ                   介质耐压 线圈-触点 1500VAC
+      电气 / 机械寿命             ≥1×10^5 次/10A 档（注）/ 1×10^7 次 注：规格书并列 10^4/10^5 两档
+      环境温度                    -40~+85°C                           高温吸合电压会上升
+    本体内部【没有】续流二极管（规格书"释放时间 without diode"为证）；市售模块板几乎都
+    在继电器线圈两端带一颗 1N4148/1N4007——它保护模块自己的驱动三极管，不保护外部
+    5V 电源，也不保护 12V 阀线圈。阀线圈必须另外并 1N4007（§3.4）。
+
+    到货先量线圈电阻：5V 版本应在 63~76 Ω（69.4Ω±10%）。量到 400Ω 左右是 12V 版，
+    量到 20~30Ω 可能是 3V/6V 版或假货，先退换，不要硬接。
+
+1.2 单路 5V 继电器模块：两种电路，先判型再接线（本工程最关键的安全步骤）
+    市售"1 路 5V 继电器模块（SRD-05VDC-SL-C）"最常见两类：
+
+      A 型：光耦隔离型，4~6 针，带 JD-VCC 跳线（部分带 H/L 触发选择跳线）
+            引脚：VCC、GND、IN（+ JD-VCC；多路模块另有 IN1..INn）
+            电路：IN → 限流电阻 → 光耦(PC817)LED；光耦输出 → 三极管 → 继电器线圈；
+                  线圈两端有续流二极管；VCC 只供输入侧，JD-VCC 供线圈侧。
+            跳线：JD-VCC 与 VCC 之间默认短接（同一电源、不隔离）；拆开后可分别供电。
+      B 型：三针 VCC/GND/IN，无 JD-VCC
+            可能仍带光耦（板上能看到 4 脚 PC817 小黑块），也可能只是 PNP/NPN 三极管直驱。
+            低触发（常见 PNP 或 PNP+光耦）：IN 拉低导通；高触发（NPN/MOS）：IN 拉高导通。
+
+    3.3V GPIO 能否驱动 5V 模块——按类型给出结论（详见附录A §2.4）：
+
+      场景                                          可靠性      规避/说明
+      --------------------------------------------  ----------  ------------------------------
+      光耦高触发，VCC=3.3V 或 4.5~4.7V              通常可用     LED 电流约 2.1mA@1k；必须实测
+      光耦低触发，VCC=5.0V，IN=3.3V                 不可靠      关断残余约 0.5mA，可能半导通/不释放
+      光耦低触发，VCC=4.5~4.7V，IN=3.3V             临界        残余约 0.1~0.2mA；无厂商保证，不推荐
+      三针无光耦低触发（PNP），VCC=5V               ❌ 禁止     3.3V 高关不断；IN 悬空/高阻会被抬到
+                                                              约 4.3V，超过 RA4M2 IO 耐压（非5V容忍）
+      三针无光耦高触发（NPN），VCC=5V               视基极电阻  可能不饱和；实测或加电平转换
+    本工程推荐（最稳，优先照做）：
+      选 A 型（带 JD-VCC 跳线）模块，拆掉 JD-VCC 跳线：
+        模块 VCC  → 开发板 3.3V（U1-12）     ← 只给光耦输入侧，几 mA
+        模块 JD-VCC→ 开发板 VIN（U2-19/20，≈4.5~4.7V） ← 给继电器线圈，约 62~68mA
+        模块 GND  → 开发板 GND / 地排（必须共地）
+      这样 IN 只看到 3.3V 域：高触发/低触发都能可靠关断，P104 也不会承受 >3.3V 电平。
+      拆跳线后光耦两侧不再共电源，但 GND 仍相连，不提供电气隔离（只作电平/驱动）。
+    只有 B 型三针模块时：
+      只能用"光耦输入 + 高电平触发"款，并按 §4 用板实测 10/10 后才算通过；
+      低触发光耦款在 VIN 供电下属于规格外，必须实测关断余量；无光耦 PNP 款禁止直连，
+      必须加 NPN/MOS/ULN2003 等电平转换（或换模块）。不要"先接上试试"——可能打坏 P104。
+    模块上的 H/L 触发选择跳线：优先拨到 HIGH（与默认固件语义一致，fail-safe 简单：
+    P104 低=释放=排空）；拨到 LOW 就必须用 low 版 hex 且把 10k 下拉改上拉。
+
+1.3 12V 二位三通电磁阀：只能选单线圈弹簧复位型
+      项目          单线圈弹簧复位（本工程用）      双线圈两位自锁（不选）
+      ------------  ------------------------------  --------------------------------
+      线圈/引线      1 个线圈、2 根线                2 个线圈、3 根线（公共+线圈A+线圈B）
+      断电位置       弹簧回初始位（本工程=排空口通） 保持最后位置（无弹簧、记忆）
+      是否保持       需持续通电保持                  断电即保持，无需持续通电
+      驱动           单路继电器即可（COM-NO）        需 2 路继电器/双刀，单路不行
+      fail-safe      断电/复位/跑飞→回排空（满足）   断电保持原状态（不满足）
+    选型硬指标（下单前逐条核对）：
+      ☐ 二位三通、一进两出、一路常开一路常闭、直动式（零压启动，重力台架 3~9kPa 必须）
+      ☐ 断电时进水口通到排空口（到货用嘴吹/针筒打气/接水验证；方向不对先换管口/换货）
+      ☐ 通径 ≥4 mm（G1/4 只是螺纹，不等于通径；1.6~2.5mm 在重力台架下流量不够）
+      ☐ 12V 线圈，功率/电流以铭牌为准（常见 0.4~1.1 A，约 4.8~13.2 W；线圈电阻约 11~30Ω）
+      ☐ 密封 EPDM/耐皂液；连续通电时间/ED 问客服（本项目软件限制单次 120 s + 冷却）
+      ☐ 买到双线圈款就停：单继电器不能驱动，必须改成 2 路继电器 + 脉冲换向固件（本阶段不做）
+
+1.4 必问/必测清单（到货当天做完，记录进 §11.4）
+    ① 模块到底是 A 型（有 JD-VCC）还是 B 型（三针）？板上有没有 4 脚 PC817 光耦？
+    ② 触发极性：高触发还是低触发？有没有 H/L 跳线？跳线当前位置？
+    ③ IN 悬空时对 GND 电压（§4.2）：≈VCC → 低触发嫌疑/内部上拉；≈0V → 高触发嫌疑。
+    ④ 3.3V 驱动下 V1/V0 各 10 次是否 10/10（不接 12V，只接控制侧）。
+    ⑤ 吸合瞬间模块 VCC 与线圈两端电压：线圈端 ≥4.2 V 为合格（VIN 4.5~4.7V 时）。
+    ⑥ 阀断电方向：断电时水只从排空口出（接水/吹气验证）。
+    ⑦ 阀线圈电阻/稳态电流（12V 下），与铭牌一致；并 1N4007 后再复测。
+    ⑧ 阀连续通电 2 min 温升（不烫手）；问客服 ED/连续通电限制。
+
+
+2. 系统接线总览
+--------------------------------------------------------------------------------
+2.1 系统示意（本阶段相关部分）
+
+    [220V]──12V/3A 适配器(内正外负)──2A 保险丝──船型开关──继电器 COM
+                                                          继电器 NO──阀线圈(+)
+                                                          阀线圈(−)──12V(−)
+                                   1N4007 并在阀线圈两端（阴极→线圈+，阳极→线圈−）
+
+    [220V]──5V/2A 适配器──USB-C──RA4M2_MINI
+                                  ├─ U1-12(3V3) ── A 型模块 VCC（拆 JD-VCC 时，只给光耦输入）
+                                  ├─ U2-19/20(VIN≈4.5~4.7V) ── A 型 JD-VCC / B 型 VCC（线圈电源）
+                                  └─ U2-8(P104) ── 模块 IN（3.3V 逻辑）
+
+    地：12V(−)、5V(−)、开发板 GND、模块 GND 只在"接线端子排"单点汇合（星形共地）；
+        阀/继电器的大电流地单独一根到端子排，绝不经过开发板地线。
+
+2.2 控制侧与功率侧的分界（必须记牢）
+    控制侧 = 3.3V 域：P104、模块 IN、模块 VCC（A 型拆跳线后是 3.3V）、GND。
+    功率侧 = 12V 域：适配器、保险丝、船型开关、继电器触点（COM/NO）、阀线圈、1N4007。
+    两域唯一的连接是继电器触点（电气上仍共地，但 12V 不回到开发板任何引脚）。
+    禁止：从开发板 5V/3V3 给阀供电；禁止把 12V 接到模块 VCC/IN/GND。
+
+2.3 电流/功率预算（本阶段实测口径）
+    5V 支路（板 + 传感器 + 继电器线圈）：
+      板自身 + DS18B20 + OLED + 浊度模块：约 60~100 mA
+      继电器模块（A 型拆 JD-VCC 时）：线圈 62~68 mA（VIN 侧）+ 光耦输入 2~5 mA（3V3 侧）
+      → VIN 侧合计约 130~180 mA，USB 500mA 预算充裕；B 型三针模块 VCC=VIN 时约 65~80 mA。
+    12V 支路（只给阀）：0.4~1.1 A（按阀铭牌），2A 慢熔保险丝 + 12V/3A 适配器。
+    纠正：12 文档 §3.2 写"继电器模块 45~55 mA"是按线圈额定值估算偏小；按 5V/69.4Ω
+          实际约 72 mA，建议按 80~100 mA 预留（含光耦/LED）。
+
+
+3. 详细接线步骤（断电接线！接好、量过、再上电）
+--------------------------------------------------------------------------------
+3.1 断电接线顺序（每步做完用万用表量一遍再接下一步）
+    ① 拔掉 5V/12V 两个适配器，船型开关断开，阀不接。
+    ② P104（U2-8）与 GND 之间接 10 kΩ 下拉（高触发候选；电阻焊在洞洞板/接线端子上，开发板只插排针、不焊板）；若已确认低触发，
+       改为 10 kΩ 上拉到 3.3V（U1-12）。不确定时按高触发接下拉（默认固件配高触发）。
+    ③ 模块 VCC/GND/IN 三根线接好（A 型按 §3.2 拆 JD-VCC 接法；B 型 VCC→VIN）。
+    ④ 模块 VCC–GND 就近并 100 µF 电解 + 0.1 µF 瓷片（吸合瞬间防 VIN 被拉跌）。
+    ⑤ 先只接控制侧上电、做 §4 极性判定（此时 12V 绝不接）。
+    ⑥ 判定通过后，按 §3.4 接功率侧：12V 适配器 → 2A 保险丝 → 船型开关 → COM；
+       NO → 阀线圈(+)；线圈(−) → 12V(−)；1N4007 并在线圈两端（阴极→线圈+）。
+    ⑦ 星形共地：12V(−)、5V(−)、板 GND、模块 GND 只在端子排汇合；阀地线单独走。
+    ⑧ 上电前按 §3.6 十项检查逐项打勾；先空载（不接水）听继电器/量触点 10 次。
+    ⑨ 最后接水路：阀体竖直、线圈朝上，阀前加 Y 型滤网；先清水试漏 10 min。
+    ⑩ 闭环演示：R 开始 → 判别 → 阀动作；断电演示 fail-safe（T6）。
+
+3.2 控制侧接线（两种模块的接法，按实测类型选一种）
+
+    A 型（带 JD-VCC 跳线，推荐）——拆跳线，双电源：
+      模块端子        接到                          要点
+      -------------  ----------------------------  ------------------------------------
+      VCC            开发板 3.3V（U1-12）         只给光耦输入侧（约 2~5 mA）
+      JD-VCC         开发板 VIN（U2-19/20）        给继电器线圈（约 62~68 mA）
+      GND            开发板 GND（U2-18）/ 地排     必须共地；拆跳线后仍共地
+      IN             开发板 P104（U2-8）           3.3V 逻辑，串 0 Ω 直连
+      跳线            JD-VCC 跳线：拆掉            保留时 VCC=JD-VCC，3.3V 触发不可靠
+    注意：拆跳线后 VCC 与 JD-VCC 不再短接；先接 VCC/GND 再接 JD-VCC，避免反灌。
+          上电顺序：先开板（3.3V/VIN 就位）→ 后开 12V；断电相反。
+
+    B 型（三针 VCC/GND/IN）——单电源：
+      模块端子        接到                          要点
+      -------------  ----------------------------  ------------------------------------
+      VCC            开发板 VIN（U2-19/20）        5V 线圈电源；≈4.5~4.7 V
+      GND            开发板 GND / 地排             必须共地
+      IN             开发板 P104（U2-8）           只允许光耦输入型；优先高触发
+    注意：B 型低触发光耦款在 VIN 供电时属规格外（关断残余 0.1~0.2mA），必须按 §4 实测；
+          无光耦 PNP 低触发款禁止直连 P104（IN 会被抬到 ~4.3V，打坏 IO）。
+
+    P104 下拉/上拉（两种模块都要）：
+      高触发：P104 ── 10 kΩ ── GND       （默认；P104 高=吸合，低/高阻=释放）
+      低触发：P104 ── 10 kΩ ── 3.3V      （配合 low 版 hex；P104 低=吸合，高=释放）
+      这个电阻覆盖"复位/配置完成前引脚高阻期"，软件不能替代它。
+
+3.3 去耦/布线
+    - 模块 VCC（B 型）或 JD-VCC（A 型）就近并 100 µF 电解 + 0.1 µF 瓷片；电解耐压 ≥10V。
+    - 电源线短而粗（≥24AWG），不要用长细杜邦线；IN 信号线远离 12V 线与阀体。
+    - 模块与开发板之间保留 ≥10 cm，避免继电器动作时的磁场/地弹干扰 ADC（TDS 通道）。
+
+3.4 功率侧 12V 回路（继电器触点 → 阀线圈；只在 §4 通过后接）
+
+    12V 适配器（内正外负，空载 11.4~12.6 V）
+      └─(+)── 2A 慢熔保险丝 ── 船型开关 ── 继电器 COM
+                                            继电器 NO ── 阀线圈(+)
+                                            阀线圈(−) ── 12V(−)
+      1N4007：阳极接线圈(−)，阴极（色环）接线圈(+)；紧贴阀线圈端子安装（引线 ≤50mm）
+      继电器 NC：悬空不接（接 NC 会变成"断电=通电"，破坏 fail-safe）
+    说明：
+    - 用 COM–NO：继电器释放（断电/复位/程序未初始化）时阀线圈失电 = 排空位，fail-safe；
+      继电器吸合 = 回收位。不要用 COM–NC 反接。
+    - 1N4007 必须装：直流感性负载断电反峰会打触点/干扰 MCU；反接 = 12V 短路（烧保险丝）。
+    - 12V 回路严禁与 5V 回路并联/共线；两路只在端子排 GND 单点汇合。
+    - 阀线圈电阻约 11~30Ω（按 0.4~1.1A）；接阀前先量线圈电阻确认不是 220V 阀（无穷大/很小）。
+
+3.5 端子/线色对照表（贴到接线盒盖内侧）
+
+    信号             从                              到                      线色   要点
+    --------------  ------------------------------  ----------------------  -----  ----------------------
+    阀控制 IN        U2-8（P104）                    模块 IN                 红     3.3V 逻辑；P104 10k 下拉
+    模块 VCC(A型)    U1-12（3V3）                    模块 VCC                黄     拆 JD-VCC 后只给光耦
+    模块 VCC(B型)    U2-19/20（VIN）                 模块 VCC                橙     4.5~4.7V；就近 100µF
+    模块 JD-VCC(A)   U2-19/20（VIN）                 模块 JD-VCC             橙     线圈电源 62~68mA
+    模块 GND         U2-18 或地排                   模块 GND                黑     必须共地
+    12V 正           适配器+→2A 保险丝→船型开关       继电器 COM              红    开关在触点上游
+    阀正             继电器 NO                       阀线圈(+)               橙    只接 NO；NC 悬空
+    阀负/12V 负      阀线圈(−)                       端子排 12V(−)           黑    单独到端子排，不过板地
+    续流二极管      1N4007 阳极→线圈(−)              阴极→线圈(+)            紫    必须装；反接短路
+
+3.6 上电前 10 项检查（逐项打勾，缺一不上电）
+    ① 断电接线完成，所有端子重新拧紧，目视无铜丝外露/短路；卡箍齐全。
+    ② P104 下拉（高触发）或上拉（低触发）电阻已焊：10 kΩ，阻值实测 9.5~10.5 kΩ。
+    ③ 模块类型与接法匹配：A 型拆了 JD-VCC 吗？B 型是光耦输入吗？（不确定→回 §1.2/§4）
+    ④ 5V 未接 12V 时，模块 VCC–GND 电压：A 型 VCC=3.25~3.35V、JD-VCC=4.5~4.7V；
+       B 型 VCC=4.5~4.7V。
+    ⑤ 12V 适配器空载 11.4~12.6 V，极性内正外负。
+    ⑥ 保险丝已装（2A 慢熔），船型开关在断开位。
+    ⑦ 1N4007 方向：阴极（色环）→ 线圈 +；万用表二极管档确认（反向不通）。
+    ⑧ COM=12V+（保险丝后）、NO→线圈+、NC 悬空。
+    ⑨ 星形共地：四路 GND 只在端子排一点汇合；阀地不经过开发板。
+    ⑩ 固件版本：串口 boot 行 = # [BOOT] SENSOR-NODE v1.2.0-VALVE ... 且
+       # actuator: valve ready (P104 locked at relay-OFF/drain, on_level=HIGH|LOW) 与
+       所烧 hex/模块极性一致。
+
+
+4. 模块类型与触发极性判定（必须先做；此时绝不接 12V/阀）
+--------------------------------------------------------------------------------
+4.1 为什么必须先判定（两个真实风险）
+    ① 极性判错：低触发模块 + 高触发固件 → 上电/复位瞬间 P104 为释放电平（LOW），
+       低触发模块会立刻吸合 → 若 12V 已接，阀上电就切到回收口（违反 fail-safe）。
+    ② 输入电压风险：P104 不是 5V 容忍脚（本板仅 P206/P407/P408/P409 可 5V 输入）。
+       低触发/无光耦模块在 P104 高阻（复位、调试器 halt、初始化前）时，IN 可能经
+       模块内部上拉/PNP 被抬到约 4.3~4.7V，超过 IO 绝对最大 3.6V → 可能打坏 P104。
+       所以"先判型、只接 3.3V 域（A 型拆 JD-VCC）"是硬要求，不是可选优化。
+
+4.2 目视 + 万用表判型（模块单独测，先不接开发板）
+    ① 目视：数针脚（3/4/5/6），找 4 脚 PC817 小黑块（有=光耦），找 JD-VCC 跳线、
+       找 H/L 或 LOW/HIGH 丝印跳线；抄继电器丝印（应为 SRD-05VDC-SL-C）与触点档位。
+    ② 只用 5V 电源（或可调电源，限流 100mA）：VCC→5V、GND→地，JD-VCC 跳线保留，
+       IN 悬空。预期：继电器不吸合；万用表通断档 COM–NC 通、COM–NO 断。
+       若 IN 悬空就吸合：输入有内部上拉/PNP 结构，记下"IN 悬空电平高"。
+    ③ 量 IN 对 GND 电压：≈VCC（3.5~5V）→ 低触发嫌疑/内部上拉；≈0V → 高触发嫌疑。
+    ④ 点线判极性（最可靠）：用导线把 IN 碰 VCC → 吸合=高触发；把 IN 碰 GND → 吸合=低触发。
+       两种都试一次，记录哪种吸合；吸合时量 COM–NO 应通（<1Ω），释放时应断。
+    ⑤ 判类型：无 4 脚光耦 + IN 悬空≈VCC + 3.3V 关不断 → 判定"无光耦 PNP 低触发"，
+       禁止直连 P104（必须电平转换/换模块）。
+    ⑥ 3.3V 复测：控制电源改 3.3V（VCC=3.3V 或 IN 用 3.3V 电平），重复④各 10 次，
+       必须 10/10 吸合且 10/10 释放，无抖动/延迟。
+    ⑦ 关断余量（低触发专用）：VCC=5V、IN=3.3V，观察 30 s/10 次；有吸合/抖动/延时释放
+       → 判"5V 供电不兼容 3.3V"，按 4.4 处理。
+    ⑧ 拆 JD-VCC 复测（A 型）：拆跳线，VCC=3.3V、JD-VCC=5V、GND 共地，重复④⑥；
+       量吸合时线圈两端电压 ≥4.2V 为合格；IN 串万用表 mA 档，3.3V 时 ≥2mA 为工程合格线。
+
+4.3 用开发板判定（只接控制侧：VCC/GND/IN + 10k；12V 与阀都不接）
+    [0~30 秒] 不动作检查（最关键）
+      烧 high 版 → 上电：LED1 快闪 3 下 → 串口出
+        # [BOOT] SENSOR-NODE v1.2.0-VALVE build ...
+        # actuator: valve ready (P104 locked at relay-OFF/drain, on_level=HIGH)
+      同时听/看继电器：应完全不动（无咔哒声、模块 LED 不亮）；COM–NO 断开。
+      上电/复位各做 1 次都不动 → 进入下一段；只要动过一次 → 立即断电，按 4.4 的 A 分支处理。
+    [30 秒~3 分钟] 受控动作检查
+      a) 发 V1：应咔哒吸合、模块 LED 亮、串口回
+             # valve: FORCE RECOVER (relay ON -> 12V valve recover port)
+             # valve mode=MANUAL_RECOVER enabled=1 (0=fake LED only, 1=P104 drives relay)
+         同时应出现 "# VALVE t=... pos=RECOVER relay=1 count=1 reason=MANUAL_RECOVER"；
+         万用表量 COM–NO：导通（接触电阻量级 0.5Ω，普通表可能显示 0.0~0.3Ω）。
+      b) 发 V0：咔哒释放、串口回 FORCE DRAIN；量 COM–NO：断开；应有 pos=DRAIN 的 # VALVE 行。
+      c) 重复 V1/V0 共 10 次：10/10 都动作，才算"3.3V 能可靠触发"（T3 判据）。
+      d) 发 VA 回自动；发 P 核对两条 # valve: 行：pos=DRAIN、relay=0、count 与吸合次数一致。
+    [3~5 分钟] 复位抗扰检查
+      连续 10 次按复位（或拔插 USB）：每次复位后 1 s 内听/量继电器，10 次都不应吸合。
+      任一失败 → 10k 电阻没装好/接触不良，或模块极性与固件/电阻方向不匹配，按 4.4 处理。
+      这一项通过后才允许接 12V 功率侧。
+
+4.4 判错/异常的处理分支（先断电再改线；改完从 4.3 重做）
+    A. 上电就吸合、发 V0 才释放 → 低电平触发模块 + 高触发固件（或下拉方向错）：
+       方案1（推荐）：烧 low 版 hex（或把 APP_VALVE_RELAY_ON_LEVEL 改 BSP_IO_LEVEL_LOW
+             重编），同时把 P104 的 10k 下拉改成 10k 上拉到 3.3V；
+       方案2：模块 H/L 跳线拨到 HIGH（若可拨），继续 high 版；
+       两种方案都必须重做 4.3 的 0~30s 与复位抗扰。
+    B. V1 有时吸合、有时不吸合（3.3V 触发不可靠）：
+       依次查：VIN≥4.5V（<4.3V 先换短粗线/换供电）→ 100µF 就近 → 模块输入限流电阻过大
+       （换模块/加电平转换）→ 低触发光耦款按 1.2 拆 JD-VCC 重测。
+    C. 完全不吸合：
+       先看串口 # WARN: valve GPIO init FAILED 或 # WARN: valve pin fault ...（有→查 P104
+       端口宏/引脚占用/IN 线）；再看 P 状态 fault=1/次数；都没有则查 IN 线通断、共地、VCC。
+    D. A 型拆 JD-VCC 后不吸合：确认 VCC=3.3V 与 GND 接对、JD-VCC 接 VIN（不是 3.3V）、
+       跳线真的拆了；量 JD-VCC 对 GND 4.5~4.7V。线圈端 <4.2V → 换独立 5V/≥300mA（共地）。
+    E. 无光耦 PNP 低触发模块：禁止直连 P104。加 NPN(如 2N7002/8050) 低边电平转换
+       （GPIO→1k 基极→NPN 集电极接 IN、发射极 GND；IN 上拉由模块自身上拉提供），
+       或换 A 型/高触发光耦模块。
+
+4.5 判定记录（填进 §11.4；报告里要能复现）
+    模块型号/购买渠道：__________  光耦：有/无   JD-VCC：有/无/已拆   H/L 跳线：HIGH/LOW/无
+    IN 悬空电压：______V          触发类型：高/低（判定依据：______）
+    P104 电阻：10k 到 GND / 10k 到 3.3V      模块 VCC=______V  JD-VCC=______V
+    3.3V 输入电流：______mA       吸合时线圈电压：______V
+    上电不动作：__/10   V1/V0 动作：__/10   复位不动作：__/10   最终固件：high/low
+
+
+5. FSP / RASC 配置（本阶段无需新增；P104 沿用运行时配置）
+--------------------------------------------------------------------------------
+5.1 结论
+    本阶段不要求改 configuration.xml，也不需要重新 Generate Project Content：
+    - P104 在 RASC 里保持"未分配 / GPIO 默认"（00 文档 §4.4④ 的规定）；
+    - 固件在 app_main 第一条外设操作里用
+          R_IOPORT_PinCfg(&g_ioport_ctrl, BSP_IO_PORT_01_PIN_04, OUTPUT | 释放电平)
+      完成配置，并用 R_IOPORT_PinWrite/PinRead 回读校验（见 §6.2 源码）；
+    - 因此 ra_gen\pin_data.c 仍然是 8 条，不会出现 P104。
+
+5.2 为什么可以不改 RASC（三条依据）
+    ① R_IOPORT_PinCfg 是运行时 API：直接写端口 PMR/PDR/PODR 寄存器，不依赖 RASC 生成
+       的 pin_data.c 静态表；与已验证固件 tds_mini 的做法一致；
+    ② 00 文档 §4.4④ 早已把 P500/P111/P000/P104 定为"运行时配置"，本阶段只是把 P104
+       从"配成低电平"升级为"按有效电平配成释放电平 + 回读"；
+    ③ 不碰 configuration.xml 就不会触发重新生成，避免 ra_gen\ 里其它已验证配置
+       （ADC/UART/I2C/时钟/栈）被无意改动——最小改动、可复现构建。
+
+5.3 验证方法（不用调试器，3 处一眼可查）
+    ① ra_gen\pin_data.c 仍是 8 条：P013/P014（模拟）、P108/P300（DEBUG）、P109/P110
+       （SCI9）、P407/P408（IIC）；不应出现 P104；
+    ② configuration.xml 里搜 "P104"/"p104" 应无新增条目（本阶段零改动）；
+    ③ 上电串口出现
+         # actuator: valve ready (P104 locked at relay-OFF/drain, on_level=HIGH)
+       说明 PinCfg + 回读都成功；若出现
+         # WARN: valve GPIO init FAILED -> relay not driven, system stays DRAIN
+       说明 P104 配置/回读失败（端口宏写错、被别的外设占用、或 RASC 有冲突配置），
+       先解决再继续——此时继电器不会动作，系统仍停在安全侧（排空）。
+
+5.4 不要做的事
+    - 不要为了"测通断"或"点个灯"把 P104 在 RASC 里分配给别的外设/中断；
+    - 不要手改 ra_gen\* 生成文件（下次 Generate 会被覆盖，差异无法解释）；
+    - 不要在运行期间让别的模块对 P104 再做 PinCfg/PinWrite（会与执行器抢引脚）；
+    - 不要用 P104 当 ADC/串口/调试脚——它是本阶段唯一的执行器输出。
+
+
+6. 固件设计与集成
+--------------------------------------------------------------------------------
+6.1 模块职责与接口（src\actuator_valve.h / .c）
+    新增模块只做三件事，不碰传感器、不打印、不 delay、不用动态内存：
+    ① fail-safe 初始化：上电最早时刻把 P104 写成"继电器释放"电平（= 排空位）；
+    ② 带驻留/超时保护的换向：DRAIN/RECOVER ↔ 释放/吸合，防抖 + 连续通电上限；
+    ③ 引脚写/回读自检 + 动作计数，供上层打印事件行/状态行。
+
+      函数          作用                                              调用者/时机            耗时
+      ------------  ------------------------------------------------  ---------------------  --------
+      valve_init    保存配置；P104 配输出并锁释放电平；回读校验        app_main 第一条外设   几十 µs
+      valve_request 记录本 tick 想要的位置与原因（不碰 GPIO）          app_valve_apply/50ms  O(1)
+      valve_task    状态机：冷却/驻留/写引脚/回读/计数/超时强制释放    app_valve_apply/50ms  微秒级
+      valve_get_out 返回只读输出指针（valve_out_t*）                  日志/状态页            O(1)
+      valve_pos_str 位置 → "DRAIN"/"RECOVER" 静态串                   日志/状态行            纯函数
+
+    配置结构 valve_cfg_t（app_main.c 里由 g_app_valve_cfg 给出）：
+        pin            P104 = BSP_IO_PORT_01_PIN_04
+        enabled        APP_USE_VALVE=1 时为 true；0=假执行器（只锁排空不换向）
+        relay_on_level 回收位（吸合）电平：HIGH=高触发模块（默认）/ LOW=低触发模块
+        min_dwell_ms   两次物理换向最小间隔，默认 500
+        max_on_ms      单次连续吸合上限，默认 120000（0=不限制）
+        cooldown_ms    超时强制释放后的冷却，默认 10000
+    输出结构 valve_out_t 共 12 个字段（P 状态/事件行/报告用）：
+        requested/position/request_reason/switch_reason/relay_on/initialized/
+        pin_fault/max_on_blocked/switch_count/on_time_ms/total_on_ms/fault_count
+        （完整字段注释见下面 FILE 段；句柄 valve_t 里另有 3 个内部时间戳。）
+
+6.2 源码全文（可直接整段复制成工程文件；与工程 src\ 下文件内容逐字一致）
+    （说明：本文档按 CRLF 换行保存，两个新源文件为 LF 换行，按行内容逐字比对一致；
+      不是字节级相同，粘贴/复制不受影响。）
+
+    复制方法：把下面两个 FILE 段分别保存为 src\actuator_valve.h、src\actuator_valve.c。
+    保存后必须无编译告警（工程开启 -Wall -Wextra -Wconversion -Wmissing-declarations
+    等严格告警集，见 §7）。
+
+/* ===== FILE: src/actuator_valve.h ===== */
+/*
+ * actuator_valve.h
+ *
+ *  Created on: 2026年11月13日
+ *      Author: Administrator
+ */
+
+/*
+ * actuator_valve.h —— 二位三通电磁阀执行器（P104 → SRD-05VDC-SL-C 单路继电器模块 → 12V 阀）
+ * ---------------------------------------------------------------------------
+ * 本模块把"逻辑位置"翻译成"继电器吸合/释放"，只做三件事：
+ *   ① fail-safe 初始化：在上电最早时刻把 P104 写成"继电器释放"电平（= 排空位）；
+ *   ② 带驻留/超时保护的换向：最小换向间隔 min_dwell_ms 防继电器抖动；单次连续
+ *      吸合不超过 max_on_ms（阀线圈连续工作制限制），超时强制释放并冷却；
+ *   ③ 引脚写/回读自检 + 动作计数，供上层打印 "# VALVE" 事件行与 P 状态。
+ *
+ * 逻辑位置（与 decision_action_t 一一对应）：
+ *   VALVE_POS_DRAIN   = 排空位：继电器释放，阀线圈断电（弹簧复位到排空口，fail-safe）；
+ *   VALVE_POS_RECOVER = 回收位：继电器吸合，12V 加到阀线圈（换向到回收口）。
+ *
+ * 有效电平（关键，必须与实物模块一致）：
+ *   高电平触发模块：relay_on_level = BSP_IO_LEVEL_HIGH（回收=HIGH，默认）；
+ *   低电平触发模块：relay_on_level = BSP_IO_LEVEL_LOW （回收=LOW）。
+ *   硬件配套：高触发 → P104 与 GND 之间 10 kΩ 下拉；低触发 → P104 与 3.3 V 之间 10 kΩ 上拉。
+ *   极性判错时上电瞬间继电器会误吸合，绝对不允许接 12V 阀电源后再试（见 15 文档 §4）。
+ *
+ * 安全约定：
+ *   - 初始化失败/引脚写失败 → 不假装成功：initialized=false 或 pin_fault=true，逻辑位置保持排空；
+ *   - 本模块不 printf、不 delay、不用动态内存，可在 50 ms tick 里调用；
+ *   - 真正的最后一道安全是 12V 进线上的船型开关（现场可断电），软件不能替代。
+ */
+#ifndef ACTUATOR_VALVE_H
+#define ACTUATOR_VALVE_H
+
+#include <stdbool.h>
+#include <stdint.h>
+
+#include "hal_data.h"
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+/* 逻辑位置：DRAIN=排空（继电器释放）/ RECOVER=回收（继电器吸合） */
+typedef enum e_valve_pos
+{
+    VALVE_POS_DRAIN = 0,
+    VALVE_POS_RECOVER = 1
+} valve_pos_t;
+
+/* 配置（app_main.c 里集中给出；字段含义见文件头） */
+typedef struct st_valve_cfg
+{
+    bsp_io_port_pin_t pin;             /* 阀控制脚：P104 = BSP_IO_PORT_01_PIN_04 */
+    bool              enabled;         /* false=假执行器：配置好 fail-safe 电平但不换向 */
+    bsp_io_level_t    relay_on_level;  /* 回收位（继电器吸合）时的 P104 电平 */
+    uint32_t          min_dwell_ms;    /* 两次物理换向的最小间隔（默认 500 ms） */
+    uint32_t          max_on_ms;       /* 单次连续吸合上限（默认 120000 ms；0=不限制） */
+    uint32_t          cooldown_ms;     /* 超时强制释放后的冷却时间（默认 10000 ms） */
+} valve_cfg_t;
+
+/* 运行输出（只读；valve_get_out 返回其指针） */
+typedef struct st_valve_out
+{
+    valve_pos_t  requested;        /* 上层本 tick 请求的逻辑位置 */
+    valve_pos_t  position;         /* 实际已执行的逻辑位置（GPIO 已按此驱动） */
+    const char  *request_reason;   /* 最近一次请求来源（静态串：AUTO / MANUAL / SAFETY） */
+    const char  *switch_reason;    /* 最近一次实际换向原因（静态串） */
+    bool         relay_on;         /* 继电器线圈是否吸合 */
+    bool         initialized;      /* 引脚已配置成输出且回读正确 */
+    bool         pin_fault;        /* 引脚写/回读失败（锁存，需复位；安全侧仍排空） */
+    bool         max_on_blocked;   /* 连续吸合超时触发强制排空，冷却中 */
+    uint32_t     switch_count;     /* 累计吸合次数（继电器动作计数，报告用） */
+    uint32_t     on_time_ms;       /* 本次连续吸合已持续时长（释放时清 0） */
+    uint32_t     total_on_ms;      /* 累计吸合时长 */
+    uint32_t     fault_count;      /* 引脚写/回读失败累计次数 */
+} valve_out_t;
+
+/* 句柄（app_main 静态分配） */
+typedef struct st_valve
+{
+    valve_cfg_t cfg;
+    valve_out_t out;
+    uint32_t    last_switch_ms;    /* 上次物理换向时刻 */
+    uint32_t    on_since_ms;       /* 本次吸合开始时刻 */
+    uint32_t    blocked_until_ms;  /* 冷却结束时刻（max_on_blocked 时有效） */
+} valve_t;
+
+/*
+ * 函数名：valve_init
+ * 作用：保存配置并做 fail-safe 初始化：把 P104 配成输出、初值="继电器释放"电平；
+ *       随后回读校验。enabled=false 时同样配置该电平（保持"上电即排空"的硬件约定），
+ *       但后续 valve_task 不再换向。
+ * 参数：p_valve —— 句柄（非 NULL）；p_cfg —— 配置（非 NULL）。
+ * 返回：无（结果看 valve_get_out()->initialized / pin_fault）。
+ * 时序/边界：必须是 app_main 的第一条外设操作（早于 LED/UART/ADC），约几十 µs。
+ * 注意：配置写是"PODR 与方向同一寄存器写"，不会先出高再拉低，上电无毛刺。
+ */
+void valve_init(valve_t *p_valve, const valve_cfg_t *p_cfg);
+
+/*
+ * 函数名：valve_request
+ * 作用：上层声明本 tick 想要的逻辑位置（判别结果或手动覆盖）。
+ * 参数：p_valve —— 句柄；pos —— 目标位置（越界按 DRAIN 处理）；
+ *       now_ms —— 当前时刻（本函数不用，保留给未来扩展）；p_reason —— 来源静态串（可为 NULL）。
+ * 返回：无。
+ * 时序/边界：只写 requested，不碰 GPIO；真正换向由 valve_task 在满足驻留条件后执行。
+ * 注意：安全侧调用方应在拿不到判别结果时请求 DRAIN。
+ */
+void valve_request(valve_t *p_valve, valve_pos_t pos, uint32_t now_ms, const char *p_reason);
+
+/*
+ * 函数名：valve_task
+ * 作用：执行器状态机（每 50 ms tick 调一次）：驻留判断 → 写 P104 → 回读校验 →
+ *       吸合计数/通电计时 → 连续吸合超时强制释放 → 冷却解除。
+ * 参数：p_valve —— 句柄；now_ms —— 当前时刻（1 ms 时基，回绕安全）。
+ * 返回：无。
+ * 时序/边界：单次调用只做几个寄存器读写，微秒级；绝不 printf/delay。
+ * 注意：写失败时 position 不更新、下个 tick 重试，pin_fault 锁存；初始化失败时直接返回，
+ *       逻辑位置保持排空（硬件下拉/上拉保证继电器释放）。
+ */
+void valve_task(valve_t *p_valve, uint32_t now_ms);
+
+/*
+ * 函数名：valve_get_out
+ * 作用：读取执行器输出（只读指针，生命周期与句柄相同）。
+ * 参数：p_valve —— 句柄（可为 NULL）。
+ * 返回：输出指针；p_valve 为 NULL 时返回 NULL。
+ * 时序/边界：O(1)；可供 app 打印事件行/状态页。
+ * 注意：不要在中断里长时间持有该指针做复杂计算（本工程只在主循环用）。
+ */
+const valve_out_t *valve_get_out(const valve_t *p_valve);
+
+/*
+ * 函数名：valve_pos_str
+ * 作用：逻辑位置 → 静态字符串（"DRAIN"/"RECOVER"），供日志/状态行。
+ * 参数：pos —— 位置。
+ * 返回：静态字符串（未知按 "DRAIN"）。
+ * 时序/边界：纯函数。
+ * 注意：只用于显示；控制逻辑一律用枚举比较。
+ */
+const char *valve_pos_str(valve_pos_t pos);
+
+#ifdef __cplusplus
+}
+#endif
+#endif /* ACTUATOR_VALVE_H */
+
+
+/* ===== FILE: src/actuator_valve.c ===== */
+/*
+ * actuator_valve.c
+ *
+ *  Created on: 2026年11月13日
+ *      Author: Administrator
+ */
+
+/*
+ * actuator_valve.c —— 二位三通电磁阀 / 继电器执行器实现
+ * ---------------------------------------------------------------------------
+ * 设计要点（与 15 文档《执行器接入：二位三通电磁阀 + SRD-05VDC-SL-C 继电器模块》一致）：
+ *   ① 位置映射：RECOVER=继电器吸合（12V 到阀线圈，换向到回收口）；
+ *               DRAIN  =继电器释放（阀断电，弹簧复位到排空口 = fail-safe）。
+ *   ② 有效电平可配：高电平触发模块 relay_on_level=HIGH（默认）；低电平触发模块改 LOW。
+ *      初始化时按"释放"电平配置 P104 输出，保证复位/配置完成前不会误吸合（硬件再配
+ *      10 kΩ 下拉/上拉，覆盖复位高阻期）。
+ *   ③ 防抖：两次物理换向间隔不小于 min_dwell_ms（默认 500 ms）。判别层本身已有 200 ms
+ *      块内消抖 + 迟滞，这里再加一道执行器侧保护，避免继电器"哒哒哒"。
+ *   ④ 连续通电保护：单次吸合超过 max_on_ms（默认 120 s，按阀的连续工作制限制）→ 强制
+ *      释放到排空，并冷却 cooldown_ms（默认 10 s）；冷却期内即使上层仍请求回收也保持排空。
+ *   ⑤ 自检：每次写 P104 后回读比对；失败计数并锁存 pin_fault，下个 tick 继续重试。
+ *      写失败时逻辑位置不更新，绝不"假装已换向"。
+ *   ⑥ 计数：switch_count 只在"进入回收位"时 +1（继电器实际吸合次数），供报告写动作次数；
+ *      total_on_ms 为累计吸合时长，用于评估阀线圈温升/ED。
+ *
+ * 与 app_main 的分工：
+ *   app_main 决定"该回收还是排空"（判别结果 + V1/V0/VA 手动覆盖 + 安全侧），每个 50 ms
+ *   tick 调 valve_request + valve_task；本模块不读传感器、不打印、不 delay。
+ */
+
+#include "actuator_valve.h"
+
+/* ---------- 内部工具 ---------- */
+
+/*
+ * 函数名：valve_off_level
+ * 作用：由"吸合电平"反推"释放电平"（fail-safe 电平 = 排空位电平）。
+ * 参数：p_valve —— 已保存配置的句柄。
+ * 返回：继电器释放时 P104 应输出的电平。
+ * 时序/边界：纯函数。
+ * 注意：高触发模块 → 释放=LOW；低触发模块 → 释放=HIGH。
+ */
+static bsp_io_level_t valve_off_level(const valve_t *p_valve)
+{
+    if (BSP_IO_LEVEL_HIGH == p_valve->cfg.relay_on_level)
+    {
+        return BSP_IO_LEVEL_LOW;
+    }
+    return BSP_IO_LEVEL_HIGH;
+}
+
+/*
+ * 函数名：valve_level_for_pos
+ * 作用：逻辑位置 → P104 输出电平。
+ * 参数：p_valve —— 句柄；pos —— 逻辑位置。
+ * 返回：RECOVER 返回吸合电平，其余返回释放电平。
+ * 时序/边界：纯函数。
+ * 注意：逻辑位置与电平的映射只允许在这里出现，避免别处再算反一次。
+ */
+static bsp_io_level_t valve_level_for_pos(const valve_t *p_valve, valve_pos_t pos)
+{
+    if (VALVE_POS_RECOVER == pos)
+    {
+        return p_valve->cfg.relay_on_level;
+    }
+    return valve_off_level(p_valve);
+}
+
+/*
+ * 函数名：valve_pin_write
+ * 作用：写 P104 并立即回读校验（防止端口宏写错/引脚被别的外设占用时的"静默不动"）。
+ * 参数：p_valve —— 句柄；level —— 目标电平。
+ * 返回：true=写成功且回读一致；false=写失败或回读不一致。
+ * 时序/边界：两个寄存器操作，微秒级；只在 valve_init/valve_task 调用。
+ * 注意：回读的是引脚实际电平（RA4M2 的 PORT 读取），继电器模块输入电流只有几 mA，
+ *       不会把推挽输出拉反，因此回读是可靠的配置自检手段。
+ */
+static bool valve_pin_write(valve_t *p_valve, bsp_io_level_t level)
+{
+    fsp_err_t      err;
+    bsp_io_level_t readback = BSP_IO_LEVEL_LOW;
+
+    err = R_IOPORT_PinWrite(&g_ioport_ctrl, p_valve->cfg.pin, level);
+    if (FSP_SUCCESS != err)
+    {
+        return false;
+    }
+
+    err = R_IOPORT_PinRead(&g_ioport_ctrl, p_valve->cfg.pin, &readback);
+    if (FSP_SUCCESS != err)
+    {
+        return false;
+    }
+
+    return (readback == level);
+}
+
+/* ---------- 公开接口 ---------- */
+
+/*
+ * 函数名：valve_init
+ * 作用：fail-safe 初始化：保存配置，把 P104 配成输出并锁在"释放"电平，再回读校验。
+ * 参数：p_valve —— 句柄（非 NULL）；p_cfg —— 配置（非 NULL）。
+ * 返回：无（结果见 valve_get_out()->initialized / pin_fault）。
+ * 时序/边界：app_main 的第一条外设操作；约几十 µs；不打印。
+ * 注意：FSP 的 PinCfg 把"输出电平(PODR)"和"方向(PDR)"写进同一个 PmnPFS 寄存器，
+ *       不会出现"先输出高再拉低"的毛刺；即便如此，硬件 10 kΩ 下拉/上拉仍然必须焊。
+ */
+void valve_init(valve_t *p_valve, const valve_cfg_t *p_cfg)
+{
+    valve_out_t    init_out = { 0 };
+    bsp_io_level_t off_level;
+    uint32_t       pin_cfg;
+    fsp_err_t      err;
+
+    if ((NULL == p_valve) || (NULL == p_cfg))
+    {
+        return;
+    }
+
+    /* 1) 保存并限幅配置：非法有效电平按高触发处理（与工程默认一致） */
+    p_valve->cfg = *p_cfg;
+    if ((BSP_IO_LEVEL_HIGH != p_valve->cfg.relay_on_level) &&
+        (BSP_IO_LEVEL_LOW != p_valve->cfg.relay_on_level))
+    {
+        p_valve->cfg.relay_on_level = BSP_IO_LEVEL_HIGH;
+    }
+    p_valve->last_switch_ms   = 0U;
+    p_valve->on_since_ms      = 0U;
+    p_valve->blocked_until_ms = 0U;
+
+    /* 2) 输出清零（C99 结构体赋值，不用 memset，避免多一个头文件依赖） */
+    p_valve->out            = init_out;
+    p_valve->out.requested  = VALVE_POS_DRAIN;
+    p_valve->out.position   = VALVE_POS_DRAIN;
+    p_valve->out.request_reason = "INIT";
+    p_valve->out.switch_reason  = "INIT";
+
+    /* 3) fail-safe 第一步：把 P104 配成输出，初值=继电器释放（排空）电平 */
+    off_level = valve_off_level(p_valve);
+    pin_cfg   = (uint32_t)IOPORT_CFG_PORT_DIRECTION_OUTPUT;
+    if (BSP_IO_LEVEL_HIGH == off_level)
+    {
+        pin_cfg |= (uint32_t)IOPORT_CFG_PORT_OUTPUT_HIGH;
+    }
+    else
+    {
+        pin_cfg |= (uint32_t)IOPORT_CFG_PORT_OUTPUT_LOW;
+    }
+
+    err = R_IOPORT_PinCfg(&g_ioport_ctrl, p_valve->cfg.pin, pin_cfg);
+    if (FSP_SUCCESS != err)
+    {
+        p_valve->out.pin_fault     = true;
+        p_valve->out.fault_count   = 1U;
+        p_valve->out.switch_reason = "INIT_FAIL";
+        return;
+    }
+
+    /* 4) 回读校验（同时确认 P104 没有被别的功能占用/写错端口宏） */
+    if (!valve_pin_write(p_valve, off_level))
+    {
+        p_valve->out.pin_fault     = true;
+        p_valve->out.fault_count   = 1U;
+        p_valve->out.switch_reason = "INIT_FAIL";
+        return;
+    }
+
+    p_valve->out.initialized   = true;
+    p_valve->out.switch_reason = "INIT_DRAIN";
+}
+
+/*
+ * 函数名：valve_request
+ * 作用：记录上层想要的位置（判别/手动/安全侧），并不立即碰 GPIO。
+ * 参数：p_valve —— 句柄（NULL 直接返回）；pos —— 目标位置（非法值按 DRAIN）；
+ *       now_ms —— 当前时刻（本版本不用，保留接口以便以后做"最短排空时间"）；
+ *       p_reason —— 请求来源静态串（NULL 时保留上一次来源）。
+ * 返回：无。
+ * 时序/边界：O(1)，可在每个 tick 调用。
+ * 注意：来源字符串必须是静态常量（如 "AUTO"/"MANUAL_RECOVER"），模块只存指针不复制。
+ */
+void valve_request(valve_t *p_valve, valve_pos_t pos, uint32_t now_ms, const char *p_reason)
+{
+    (void)now_ms;
+
+    if (NULL == p_valve)
+    {
+        return;
+    }
+
+    if ((VALVE_POS_RECOVER != pos) && (VALVE_POS_DRAIN != pos))
+    {
+        pos = VALVE_POS_DRAIN;   /* 安全侧：不认识的位置一律按排空处理 */
+    }
+
+    p_valve->out.requested = pos;
+    if (NULL != p_reason)
+    {
+        p_valve->out.request_reason = p_reason;
+    }
+}
+
+/*
+ * 函数名：valve_task
+ * 作用：执行器状态机：冷却解除 → 判定目标 → 驻留判断 → 写引脚+回读 → 计数/计时
+ *       → 连续吸合超时强制释放。
+ * 参数：p_valve —— 句柄；now_ms —— 当前时刻（1 ms 时基，无符号差值比较，回绕安全）。
+ * 返回：无。
+ * 时序/边界：每 50 ms 调用一次；只做寄存器读写，微秒级，不阻塞。
+ * 注意：初始化失败/写失败时逻辑位置保持"排空"，但物理上继电器由硬件下拉/上拉与
+ *       12V 船型开关兜底；软件不能替代那两道硬件安全措施。
+ */
+void valve_task(valve_t *p_valve, uint32_t now_ms)
+{
+    valve_pos_t    desired;
+    valve_pos_t    old_pos;
+    bsp_io_level_t target_level;
+    uint32_t       dwell_elapsed;
+
+    if (NULL == p_valve)
+    {
+        return;
+    }
+
+    /* 1) 初始化失败：不写引脚，逻辑位置恒为排空（硬件侧保证继电器释放） */
+    if (!p_valve->out.initialized)
+    {
+        p_valve->out.position  = VALVE_POS_DRAIN;
+        p_valve->out.relay_on  = false;
+        p_valve->out.on_time_ms = 0U;
+        return;
+    }
+
+    /* 2) 冷却结束解除超时锁存（无符号差值 < 0x80000000 表示 now >= blocked_until） */
+    if (p_valve->out.max_on_blocked)
+    {
+        if ((uint32_t)(now_ms - p_valve->blocked_until_ms) < 0x80000000U)
+        {
+            p_valve->out.max_on_blocked = false;
+        }
+    }
+
+    /* 3) 目标位置：上层请求；冷却期内禁止吸合（强制排空） */
+    desired = p_valve->out.requested;
+    if ((VALVE_POS_RECOVER == desired) && p_valve->out.max_on_blocked)
+    {
+        desired = VALVE_POS_DRAIN;
+    }
+
+    /* 4) 假执行器模式：保持排空电平，只记录请求（实验 3 的 LED 演示兼容） */
+    if (!p_valve->cfg.enabled)
+    {
+        p_valve->out.position   = VALVE_POS_DRAIN;
+        p_valve->out.relay_on   = false;
+        p_valve->out.on_time_ms = 0U;
+        return;
+    }
+
+    /* 5) 需要换向时先过"最小驻留"（防继电器抖动/阀频繁换向） */
+    dwell_elapsed = (uint32_t)(now_ms - p_valve->last_switch_ms);
+    if ((desired != p_valve->out.position) && (dwell_elapsed >= p_valve->cfg.min_dwell_ms))
+    {
+        target_level = valve_level_for_pos(p_valve, desired);
+        old_pos      = p_valve->out.position;
+
+        if (!valve_pin_write(p_valve, target_level))
+        {
+            /* 写/回读失败：不更新逻辑位置，下个 tick 重试；故障锁存供上层报警 */
+            p_valve->out.fault_count++;
+            p_valve->out.pin_fault     = true;
+            p_valve->out.switch_reason = "PIN_FAULT";
+            return;
+        }
+
+        p_valve->out.position   = desired;
+        p_valve->out.relay_on   = (VALVE_POS_RECOVER == desired);
+        p_valve->last_switch_ms = now_ms;
+
+        if (VALVE_POS_RECOVER == desired)
+        {
+            p_valve->out.switch_count++;
+            p_valve->out.switch_reason = p_valve->out.request_reason;
+            p_valve->on_since_ms       = now_ms;
+            p_valve->out.on_time_ms    = 0U;
+        }
+        else
+        {
+            if (VALVE_POS_RECOVER == old_pos)
+            {
+                p_valve->out.total_on_ms += (uint32_t)(now_ms - p_valve->on_since_ms);
+            }
+            p_valve->out.switch_reason = "DRAIN";
+            p_valve->out.on_time_ms    = 0U;
+        }
+    }
+
+    /* 6) 连续吸合计时 + 超时强制释放（阀线圈连续工作制保护） */
+    if (VALVE_POS_RECOVER == p_valve->out.position)
+    {
+        p_valve->out.on_time_ms = (uint32_t)(now_ms - p_valve->on_since_ms);
+
+        if ((p_valve->cfg.max_on_ms > 0U) && (p_valve->out.on_time_ms >= p_valve->cfg.max_on_ms))
+        {
+            if (!valve_pin_write(p_valve, valve_off_level(p_valve)))
+            {
+                p_valve->out.fault_count++;
+                p_valve->out.pin_fault     = true;
+                p_valve->out.switch_reason = "PIN_FAULT";
+                return;
+            }
+
+            p_valve->out.total_on_ms += p_valve->out.on_time_ms;
+            p_valve->out.position   = VALVE_POS_DRAIN;
+            p_valve->out.relay_on   = false;
+            p_valve->out.on_time_ms = 0U;
+            p_valve->out.max_on_blocked = true;
+            p_valve->last_switch_ms     = now_ms;
+            p_valve->out.switch_reason  = "MAX_ON";
+            p_valve->blocked_until_ms   = now_ms + p_valve->cfg.cooldown_ms;
+        }
+    }
+}
+
+/*
+ * 函数名：valve_get_out
+ * 作用：返回执行器输出只读指针。
+ * 参数：p_valve —— 句柄（可为 NULL）。
+ * 返回：输出指针；p_valve 为 NULL 时返回 NULL。
+ * 时序/边界：O(1)。
+ * 注意：指针生命周期与句柄相同（app_main 静态变量），不要在栈上复制后再长期持有。
+ */
+const valve_out_t *valve_get_out(const valve_t *p_valve)
+{
+    if (NULL == p_valve)
+    {
+        return NULL;
+    }
+    return &p_valve->out;
+}
+
+/*
+ * 函数名：valve_pos_str
+ * 作用：逻辑位置 → 静态字符串。
+ * 参数：pos —— 位置。
+ * 返回："RECOVER" / "DRAIN"。
+ * 时序/边界：纯函数。
+ * 注意：只用于日志/状态行，不参与控制判断。
+ */
+const char *valve_pos_str(valve_pos_t pos)
+{
+    if (VALVE_POS_RECOVER == pos)
+    {
+        return "RECOVER";
+    }
+    return "DRAIN";
+}
+
+
+6.3 app_main.c 改动总览（7 处，按"文件从上到下"编号）
+    app_main.c 改后 74789 字节；本阶段只动下面 7 处，其余逻辑（传感器/判别/CSV/OLED/
+    按键/命令解析）零改动。
+
+      编号  位置                      改了什么                                        为什么
+      ----  ------------------------  ----------------------------------------------  --------------------
+      1     文件头（约 22~75 行）    新增 v1.2.0 段；接线分 A/B 型；安全条款重写为 7 条  接手的人先看安全约定
+      2     include 与版本宏          加 actuator_valve.h；版本号改 v1.2.0-VALVE        boot 行可区分版本
+      3     执行器参数宏               use=1、pin、有效电平、3 个时间常量               全部参数集中可标定
+      4     配置对象/句柄/声明         g_app_valve_cfg、g_valve、3 个日志边沿变量 + 函数声明 单实例、静态分配
+      5     执行器函数                init/apply 重写；新增 app_valve_log             换向交给状态机
+      6     用户可见输出              help V 行、P 状态两条 valve 行、boot 摘要三行 actuator、V 命令回显  现场/PC 能核对
+      7     调用面                    tick 调用点（+log）、main 步骤 0 后回读块        每 tick 驱动/自检
+
+6.4 关键代码块（自动抽取自当前 src\app_main.c，与源文件内容逐字一致；换行差异同 §6.2）
+
+    ── 改动 3：执行器参数宏 ────────────────────────────────────────────────
+/* ---------- 执行器：二位三通电磁阀 + SRD-05VDC-SL-C 单路继电器模块 ---------- */
+/* APP_USE_VALVE = 1（v1.2.0 起默认）：P104 真正驱动继电器 IN；
+ * APP_USE_VALVE = 0：假执行器兼容模式（P104 仍锁排空电平，但不换向，只用 LED1 演示，
+ *                    实验 3 的做法；上台架前不需要改这个宏）。
+ * 接线前先按 15 文档 §3/§4 判定模块类型与触发极性：
+ *   A 型（带 JD-VCC 跳线，推荐）：拆跳线，VCC→3.3V、JD-VCC→VIN，IN 只看到 3.3V 域；
+ *   B 型（三针）：只能用光耦输入型（优先高触发）；无光耦 PNP 低触发款禁止直连 P104。
+ *   默认 HIGH = 高电平触发模块（回收=HIGH 继电器吸合、排空=LOW 释放）；
+ *   若模块实测为低电平触发，改成 BSP_IO_LEVEL_LOW，并把 P104 的 10 kΩ 下拉改成
+ *   10 kΩ 上拉到 3.3V，再重新编译。极性判错 + 已接 12V 时，上电瞬间阀会误吸合。 */
+#define APP_USE_VALVE                1
+/* ⚠ RA 引脚命名 P104 = port 1 + pin 4（不是 port 10）；对应 FSP 宏 BSP_IO_PORT_01_PIN_04。
+ *   本板没有 port 10：若误写成 10 号端口的宏，代码仍能编译，但
+ *   R_IOPORT_PinCfg/PinWrite 运行时会失败 → 执行器模块回读自检会报 INIT_FAIL。 */
+#define APP_VALVE_PIN                BSP_IO_PORT_01_PIN_04   /* P104 / U2-8 */
+#define APP_VALVE_RELAY_ON_LEVEL     BSP_IO_LEVEL_HIGH       /* 回收位（继电器吸合）电平：默认高触发模块 */
+#define APP_VALVE_MIN_DWELL_MS       500U                    /* 最小换向间隔：防继电器抖动 */
+#define APP_VALVE_MAX_ON_MS          120000U                 /* 单次连续吸合上限（阀连续工作制） */
+#define APP_VALVE_COOLDOWN_MS        10000U                  /* 超时强制释放后的冷却时间 */
+
+    ── 改动 4：配置对象、句柄、日志边沿状态 ────────────────────────────────
+/* 阀/继电器执行器配置（时间常量见文件头"执行器"区块；应用参数集中在此） */
+static const valve_cfg_t g_app_valve_cfg =
+{
+    .pin            = APP_VALVE_PIN,
+    .enabled        = (APP_USE_VALVE != 0),
+    .relay_on_level = APP_VALVE_RELAY_ON_LEVEL,
+    .min_dwell_ms   = APP_VALVE_MIN_DWELL_MS,
+    .max_on_ms      = APP_VALVE_MAX_ON_MS,
+    .cooldown_ms    = APP_VALVE_COOLDOWN_MS
+};
+static valve_t    g_valve;                 /* 执行器句柄（静态分配） */
+static valve_pos_t g_prev_valve_pos = VALVE_POS_DRAIN;  /* 日志边沿检测 */
+static bool        g_prev_valve_fault = false;          /* 引脚故障只报一次 */
+static bool        g_prev_valve_blocked = false;        /* 连续吸合超时只报一次 */
+
+    ── 改动 5：执行器函数（init/apply/log；recover_requested 保持不变） ────
+/* ---------- 阀/继电器（P104 → SRD-05VDC-SL-C → 12V 二位三通阀） ---------- */
+/*
+ * 函数名：app_valve_init
+ * 作用：fail-safe 第一步——把 P104 配成输出并锁在"继电器释放（排空）"电平，
+ *       由 actuator_valve 模块完成电平映射与回读自检。
+ * 参数：无。
+ * 返回：无（结果看 valve_get_out()->initialized / pin_fault）。
+ * 时序/边界：必须是 app_main 的第一条外设操作（早于 LED/UART/ADC）。
+ * 注意：APP_USE_VALVE=0（假执行器）时也配置：保证接上继电器后复位/上电瞬间也是排空；
+ *       硬件上仍需 P104 的 10 kΩ 下拉（低触发模块改上拉），软件不能替代。
+ */
+static void app_valve_init(void)
+{
+    valve_init(&g_valve, &g_app_valve_cfg);
+}
+
+/*
+ * 函数名：app_valve_apply
+ * 作用：把本 tick 的目标位置交给执行器：手动覆盖优先，否则跟随判别动作；然后跑状态机。
+ * 参数：recover —— true=回收位 / false=排空位；now_ms —— 当前时间（驻留/超时计时）。
+ * 返回：无。
+ * 时序/边界：每个 50 ms tick 调用一次；内部只做寄存器读写，不阻塞。
+ * 注意：真正的换向由 valve_task 在满足 min_dwell_ms 后执行；APP_USE_VALVE=0 时
+ *       模块只锁排空、不换向，LED1 继续演示判别链路（实验 3 兼容）。
+ */
+static void app_valve_apply(bool recover, uint32_t now_ms)
+{
+    const char *p_reason;
+
+    if (APP_VALVE_FORCE_RECOVER == g_valve_mode)
+    {
+        p_reason = "MANUAL_RECOVER";
+    }
+    else if (APP_VALVE_FORCE_DRAIN == g_valve_mode)
+    {
+        p_reason = "MANUAL_DRAIN";
+    }
+    else
+    {
+        p_reason = "AUTO";
+    }
+
+    valve_request(&g_valve, (recover ? VALVE_POS_RECOVER : VALVE_POS_DRAIN), now_ms, p_reason);
+    valve_task(&g_valve, now_ms);
+}
+
+/*
+ * 函数名：app_valve_log
+ * 作用：把执行器"实际换向/故障/连续吸合超时"打成事件行（每行以 "# " 开头）。
+ * 参数：now_ms —— 当前时间。
+ * 返回：无。
+ * 时序/边界：在 app_valve_apply 之后、每个 tick 调用一次；只在边沿打印，稳态不刷屏。
+ * 注意：CSV 17 列协议保持不变（正常 AUTO 模式下 action 列就是阀位置）；手动 V1/V0
+ *       与判别结果不一致时，以本事件行为准——这是数据留痕里阀动作的权威来源。
+ */
+static void app_valve_log(uint32_t now_ms)
+{
+    const valve_out_t *p_out = valve_get_out(&g_valve);
+
+    if (NULL == p_out)
+    {
+        return;
+    }
+
+    if (p_out->position != g_prev_valve_pos)
+    {
+        printf("# VALVE t=%lu pos=%s relay=%u count=%lu reason=%s\r\n",
+               (unsigned long)now_ms,
+               valve_pos_str(p_out->position),
+               (unsigned)(p_out->relay_on ? 1U : 0U),
+               (unsigned long)p_out->switch_count,
+               p_out->switch_reason);
+        g_prev_valve_pos = p_out->position;
+    }
+
+    if (p_out->pin_fault && (!g_prev_valve_fault))
+    {
+        printf("# WARN: valve pin fault (write/readback failed %lu times) -> check P104/relay\r\n",
+               (unsigned long)p_out->fault_count);
+    }
+    g_prev_valve_fault = p_out->pin_fault;
+
+    if (p_out->max_on_blocked && (!g_prev_valve_blocked))
+    {
+        printf("# WARN: valve ON > %lums -> forced DRAIN, cooldown %lums\r\n",
+               (unsigned long)APP_VALVE_MAX_ON_MS,
+               (unsigned long)APP_VALVE_COOLDOWN_MS);
+    }
+    g_prev_valve_blocked = p_out->max_on_blocked;
+}
+
+    ── 改动 7a：tick 调用点 ───────────────────────────────────────────────
+    /* 7) 执行器：LED 假执行器（P111）+ 真阀（P104 → 继电器 → 12V 二位三通阀） */
+    recover = app_valve_recover_requested(p_dec);
+    app_valve_apply(recover, now_ms);
+    app_valve_log(now_ms);
+    app_led_task(p_dec, now_ms);
+
+    ── 改动 7b：main 步骤 0 回读块 ───────────────────────────────────────
+    /* ----- 步骤 0 的回读：确认 P104 已锁在"继电器释放（排空）"电平 ----- */
+    {
+        const valve_out_t *p_valve = valve_get_out(&g_valve);
+
+        if ((NULL == p_valve) || (!p_valve->initialized))
+        {
+            printf("# WARN: valve GPIO init FAILED -> relay not driven, system stays DRAIN\r\n");
+        }
+        else if (0 == APP_USE_VALVE)
+        {
+            printf("# actuator: fake mode (APP_USE_VALVE=0), P104 locked at relay-OFF level\r\n");
+        }
+        else
+        {
+            printf("# actuator: valve ready (P104 locked at relay-OFF/drain, on_level=%s)\r\n",
+                   (BSP_IO_LEVEL_HIGH == g_app_valve_cfg.relay_on_level) ? "HIGH" : "LOW");
+        }
+    }
+
+6.5 执行器状态机时序（每个 50 ms tick 都跑一遍，微秒级）
+    一个 tick 的固定顺序（app_tick 第 7 步）：
+        recover = app_valve_recover_requested(p_dec);   /* 手动优先，NULL→排空 */
+        app_valve_apply(recover, now_ms);               /* request + task */
+        app_valve_log(now_ms);                          /* 边沿打印 # VALVE/# WARN */
+        app_led_task(p_dec, now_ms);                    /* LED1 仍是"判别"指示 */
+    valve_task 内部（源码见 §6.2）：
+        ① initialized==false            → position=DRAIN、relay_on=false、直接 return
+                                          （不写引脚；硬件下拉/上拉兜底）
+        ② max_on_blocked 且冷却已到点   → 解除 blocked（无符号差值比较）
+        ③ desired = requested；blocked 且 desired=RECOVER → 强制 DRAIN
+        ④ enabled==false（假执行器）    → position=DRAIN、return（P104 保持释放电平）
+        ⑤ desired != position 且驻留已满（now-last_switch >= min_dwell）：
+             写 P104 目标电平 → 回读；
+             失败：fault_count++、pin_fault=true、switch_reason="PIN_FAULT"、
+                   position 不更新、return（下 tick 重试）；
+             成功：position=desired、relay_on=(desired==RECOVER)、last_switch=now；
+                   进入回收 → switch_count++、switch_reason=request_reason、
+                               on_since=now、on_time=0；
+                   进入排空 → 若原来在回收位则 total_on += now-on_since、
+                               switch_reason="DRAIN"、on_time=0
+        ⑥ position==RECOVER 时：on_time = now - on_since；
+           若 (max_on>0 && on_time>=max_on)：写释放电平 → 回读；
+             失败：fault_count++、pin_fault=true、switch_reason="PIN_FAULT"、return；
+             成功：total_on += on_time、position=DRAIN、relay_on=false、on_time=0、
+                   max_on_blocked=true、last_switch=now、switch_reason="MAX_ON"、
+                   blocked_until = now + cooldown
+
+    时间边界（都按 50 ms tick 量化）：
+      - min_dwell=500 ms：换向后 500 ms 内的反向请求不丢弃，只是"等到驻留满的下一 tick
+        执行"。最坏响应 = 判别延迟 + 500 ms（+ 继电器/阀动作）。
+      - max_on=120000 ms：从进入回收位那一 tick 起算，第 120 s 到点的第一个 tick 强制释放；
+        之后 cooldown=10000 ms 内即使请求回收也保持排空；冷却结束后若上层仍请求回收则
+        重新吸合（重新计 on_since）。
+      - max_on_ms=0 → 不限制连续吸合（只允许调试用，验收不允许）。
+      - cooldown_ms=0 → 强制释放后不再额外冷却，但重新吸合仍受 min_dwell=500 ms
+        约束（验收不允许这样配）。
+      - 上电 last_switch=0、position=DRAIN：第一次请求回收要等 now>=500 ms；上电初始化
+        约 1.5~2 s，所以正常流程无感；上电后立刻手动 V1 最多晚 0.5 s。
+      - 所有时间比较用 (uint32_t)(now - t) < 0x80000000U 的写法，49.7 天回绕安全。
+      - 换向时间（硬件）：继电器动作约 10 ms 量级、阀 30~100 ms 量级（厂商典型值，需实测，
+        见 T9）；从"读数越限"到"阀完成换向"的目标 ≤1.5 s。
+
+6.6 fail-safe 链条（从上电到运行，共 7 层；任何一层失效都不允许"假装成功"）
+    层  措施                                              位置/实现                失效时行为
+    --  --------------------------------------------------  -----------------------  ------------------
+    1   硬件 10 kΩ 下拉（高触发）/ 上拉 3.3V（低触发）    P104 与 GND/3.3V 之间    复位高阻期可能误吸合
+                                                            （必须焊）               → 最底层，不可省
+    2   上电第一条外设操作：P104=输出+释放电平             app_main 步骤 0          若顺序被调换，串口/LED
+        （早于 LED/UART/ADC/OLED）                         valve_init()             初始化期间可能误动作
+    3   PinCfg 失败 → pin_fault/INIT_FAIL 锁存 + WARN      valve_init               不写引脚，逻辑位置=排空
+    4   每次写 P104 后立即回读比对（R_IOPORT_PinRead）      valve_pin_write          不一致→fault_count++、
+                                                                                    pin_fault=true
+    5   写失败不更新 position（绝不"假装已换向"），下 tick  valve_task ⑤⑥           位置保持原值（安全侧排空），
+        重试；故障在 P 状态/串口 WARN 可见                                          P 状态可查
+    6   单次连续吸合上限 120 s 强制释放 + 10 s 冷却        valve_task ⑥            超时→# WARN + # VALVE
+                                                                                    reason=MAX_ON
+    7   12V 进线船型开关（继电器触点上游，人工最终手段）   硬件（§3.4）             触点粘连/阀卡死时，
+                                                                                    现场断电 = 排空
+    补充：初始化失败时 valve_task 直接返回，逻辑位置恒为排空；此时继电器只由第 1 层
+    硬件下拉/上拉与第 7 层开关兜底，软件不再"掺和"——软件不能替代这两层硬件措施。
+
+6.7 输出面变化（现场/PC 看到的每一行）
+    上电（执行器相关行）：
+      有真阀且初始化成功：
+        # actuator: valve ready (P104 locked at relay-OFF/drain, on_level=HIGH)
+      假执行器模式（APP_USE_VALVE=0 重编）：
+        # actuator: fake mode (APP_USE_VALVE=0), P104 locked at relay-OFF level
+      初始化失败：
+        # WARN: valve GPIO init FAILED -> relay not driven, system stays DRAIN
+      启动摘要三行（app_print_boot_summary）：
+        # actuator: P104 -> 1ch relay module (SRD-05VDC-SL-C) -> 12V 2/3-way valve
+        # actuator: enabled=1 on_level=HIGH (RECOVER=relay ON) min_dwell=500ms max_on=120000ms cooldown=10000ms
+        # actuator: safe position=DRAIN (relay OFF), P104 initialized before UART (fail-safe)
+
+    # VALVE 事件行（只在 position 实际变化的那一 tick 打印一次）：
+        # VALVE t=%lu pos=%s relay=%u count=%lu reason=%s
+      示例：
+        # VALVE t=3200 pos=RECOVER relay=1 count=1 reason=AUTO
+        # VALVE t=8600 pos=DRAIN relay=0 count=1 reason=DRAIN
+        # VALVE t=123450 pos=DRAIN relay=0 count=2 reason=MAX_ON
+      字段：t=上电毫秒；pos=DRAIN/RECOVER；relay=1 吸合/0 释放；count=累计吸合次数；
+      reason=本次换向原因（取值见下表）。
+        reason         含义
+        --------------  ----------------------------------------------------
+        AUTO            自动判别请求进入回收位（request_reason=AUTO）
+        MANUAL_RECOVER  手动 V1 请求进入回收位
+        DRAIN           释放到排空（判别/手动 V0/MAX_ON 之后的释放；进入排空时
+                        代码统一写 reason=DRAIN，不区分请求来源）
+        MAX_ON          连续吸合超 max_on_ms，被强制释放到排空
+        PIN_FAULT       写/回读失败（位置不变，通常只出现 WARN 行；P 状态可见）
+        INIT_DRAIN      初始化后的初始状态（位置没变化，不产生事件行）
+      ⚠ 不要用 CSV 的 action 列反推"继电器实际动作"：手动 V1/V0 覆盖时二者可能不同。
+        阀动作的权威记录是 # VALVE 事件行（见 §6.8）。
+
+    其他告警行（只在边沿打印一次，稳态不刷屏）：
+        # WARN: valve pin fault (write/readback failed %lu times) -> check P104/relay
+        # WARN: valve ON > %lums -> forced DRAIN, cooldown %lums
+
+    P 状态（命令 P，app_print_status 最后两条）：
+        # valve: mode=%s enabled=%u on_level=%s pos=%s relay=%u req=%s(%s) count=%lu
+        # valve: on=%lums total_on=%lums max_on=%lums blocked=%u fault=%u/%lu reason=%s
+      示例（正常待机）：
+        # valve: mode=AUTO enabled=1 on_level=HIGH pos=DRAIN relay=0 req=DRAIN(AUTO) count=0
+        # valve: on=0ms total_on=0ms max_on=120000ms blocked=0 fault=0/0 reason=INIT_DRAIN
+      读法：pos/relay 是"已执行的逻辑位置"；req 是"本 tick 请求"；若两者长期不一致，
+      先看 reason（PIN_FAULT）与 §9。
+
+    帮助（H）里的 V 行：
+        #  V1 / V0 / VA  manual valve: RECOVER (relay ON) / DRAIN (relay OFF) / auto
+    V 命令回显：
+        # valve: FORCE RECOVER (relay ON -> 12V valve recover port)
+        # valve: FORCE DRAIN (relay OFF -> valve de-energized, drain port)
+        # valve: AUTO (follow decision action)
+        # valve mode=%s enabled=%u (0=fake LED only, 1=P104 drives relay)
+
+6.8 为什么 CSV 仍是 17 列（协议冻结决策）
+    - CSV 表头/列序/缩放是 00 文档 §6.2 与 08 文档验收流程、PC 解析的共同契约，
+      改列 = 三份文档 + PC 脚本 + 历史数据全部要动，收益只是"多一列阀状态"；
+    - 判别层与执行器是"一一映射"的：AUTO 模式下 action=RECOV 等价于请求回收，
+      阀的逻辑位置与 action 同向；真正需要区分的只有"手动 V1/V0 覆盖"场景；
+    - 该场景用 # VALVE 事件行留痕即可（带 t/pos/relay/count/reason），PC 端按 "# "
+      注释行解析，不改表结构；
+    - 因此本阶段明确：CSV 17 列不变，不加阀列；若后续版本要加，必须同步 00 §6.2/§6.3、
+      08、PC 脚本，并升协议版本，不在本阶段做。
+    另外：OLED 上显示的是"判别状态"（大字清水/污水、LED 图案），不是继电器触点实测位置
+    ——二者在手动覆盖或故障时可能不同，报告/答辩必须写清楚（见 §10.2）。
+
+6.9 与判别层/手动命令的衔接（app_valve_recover_requested 的语义）
+    - 手动模式优先：APP_VALVE_FORCE_RECOVER（V1）→ true；APP_VALVE_FORCE_DRAIN（V0）
+      → false；APP_VALVE_AUTO → 跟随 decision；
+    - AUTO 且判别输出为 NULL（防御分支）→ false（排空，安全侧）；
+    - 判别动作 DEC_ACTION_RECOVER 才回收；其余一切（WAIT/FLUSH/UNCERTAIN/SOAP）→ 排空；
+    - 判别层本身有 200 ms 块内消抖 + 25% 迟滞，执行器再加 min_dwell=500 ms，两者叠加把
+      "阈值附近抖动"挡在继电器之前（最坏响应 ≈ 判别 200~300 ms + 驻留 500 ms + 继电器/
+      阀 10~100 ms，目标 ≤1.5 s，实测见 T9）；
+    - 掉电/复位后手动模式不保持（回 AUTO），阀回排空（第 2 层 fail-safe）。
+
+
+7. 构建与烧录
+--------------------------------------------------------------------------------
+7.1 工具链与环境（本机实测；e2 studio 里正常 Build 等效）
+    arm-none-eabi-gcc 13.2.1
+      D:\Ranesas\toolchains\gcc_arm\arm-gnu-toolchain-13.2.Rel1-mingw-w64-i686-arm-none-eabi\bin
+    GNU make 4.4（e2 studio 自带）
+      D:\Ranesas\eclipse\plugins\com.renesas.ide.exttools.gnumake.win32.x86_64_4.3.1.
+      v20240909-0854\mk\make.exe
+
+7.2 构建命令（在工程 Debug\ 目录）
+    make PATH="<上面工具链 bin 目录>" -j4 all
+    期望：0 error / 0 warning；末尾 size 为 text 51724 / data 480 / bss 10836，
+    产物 Selective_hand_wash_water_recycling_system.elf/.hex（默认高触发版）。
+    说明：Debug\makefile.init 里 e2 studio 生成的 PATH 是旧安装路径；若直接 make 报
+          "arm-none-eabi-gcc 不是内部或外部命令"，就是它把 PATH 覆盖了——用上面的
+          PATH= 参数覆盖即可（e2 studio 里 Build 会自动生成正确 PATH，不受影响）。
+
+7.3 产物清单（2026-11-13 18:26 构建）
+
+    文件                                        字节数    SHA-256（前 16 字符）
+    ------------------------------------------  --------  ----------------------------------------
+    ..._v1.2.0_high.hex                         146969    8F15D194684407EA363EB8E485E0A17D1…
+    ..._v1.2.0_low.hex                          146969    0AFA85618D3AFCF25FD21BC1A4524BCA… 
+    ..._v1.2.0_high.elf                         702024    （调试符号，烧录用 hex）
+    ..._v1.2.0_low.elf                          702024    （调试符号）
+    （完整 SHA-256 见 §0.2；elf 哈希随构建时间变化，只用于本机比对。）
+    注意：Debug\ 下旧文件 fix1/fix2（141765 字节）是 v1.1.1/v1.1.2 历史版本，不要烧混；
+    默认文件 Selective_hand_wash_water_recycling_system.hex 已更新为 v1.2.0 high 版
+    （SHA 8F15D194…），与 ..._v1.2.0_high.hex 完全一致。
+
+7.4 e2 studio 里构建的注意点
+    - Debug\src\subdir.mk、Debug\makefile* 都是 e2 studio 自动生成文件；本次新增
+      actuator_valve.c 后，已手动在 Debug\src\subdir.mk 的 C_SRCS/C_DEPS/OBJS 三处
+      加入该文件（否则命令行 make 不会编译它）；
+    - 在 e2 studio 里正常 Build 时，CDT 会重新生成这些文件并自动发现 src\ 下的新 .c，
+      不需要手工维护（手动改的 subdir.mk 会被覆盖，属正常现象）；
+    - 若 e2 studio 报 undefined reference to valve_*，检查 actuator_valve.c 是否
+      在工程里（右键工程 Refresh / 确认未被 Exclude from build）。
+
+7.5 两版 hex 的生成方法（已生成，仅在需要重编时用）
+    high 版（默认，交付用）：APP_VALVE_RELAY_ON_LEVEL = BSP_IO_LEVEL_HIGH → make。
+    low 版：临时把 app_main.c 的该宏改成 BSP_IO_LEVEL_LOW → make → 把生成的
+            Selective_hand_wash_water_recycling_system.hex 另存为 ..._v1.2.0_low.hex；
+            改回 HIGH → make，再另存 ..._v1.2.0_high.hex（保证默认产物与 high 版一致）。
+    ⚠ 两版 hex 只差这一个宏；记录哈希/指纹时必须同时记 boot 时间与 on_level。
+
+7.6 烧录（二选一；BOOT 开关与复位按 14 文档的操作）
+    ① CH340E + SCI Boot：BOOT 拨 ON → 复位 → Renesas Flash Programmer 选 hex →
+       Erase+Program+Verify → BOOT 拨回 OFF → 复位；
+    ② J-Link/EZ-Cube3 走 SWD（P300/P108）直接下载，不用 BOOT 开关。
+    烧后必须核对串口 boot 行与 # actuator: 行（版本 + 电平）再接线。
+
+7.7 上电预期串口输出（执行器相关片段；t 值为示意）
+    # [BOOT] SENSOR-NODE v1.2.0-VALVE build Nov 13 2026 18:26:17
+    # board: RA4M2_MINI (R7FA4M2AD3CFL) | tick base: SysTick 1 ms
+    # actuator: valve ready (P104 locked at relay-OFF/drain, on_level=HIGH)
+    # display: OLED OK (SSD1306 128x64, I2C0 @0x3C)
+    # actuator: P104 -> 1ch relay module (SRD-05VDC-SL-C) -> 12V 2/3-way valve
+    # actuator: enabled=1 on_level=HIGH (RECOVER=relay ON) min_dwell=500ms max_on=120000ms cooldown=10000ms
+    # actuator: safe position=DRAIN (relay OFF), P104 initialized before UART (fail-safe)
+    ...（CSV 表头与 17 列数据，与 v1.1.2 相同）
+    发 V1：
+    # valve: FORCE RECOVER (relay ON -> 12V valve recover port)
+    # valve mode=MANUAL_RECOVER enabled=1 (0=fake LED only, 1=P104 drives relay)
+    # VALVE t=... pos=RECOVER relay=1 count=1 reason=MANUAL_RECOVER
+    发 V0：
+    # valve: FORCE DRAIN (relay OFF -> valve de-energized, drain port)
+    # VALVE t=... pos=DRAIN relay=0 count=1 reason=DRAIN
+
+
+8. 验收测试 T1~T10（执行器/电气专项；每项给操作、判据、记录栏）
+--------------------------------------------------------------------------------
+  T1 静态接线检查
+     操作：断电，按 §3.5 表逐根核对；量 P104-GND/3.3V 电阻（10k）、1N4007 方向、COM/NO/NC。
+     判据：全部与图一致；无短路/反接；P104 电阻 9.5~10.5kΩ；1N4007 反向不通。
+  T2 上电不动作（10 次）
+     操作：不接 12V/阀；上电与复位各 10 次，听/看继电器。
+     判据：10/10 次继电器不吸合；串口出现 # actuator: valve ready ... 且无 pin fault。
+  T3 空载动作（10 次）
+     操作：不接 12V/阀；发 V1/V0 各 10 次，听声、看模块 LED、量 COM-NO。
+     判据：10/10 吸合+释放；COM-NO 吸合通/释放断；串口 # VALVE 行与 count 同步递增。
+  T4 极性/电平确认
+     操作：完成 §4.2/§4.3；记录 IN 悬空电压、触发极性、最终固件 high/low、P104 电阻方向。
+     判据：判定记录完整；10 次复位无吸合；V1/V0 方向正确。
+  T5 阀方向（断电=排空）
+     操作：只接 12V 与阀（先不通水，用嘴吹/针筒打气或接水）：断电时进气/进水应只从排空口出；
+           上电 V1 后应切到回收口；V0 后回排空口。
+     判据：断电=排空口通、回收口闭；通电=回收口通；方向反→按 §1.3 换管口或换货，禁止装机。
+  T6 断电/复位 fail-safe（必须过）
+     操作：演示流量下让水流动（V1 回收态），直接拔 12V 适配器（或按船型开关）；
+           再按板复位；各 3 次。
+     判据：12V 断电/复位后水改走排空口；阀无异常动作；板不复位/不死机（说明 1N4007/共地 OK）。
+  T7 连续通电超时保护
+     操作：发 V1 并保持 121 s 以上（不接水也可）；观察 t=120 s 后自动转 DRAIN 与冷却；
+           保持手动 V1 不动，看 10 s 后是否重新吸合。
+     判据：≈120 s 强制释放、串口 # WARN valve ON > 120000ms + # VALVE reason=MAX_ON；
+           冷却期 relay=0，冷却后允许重新吸合（count 再 +1）。
+  T8 触点/线圈电压与温升
+     操作：吸合瞬间用万用表量模块 VCC、线圈两端电压；连续吸合 2 min 摸阀体/继电器温度；
+           量阀线圈电阻与稳态电流。
+     判据：VCC 4.5~4.7V；线圈端 ≥4.2V；阀体不烫手（<60°C 量级）；电流/电阻与铭牌一致。
+  T9 闭环响应时间
+     操作：手机慢动作录像（或串口时间戳+监听咔哒声）记录"读数为可回收→# VALVE pos=RECOVER"，
+           重复 20 次取均值+极差。
+     判据：判别延迟+驻留+动作 ≤1.5 s（力争 ≤0.8 s）；记录实测值，报告按实测。
+  T10 数据留痕/联调
+     操作：R→清水→加皂液→冲洗→E 全流程；检查 CSV 17 列、# EVENT/# STATE/# ACTION/
+           # VALVE 行、OLED 与实测一致；记录动作次数与 total_on。
+     判据：CSV 列数/顺序不变；# VALVE 行与阀门实际动作一一对应；OLED 与判别一致
+           （不要求与继电器实测一致，见 §10.2）；P 状态计数自洽。
+
+  记录表（复制到报告附录）：
+    日期/人员：______  固件：high/low  串口 boot 时间：______
+    T1__ T2__ T3__ T4__ T5__ T6__ T7__ T8__ T9__ T10__（通过打 ✓）
+    T6 断电次数 3/3：__  T7 超时时间实测：______s  T9 平均/极差：______/______ms
+    阀型号/线圈电阻/稳态电流/温升：______  模块型号/极性/IN 悬空电压：______
+
+
+9. 故障排查表（按现象查；安全相关先断电再动线）
+--------------------------------------------------------------------------------
+  现象                        可能原因                                  处理
+  --------------------------  ----------------------------------------  ----------------------------
+  上电/复位继电器吸合一下      10k 电阻没装/接错方向；极性判错           按 §4 重判；高触发 10k→GND，低触发→3.3V
+  完全不吸合                  模块不是 3.3V 触发/IN 线断/没共地/        量 IN 线通断、VCC/GND；发 P 看 fault；
+                              VCC 低/固件 pin fault                     按 §4.4 C 分支
+  V1 有时吸合有时不吸合        3.3V 触发不可靠/VIN 偏低/去耦不足          按 §4.4 B；A 型拆 JD-VCC；
+                                                                        换独立 5V；换光耦/高触发模块
+  继电器吸合但阀不动           12V 没到/保险丝断/COM-NO 接反/            量 12V、保险丝、COM-NO；单独给阀接
+                              阀线圈坏/1N4007 反接短路                   12V 试；查二极管方向
+  阀动作但水流方向没变         阀常开/常闭口接反/阀内堵                   断电吹气测试；换接管口；清洗阀前滤网
+  MCU 复位/OLED 花屏（阀动作时）没有 1N4007/共地不良/5V 线细长/         加 1N4007、查星形共地、加 100µF、
+                              阀从板取电                                12V 与 5V 分开
+  P 状态 fault=1/次数增长      P104 配置/回读失败（端口宏错/引脚被占）   查 BSP_IO_PORT_01_PIN_04、RASC 冲突、
+                                                                        重烧；此时系统仍排空（安全）
+  阀发烫                      长时间连续通电/买到低 ED 阀               只在回收段通电；查铭牌 ED；软件
+                                                                        120s 限制已生效；必要时降占空比
+  串口无 # VALVE 行但 LED 变    假执行器模式（APP_USE_VALVE=0）或         确认烧的是 v1.2.0；发 P 看 enabled/
+                              阈值未跨过（还没换向）                     req/position；确认判别动作变化
+  烧录后版本不对              烧混 fix1/fix2/旧 hex                     按 §0.2 核对 boot 行/哈希
+
+
+10. 红线与已知限制（报告/答辩口径）
+--------------------------------------------------------------------------------
+10.1 红线（违反即丢分/有安全风险）
+    ① 阀只切"回收/排空"支路，主排水路永远通；断电必须回排空口（fail-safe）。
+    ② 12V 阀独立供电 + 2A 保险丝 + 船型开关；绝不从开发板 5V/3V3 取电。
+    ③ P104 不是 5V 容忍脚：禁止无光耦 PNP 低触发模块直连；任何接法都要保证 IN 不超 3.3V。
+    ④ 阀线圈必须并 1N4007（阴极→线圈+）；反接=短路。
+    ⑤ 星形单点共地；阀/继电器大电流地不经过开发板地线。
+    ⑥ 湿电分离：继电器/保险丝/端子排在防水盒，离水面 ≥30 cm；阀线圈端子防水。
+    ⑦ 开发板不可逆改造禁止（只接排针/端子）。
+    ⑧ 不编造指标：不写"识别污染物/达标"；TDS 只写 mV/相对量，浊度不写 NTU。
+
+10.2 已知限制（主动写进报告）
+    - OLED 显示的是判别状态（清水/污水/待机/冲洗/故障），不是继电器触点实测位置；
+      手动 V1/V0 或 MAX_ON 冷却期间二者可能不同——实测以串口 # VALVE 行为准。
+    - CSV 仍是 17 列，不含阀列（原因见 §6.8）；阀动作只存在于 # VALVE 事件行。
+    - 单继电器只能驱动单线圈弹簧复位阀；双线圈两位自锁阀需 2 路继电器 + 脉冲固件（不做）。
+    - 触点粘连/阀机械卡在回收位时断电 fail-safe 覆盖不了方向：船型开关是现场最终手段；
+      溢流旁通保证极端情况不堵水（硬件方案口径）。
+    - 模块"光耦隔离"在本工程共地接法下不提供电气隔离，只作电平/驱动。
+    - A 型拆 JD-VCC 后 VCC 由 3.3V 供电，模块输入电流只有 2~5mA，但模块是否 3.3V 兼容
+      以其输入级为准，必须按 §4 实测 10/10。
+    - VIN≈4.5~4.7V 供 5V 线圈余量偏紧（吸合门限 3.75V）：线圈端实测 <4.2V 时改独立 5V。
+    - 换向延迟与误分水量按台架实测；不要把主文档"4~8 L/min 龙头"的数值直接搬来。
+    - 防御性缺口（当前不可达）：app_tick 中 pipeline/decision 输出为 NULL 的两个防御
+      分支会提前 return，本 tick 不再刷新执行器（阀保持上一次位置）；正常流程不会触发，
+      改代码时不要把执行器刷新放到这两个分支之后。
+    - P104 持续写失败时软件无法强制阀释放（MAX_ON 保护也依赖写成功才生效）：此时唯一
+      手段是 12V 船型开关断电（第 7 层 fail-safe）——软件不能替代硬件安全措施。
+
+
+11. 附录
+--------------------------------------------------------------------------------
+11.1 符号/常量速查
+    P104 = BSP_IO_PORT_01_PIN_04（U2-8），继电器 IN
+    APP_USE_VALVE = 1（真阀）/ 0（假执行器）
+    APP_VALVE_RELAY_ON_LEVEL = HIGH（默认高触发）/ LOW（低触发，配 low 版 hex）
+    min_dwell = 500 ms；max_on = 120000 ms；cooldown = 10000 ms
+    事件行格式：# VALVE t=%lu pos=%s relay=%u count=%lu reason=%s
+    版本：SENSOR-NODE v1.2.0-VALVE
+
+11.2 引脚/孔位速查
+    U2-8  = P104 → 模块 IN（红）
+    U2-19/20 = VIN ≈4.5~4.7V → A 型 JD-VCC / B 型 VCC（橙）
+    U1-12 = 3V3 → A 型 VCC（黄）
+    U2-18 / 地排 → 模块 GND（黑）；与 12V(−) 单点汇合
+    12V 回路：适配器+ → 2A 保险丝 → 船型开关 → COM；NO → 阀+；阀− → 12V−；1N4007 并联
+
+11.3 产物哈希（完整）
+    high hex  146969  8F15D194684407EA363EB8E485E0A17D10B372C95664FEF1AEF81A0D04CD1C3E
+    low  hex  146969  0AFA85618D3AFCF25FD21BC1A4524BCACFA63B1D98C08BA530800D0686C3E043
+    high boot # [BOOT] SENSOR-NODE v1.2.0-VALVE build Nov 13 2026 18:26:17
+    low  boot # [BOOT] SENSOR-NODE v1.2.0-VALVE build Nov 13 2026 18:26:11
+
+11.4 验收记录（复制填写）
+    模块：型号____ 光耦 有/无  JD-VCC 有/无/已拆  H/L 跳线____  触发极性 高/低
+    IN 悬空电压____V  3.3V 输入电流____mA  吸合时线圈电压____V
+    P104 电阻 10k 到 GND/3.3V    模块 VCC____V  JD-VCC____V
+    T1__ T2__（__/10） T3__（__/10） T4__ T5__ T6__（__/3） T7__（超时__s） T8__（温升__）
+    T9__（平均__ms/极差__ms） T10__
+    结论：通过 / 不通过（原因：________________）
+
+11.5 修订记录
+    2026-11-13 v1.0  首版：v1.2.0 真实执行器接入（P104 → SRD-05VDC-SL-C 单路继电器 →
+                     12V 二位三通单线圈阀）；高/低触发两版 hex；10 项验收；fail-safe 七层；
+                     记录厂商数据（69.4Ω/72mA/3.75V 吸合/0.5V 释放）与 3.3V 驱动边界。
+================================================================================

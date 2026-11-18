@@ -1,0 +1,331 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>接线图（图形版）· 洗手水选择性回收装置 RA4M2_MINI · 固件 v1.3.0-OLED</title>
+<style>
+  :root{--ink:#0f172a;--muted:#475569;--line:#cbd5e1;--bg:#f4f6fb}
+  *{box-sizing:border-box}
+  body{margin:0;padding:22px 22px 28px;background:var(--bg);color:var(--ink);
+       font-family:"Microsoft YaHei","PingFang SC",system-ui,sans-serif}
+  h1{font-size:22px;margin:0 0 2px}
+  .sub{color:var(--muted);font-size:12.5px;margin-bottom:14px}
+  .panel{background:#fff;border:1px solid var(--line);border-radius:12px;padding:10px 12px 6px;margin-bottom:16px;
+         box-shadow:0 1px 3px rgba(15,23,42,.06)}
+  .panel h2{font-size:15px;margin:2px 0 6px;padding-left:8px;border-left:4px solid #1d4ed8}
+  .cap{color:var(--muted);font-size:12px;margin:4px 2px 8px}
+  svg{width:100%;height:auto;display:block}
+  .foot{color:var(--muted);font-size:11.5px;text-align:right}
+</style>
+</head>
+<body>
+<h1>接线图（图形版）· 洗手水选择性回收装置（RA4M2_MINI，固件 v1.3.0-OLED）</h1>
+<div class="sub">与 17_接线总表_整理版.txt 配套｜同名颜色块 = 同一电气网络｜2026-11-14</div>
+
+<div class="panel">
+  <h2>图 A · 信号与网络分配（传感器 / 开发板 / 继电器控制侧）</h2>
+  <svg viewBox="0 0 1600 820" role="img" aria-label="信号接线图">
+    <defs>
+      <marker id="arr" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto">
+        <path d="M0,0 L9,4.5 L0,9 z" fill="#334155"/>
+      </marker>
+    </defs>
+    <style>
+      .box{fill:#fff;stroke:#334155;stroke-width:2}
+      .bhead{font-size:14px;font-weight:700;fill:#1e293b}
+      .pin{font-size:12px;fill:#1e293b}
+      .pin2{font-size:10.5px;fill:#64748b}
+      .wl{font-size:11.5px;font-weight:600}
+      .t{font-size:12px;fill:#334155}
+      .tiny{font-size:10.5px;fill:#64748b}
+      .pill{fill:#fff;stroke-width:1.5}
+      .pl{font-size:11px;font-weight:700}
+    </style>
+
+    <!-- legend -->
+    <text x="20" y="26" class="t" font-weight="700">图例：</text>
+    <rect x="78" y="14" width="58" height="16" rx="8" class="pill" stroke="#dc2626" fill="#fee2e2"/><text x="86" y="26" class="pl" fill="#b91c1c">P104/IN</text>
+    <rect x="142" y="14" width="52" height="16" rx="8" class="pill" stroke="#b45309" fill="#fef3c7"/><text x="150" y="26" class="pl" fill="#b45309">VIN 5V</text>
+    <rect x="200" y="14" width="44" height="16" rx="8" class="pill" stroke="#a16207" fill="#fef9c3"/><text x="208" y="26" class="pl" fill="#a16207">3V3</text>
+    <rect x="250" y="14" width="48" height="16" rx="8" class="pill" stroke="#047857" fill="#d1fae5"/><text x="258" y="26" class="pl" fill="#047857">AO/模拟</text>
+    <rect x="304" y="14" width="42" height="16" rx="8" class="pill" stroke="#1d4ed8" fill="#dbeafe"/><text x="312" y="26" class="pl" fill="#1d4ed8">DQ/1-Wire</text>
+    <rect x="352" y="14" width="42" height="16" rx="8" class="pill" stroke="#111827" fill="#e2e8f0"/><text x="360" y="26" class="pl" fill="#111827">GND</text>
+    <rect x="400" y="14" width="52" height="16" rx="8" class="pill" stroke="#0f766e" fill="#ccfbf1"/><text x="408" y="26" class="pl" fill="#0f766e">模拟节点</text>
+
+    <!-- ================= 开发板 ================= -->
+    <rect x="620" y="230" width="380" height="470" rx="14" fill="#eef2ff" stroke="#312e81" stroke-width="2.5"/>
+    <text x="810" y="260" text-anchor="middle" class="bhead">RA4M2_MINI（R7FA4M2AD3CFL）</text>
+    <text x="810" y="280" text-anchor="middle" class="tiny">U1/U2 孔序：从板子下端往 Type-C 方向数（第 9 孔 = U1-12）</text>
+
+    <!-- 左侧引脚 -->
+    <rect x="620" y="292" width="160" height="32" rx="5" class="box" stroke="#0f766e"/>
+    <text x="632" y="306" class="pin">U1-5  P013 / AN11</text><text x="632" y="320" class="pin2">浊度分压节点（模拟输入）</text>
+    <rect x="620" y="338" width="160" height="32" rx="5" class="box" stroke="#047857"/>
+    <text x="632" y="352" class="pin">U1-6  P014 / AN12</text><text x="632" y="366" class="pin2">TDS AOUT（模拟输入）</text>
+    <rect x="620" y="406" width="160" height="32" rx="5" class="box" stroke="#a16207"/>
+    <text x="632" y="420" class="pin">U1-12  3V3</text><text x="632" y="434" class="pin2">3.3V 总取电点</text>
+    <rect x="620" y="474" width="160" height="32" rx="5" class="box" stroke="#111827"/>
+    <text x="632" y="488" class="pin">U1-16  GND</text><text x="632" y="502" class="pin2">模块地</text>
+    <rect x="620" y="570" width="160" height="32" rx="5" class="box" stroke="#1d4ed8"/>
+    <text x="632" y="584" class="pin">U1-17  P500</text><text x="632" y="598" class="pin2">DS18B20 DQ（1-Wire）</text>
+
+    <!-- 右侧引脚 -->
+    <rect x="840" y="316" width="160" height="32" rx="5" class="box" stroke="#dc2626"/>
+    <text x="852" y="330" class="pin">U2-8  P104（GPIO 出）</text><text x="852" y="344" class="pin2">继电器 IN</text>
+    <rect x="840" y="428" width="160" height="32" rx="5" class="box" stroke="#111827"/>
+    <text x="852" y="442" class="pin">U2-18  GND</text>
+    <rect x="840" y="512" width="160" height="32" rx="5" class="box" stroke="#b45309"/>
+    <text x="852" y="526" class="pin">U2-19/20  VIN</text><text x="852" y="540" class="pin2">≈4.5~4.7V（只取不灌）</text>
+
+    <!-- board notes -->
+    <text x="810" y="620" text-anchor="middle" class="tiny">板载免接线：OLED I2C0（P407/P408）</text>
+    <text x="810" y="636" text-anchor="middle" class="tiny">CH340E UART P109/P110 · LED1=P111 · K2=P000</text>
+    <text x="810" y="652" text-anchor="middle" class="tiny">K2 短按切 OLED 页 / 长按重采基线；M = 串口 MARK</text>
+    <text x="810" y="668" text-anchor="middle" class="tiny">OLED v1.3.0 三页：P1 水质 / P2 执行器 / P3 详情</text>
+
+    <!-- ================= TDS ================= -->
+    <rect x="100" y="130" width="300" height="160" rx="10" fill="#ecfdf5" stroke="#047857" stroke-width="2"/>
+    <text x="250" y="156" text-anchor="middle" class="bhead">TDS 模块（电导率，主判据）</text>
+    <text x="250" y="174" text-anchor="middle" class="tiny">3 针 VCC / GND / AOUT；VCC 必须 3.3V</text>
+    <text x="112" y="204" class="pin">AOUT（0~2.3V）</text>
+    <text x="112" y="238" class="pin">VCC（3.3V）</text>
+    <text x="112" y="272" class="pin">GND</text>
+    <!-- AOUT direct -->
+    <polyline points="400,198 500,198 500,354 620,354" fill="none" stroke="#047857" stroke-width="3" marker-end="url(#arr)"/>
+    <text x="470" y="188" class="wl" fill="#047857">直连 0~2.3V</text>
+    <!-- VCC / GND pills -->
+    <line x1="400" y1="232" x2="448" y2="232" stroke="#a16207" stroke-width="3"/>
+    <rect x="448" y="224" width="46" height="16" rx="8" class="pill" stroke="#a16207" fill="#fef9c3"/>
+    <text x="457" y="236" class="pl" fill="#a16207">3V3</text>
+    <line x1="400" y1="266" x2="448" y2="266" stroke="#111827" stroke-width="3"/>
+    <rect x="448" y="258" width="46" height="16" rx="8" class="pill" stroke="#111827" fill="#e2e8f0"/>
+    <text x="456" y="270" class="pl" fill="#111827">GND</text>
+
+    <!-- ================= DS18B20 ================= -->
+    <rect x="100" y="322" width="300" height="150" rx="10" fill="#eff6ff" stroke="#1d4ed8" stroke-width="2"/>
+    <text x="250" y="348" text-anchor="middle" class="bhead">DS18B20（水温）</text>
+    <text x="250" y="366" text-anchor="middle" class="tiny">VDD 3.3V / GND / DQ（1-Wire）</text>
+    <text x="112" y="394" class="pin">DQ</text>
+    <text x="112" y="424" class="pin">VDD</text>
+    <text x="112" y="450" class="pin">GND</text>
+    <!-- DQ：走 x=500 下行，避免压到浊度 GND 色块 -->
+    <polyline points="400,388 560,388 560,586 620,586" fill="none" stroke="#1d4ed8" stroke-width="3" marker-end="url(#arr)"/>
+    <text x="568" y="560" class="wl" fill="#1d4ed8">DQ</text>
+    <!-- 4.7k pullup：DQ 分支上拉 3V3 -->
+    <line x1="560" y1="388" x2="560" y2="380" stroke="#a16207" stroke-width="2"/>
+    <rect x="546" y="350" width="28" height="30" fill="#fff" stroke="#a16207" stroke-width="2"/>
+    <text x="560" y="370" text-anchor="middle" class="tiny" fill="#a16207">4.7k</text>
+    <line x1="560" y1="350" x2="560" y2="342" stroke="#a16207" stroke-width="2"/>
+    <rect x="526" y="326" width="66" height="16" rx="8" class="pill" stroke="#a16207" fill="#fef9c3"/>
+    <text x="533" y="338" class="pl" fill="#a16207">3V3 上拉</text>
+    <!-- VDD / GND pills -->
+    <line x1="400" y1="418" x2="448" y2="418" stroke="#a16207" stroke-width="3"/>
+    <rect x="448" y="410" width="46" height="16" rx="8" class="pill" stroke="#a16207" fill="#fef9c3"/>
+    <text x="457" y="422" class="pl" fill="#a16207">3V3</text>
+    <line x1="400" y1="444" x2="448" y2="444" stroke="#111827" stroke-width="3"/>
+    <rect x="448" y="436" width="46" height="16" rx="8" class="pill" stroke="#111827" fill="#e2e8f0"/>
+    <text x="456" y="448" class="pl" fill="#111827">GND</text>
+
+    <!-- ================= 浊度模块 ================= -->
+    <rect x="100" y="492" width="300" height="220" rx="10" fill="#f0fdfa" stroke="#0f766e" stroke-width="2"/>
+    <text x="250" y="518" text-anchor="middle" class="bhead">浊度模块（4 针 G/A/D/V，只用 A 模拟口）</text>
+    <text x="250" y="536" text-anchor="middle" class="tiny">V=5V · G=GND · A=AO · D=DO 电平（悬空）</text>
+    <text x="112" y="566" class="pin">V（5V）</text>
+    <text x="112" y="594" class="pin">G（GND）</text>
+    <text x="112" y="622" class="pin">A（AO）</text>
+    <text x="112" y="650" class="pin">D（DO）</text>
+    <!-- V / G pills -->
+    <line x1="400" y1="560" x2="448" y2="560" stroke="#b45309" stroke-width="3"/>
+    <rect x="448" y="552" width="78" height="16" rx="8" class="pill" stroke="#b45309" fill="#fef3c7"/>
+    <text x="455" y="564" class="pl" fill="#b45309">VIN 5V</text>
+    <line x1="400" y1="588" x2="448" y2="588" stroke="#111827" stroke-width="3"/>
+    <rect x="448" y="580" width="46" height="16" rx="8" class="pill" stroke="#111827" fill="#e2e8f0"/>
+    <text x="456" y="592" class="pl" fill="#111827">GND</text>
+    <!-- A -> R1 -> node -->
+    <line x1="400" y1="616" x2="428" y2="616" stroke="#059669" stroke-width="3"/>
+    <rect x="428" y="602" width="42" height="28" fill="#fff" stroke="#059669" stroke-width="2"/>
+    <text x="449" y="621" text-anchor="middle" class="tiny" fill="#047857">R1 1k</text>
+    <line x1="470" y1="616" x2="540" y2="616" stroke="#059669" stroke-width="3"/>
+    <circle cx="540" cy="616" r="4" fill="#059669"/>
+    <!-- node -> U1-5 -->
+    <circle cx="610" cy="354" r="7" fill="#ffffff"/><circle cx="610" cy="586" r="7" fill="#ffffff"/><polyline points="540,616 610,616 610,308 620,308" fill="none" stroke="#0f766e" stroke-width="3" marker-end="url(#arr)"/>
+    <text x="546" y="298" class="tiny" fill="#0f766e" font-weight="700">分压节点</text>
+    <text x="546" y="314" class="tiny" fill="#0f766e" font-weight="700">→ U1-5</text>
+    <!-- R2 -->
+    <line x1="540" y1="616" x2="540" y2="646" stroke="#059669" stroke-width="2"/>
+    <rect x="526" y="646" width="28" height="30" fill="#fff" stroke="#059669" stroke-width="2"/>
+    <text x="540" y="666" text-anchor="middle" class="tiny" fill="#047857">R2 2k</text>
+    <line x1="540" y1="676" x2="540" y2="684" stroke="#111827" stroke-width="2"/>
+    <rect x="500" y="684" width="52" height="16" rx="8" class="pill" stroke="#111827" fill="#e2e8f0"/>
+    <text x="508" y="696" class="pl" fill="#111827">GND</text>
+    <!-- C 0.1uF -->
+    <line x1="540" y1="616" x2="584" y2="616" stroke="#059669" stroke-width="2"/>
+    <line x1="584" y1="616" x2="584" y2="642" stroke="#059669" stroke-width="2"/>
+    <line x1="570" y1="642" x2="598" y2="642" stroke="#059669" stroke-width="3"/>
+    <line x1="570" y1="650" x2="598" y2="650" stroke="#059669" stroke-width="3"/>
+    <line x1="584" y1="650" x2="584" y2="684" stroke="#111827" stroke-width="2"/>
+    <text x="604" y="648" class="tiny" fill="#047857">0.1µF</text>
+    <rect x="566" y="684" width="52" height="16" rx="8" class="pill" stroke="#111827" fill="#e2e8f0"/>
+    <text x="574" y="696" class="pl" fill="#111827">GND</text>
+    <!-- D floating -->
+    <line x1="400" y1="644" x2="430" y2="644" stroke="#dc2626" stroke-width="2" stroke-dasharray="2 3"/>
+    <line x1="424" y1="636" x2="440" y2="652" stroke="#dc2626" stroke-width="3"/>
+    <line x1="440" y1="636" x2="424" y2="652" stroke="#dc2626" stroke-width="3"/>
+    <text x="448" y="648" class="wl" fill="#b91c1c">DO 悬空！</text>
+    <text x="250" y="730" text-anchor="middle" class="tiny">分压比 2/3：AO 4.5~4.7V → 节点 3.0~3.13V（上板前实测 ≤3.2V → 再进 U1-5）</text>
+    <text x="250" y="746" text-anchor="middle" class="tiny" fill="#b91c1c">D（DO）是 5V 比较器电平输出：悬空，严禁接任何 3.3V 引脚</text>
+
+    <!-- ================= 继电器模块 ================= -->
+    <rect x="1060" y="200" width="400" height="400" rx="12" fill="#ede9fe" stroke="#6d28d9" stroke-width="2.5"/>
+    <text x="1260" y="226" text-anchor="middle" class="bhead">SRD-05VDC-SL-C 单路继电器模块</text>
+    <text x="1260" y="244" text-anchor="middle" class="tiny">A 型（带 JD-VCC）：拆跳线；B 型三针见 15 文档</text>
+    <text x="1072" y="290" class="pin">IN</text>
+    <text x="1130" y="290" class="tiny">← P104（3.3V 逻辑；高触发时 HIGH=吸合）</text>
+    <text x="1072" y="336" class="pin">VCC</text>
+    <text x="1130" y="336" class="tiny">← 3V3（U1-12；A 型拆 JD-VCC 后只给光耦输入）</text>
+    <text x="1072" y="382" class="pin">JD-VCC</text>
+    <text x="1130" y="382" class="tiny">← VIN 5V（U2-19/20；给继电器线圈 62~68mA）</text>
+    <text x="1072" y="428" class="pin">GND</text>
+    <text x="1130" y="428" class="tiny">← 接线端子排 GND（必须共地）</text>
+    <!-- P104 -> IN (elbow) -->
+    <polyline points="1000,332 1030,332 1030,290 1060,290" fill="none" stroke="#dc2626" stroke-width="3" marker-end="url(#arr)"/>
+    <text x="1004" y="280" class="wl" fill="#b91c1c">P104</text>
+    <!-- 10k -->
+    <circle cx="1030" cy="332" r="3" fill="#dc2626"/>
+    <line x1="1030" y1="332" x2="1030" y2="356" stroke="#dc2626" stroke-width="2" stroke-dasharray="4 3"/>
+    <rect x="1016" y="356" width="28" height="28" fill="#fff" stroke="#dc2626" stroke-width="2"/>
+    <text x="1046" y="374" text-anchor="end" class="tiny" fill="#b91c1c">10k</text>
+    <!-- notes -->
+    <text x="1072" y="462" class="tiny">◀ 就近并 100µF + 0.1µF（吸合瞬间防 VIN 拉跌）</text>
+    <text x="1072" y="478" class="tiny">◀ P104 10k：高触发→GND / 低触发→3V3</text>
+    <text x="1072" y="494" class="tiny">◀ B 型三针：VCC→VIN、GND→GND、IN→P104（仅光耦型）</text>
+    <text x="1072" y="510" class="tiny">◀ 光耦在共地接法下不隔离，只作电平驱动</text>
+    <!-- contacts -->
+    <rect x="1072" y="540" width="92" height="34" rx="5" class="box" stroke="#b45309"/>
+    <text x="1118" y="562" text-anchor="middle" class="pin">COM</text>
+    <rect x="1174" y="540" width="92" height="34" rx="5" class="box" stroke="#047857"/>
+    <text x="1220" y="562" text-anchor="middle" class="pin">NO</text>
+    <rect x="1276" y="540" width="92" height="34" rx="5" class="box" stroke="#94a3b8" stroke-dasharray="5 3"/>
+    <text x="1322" y="562" text-anchor="middle" class="pin" fill="#64748b">NC 不接</text>
+    <text x="1260" y="594" text-anchor="middle" class="tiny">触点侧 → 独立 12V 回路（图 B / 15 文档）</text>
+  </svg>
+  <div class="cap"><b>图 A</b>：信号线（彩色实线）直接画到板，<b>实线交叉但无圆点 = 不相连</b>；电源/地用同名色块表示同一网络（3V3=U1-12，VIN=U2-19/20，GND=端子排）。浊度 AO 必须经 R1 1k + R2 2k + 0.1µF 分压后才进 U1-5；D(DO) 悬空。继电器按 A 型拆 JD-VCC 接法；P104 的 10k 方向按触发极性（高触发→GND，低触发→3V3）。</div>
+</div>
+
+<div class="panel">
+  <h2>图 B · 供电、12V 阀回路与星形接地</h2>
+  <svg viewBox="0 0 1600 700" role="img" aria-label="供电与接地拓扑图">
+    <defs>
+      <marker id="arr2" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto">
+        <path d="M0,0 L9,4.5 L0,9 z" fill="#334155"/>
+      </marker>
+    </defs>
+    <style>
+      .bx{fill:#fff;stroke:#334155;stroke-width:2}
+      .bh{font-size:14px;font-weight:700;fill:#1e293b}
+      .pn{font-size:12px;fill:#1e293b}
+      .sm{font-size:11px;fill:#475569}
+      .wl{font-size:11.5px;font-weight:600}
+    </style>
+
+    <!-- 5V adapter -->
+    <rect x="60" y="70" width="220" height="90" rx="10" class="bx"/>
+    <text x="170" y="96" text-anchor="middle" class="bh">5V/2A 适配器</text>
+    <text x="170" y="116" text-anchor="middle" class="sm">或电脑 USB（二选一）</text>
+    <text x="170" y="136" text-anchor="middle" class="sm">Type-C 进板</text>
+    <line x1="280" y1="115" x2="360" y2="115" stroke="#dc2626" stroke-width="3" marker-end="url(#arr2)"/>
+    <text x="320" y="104" class="wl" fill="#b91c1c">5V</text>
+    <!-- 5V(-) route left -->
+    <polyline points="120,160 40,160 40,540 120,540" fill="none" stroke="#111827" stroke-width="2" stroke-dasharray="6 4"/>
+    <text x="46" y="480" class="wl" fill="#111827">5V(−)</text>
+
+    <!-- Board -->
+    <rect x="360" y="55" width="300" height="130" rx="12" fill="#eef2ff" stroke="#312e81" stroke-width="2.5"/>
+    <text x="510" y="82" text-anchor="middle" class="bh">RA4M2_MINI</text>
+    <text x="510" y="102" text-anchor="middle" class="sm">5V → 板载 LDO → 3.3V</text>
+    <line x1="660" y1="95" x2="720" y2="95" stroke="#a16207" stroke-width="3"/>
+    <rect x="720" y="86" width="170" height="18" rx="9" fill="#fef9c3" stroke="#a16207" stroke-width="1.5"/>
+    <text x="730" y="100" font-size="11" font-weight="700" fill="#a16207">3V3（U1-12）→ 图 A</text>
+    <line x1="660" y1="145" x2="720" y2="145" stroke="#b45309" stroke-width="3"/>
+    <rect x="720" y="136" width="210" height="18" rx="9" fill="#fef3c7" stroke="#b45309" stroke-width="1.5"/>
+    <text x="730" y="150" font-size="11" font-weight="700" fill="#b45309">VIN≈4.5~4.7V（U2-19/20）→ 图 A</text>
+
+    <!-- 12V adapter -->
+    <rect x="60" y="300" width="220" height="100" rx="10" class="bx"/>
+    <text x="170" y="326" text-anchor="middle" class="bh">12V/3A 适配器</text>
+    <text x="170" y="346" text-anchor="middle" class="sm">内正外负 · 只给阀</text>
+    <text x="170" y="366" text-anchor="middle" class="sm">空载 11.4~12.6V</text>
+    <line x1="280" y1="335" x2="330" y2="335" stroke="#dc2626" stroke-width="3" marker-end="url(#arr2)"/>
+    <!-- fuse / switch -->
+    <rect x="330" y="315" width="100" height="40" rx="6" fill="#fef3c7" stroke="#b45309" stroke-width="2"/>
+    <text x="380" y="341" text-anchor="middle" class="pn">2A 保险丝</text>
+    <line x1="430" y1="335" x2="480" y2="335" stroke="#dc2626" stroke-width="3" marker-end="url(#arr2)"/>
+    <rect x="480" y="315" width="120" height="40" rx="6" fill="#fee2e2" stroke="#b91c1c" stroke-width="2"/>
+    <text x="540" y="341" text-anchor="middle" class="pn">船型开关</text>
+    <line x1="600" y1="335" x2="660" y2="335" stroke="#dc2626" stroke-width="3" marker-end="url(#arr2)"/>
+    <!-- relay contacts -->
+    <rect x="660" y="250" width="260" height="180" rx="12" fill="#ede9fe" stroke="#6d28d9" stroke-width="2.5"/>
+    <text x="790" y="276" text-anchor="middle" class="bh">继电器触点（SRD）</text>
+    <text x="790" y="294" text-anchor="middle" class="sm">吸合：COM–NO 导通</text>
+    <rect x="676" y="312" width="70" height="30" rx="5" class="bx" stroke="#b45309"/>
+    <text x="711" y="332" text-anchor="middle" class="pn">COM</text>
+    <rect x="766" y="312" width="70" height="30" rx="5" class="bx" stroke="#047857"/>
+    <text x="801" y="332" text-anchor="middle" class="pn">NO</text>
+    <rect x="856" y="312" width="70" height="30" rx="5" class="bx" stroke="#94a3b8" stroke-dasharray="5 3"/>
+    <text x="891" y="332" text-anchor="middle" class="pn" fill="#64748b">NC 不接</text>
+    <text x="790" y="370" text-anchor="middle" class="sm">释放=断电 → 阀回排空口（fail-safe）</text>
+    <text x="790" y="390" text-anchor="middle" class="sm">触点侧与线圈不共电源，只共地（端子排）</text>
+    <!-- NO -> valve + -->
+    <line x1="836" y1="327" x2="980" y2="327" stroke="#dc2626" stroke-width="3" marker-end="url(#arr2)"/>
+    <!-- valve -->
+    <rect x="980" y="235" width="300" height="235" rx="12" fill="#d1fae5" stroke="#047857" stroke-width="2.5"/>
+    <text x="1130" y="262" text-anchor="middle" class="bh">12V 二位三通电磁阀</text>
+    <text x="1130" y="282" text-anchor="middle" class="sm">单线圈 · 弹簧复位 · 直动式 · 断电=排空</text>
+    <rect x="1000" y="300" width="120" height="36" rx="5" class="bx" stroke="#dc2626"/>
+    <text x="1060" y="323" text-anchor="middle" class="pn">线圈（+）</text>
+    <rect x="1000" y="370" width="120" height="36" rx="5" class="bx" stroke="#111827"/>
+    <text x="1060" y="393" text-anchor="middle" class="pn">线圈（−）</text>
+    <text x="1160" y="322" class="sm">1 = 进水</text>
+    <text x="1160" y="345" class="sm">2 = 回收（通电通）</text>
+    <text x="1160" y="368" class="sm">3 = 排空（断电通）</text>
+    <!-- flyback -->
+    <polyline points="1000,318 940,318 940,352" fill="none" stroke="#6d28d9" stroke-width="2.5"/>
+    <line x1="926" y1="352" x2="954" y2="352" stroke="#6d28d9" stroke-width="4"/>
+    <polygon points="928,372 950,372 939,352" fill="#6d28d9"/>
+    <line x1="939" y1="372" x2="939" y2="388" stroke="#6d28d9" stroke-width="2.5"/>
+    <polyline points="939,388 1000,388" fill="none" stroke="#6d28d9" stroke-width="2.5"/>
+    <text x="1130" y="446" text-anchor="middle" class="wl" fill="#6d28d9">1N4007：阴极（色环）→ 线圈 +</text>
+    <!-- valve- to 12V- -->
+    <line x1="1000" y1="388" x2="940" y2="388" stroke="#111827" stroke-width="3"/>
+    <polyline points="1000,408 1000,470 900,470 900,540" fill="none" stroke="#111827" stroke-width="3" marker-end="url(#arr2)"/>
+    <text x="932" y="492" class="wl" fill="#111827">12V(−)</text>
+    <!-- 12V- from adapter -->
+    <polyline points="170,400 170,540" fill="none" stroke="#111827" stroke-width="3"/>
+    <text x="120" y="480" class="wl" fill="#111827">12V(−)</text>
+
+    <!-- ground bar -->
+    <line x1="100" y1="540" x2="1440" y2="540" stroke="#111827" stroke-width="7"/>
+    <circle cx="730" cy="540" r="8" fill="#111827"/>
+    <text x="730" y="576" text-anchor="middle" class="bh">★ 星形单点 GND：接线端子排（唯一汇合点）</text>
+    <text x="730" y="598" text-anchor="middle" class="sm">12V(−) · 5V(−) · 板 GND（U1/U2 的 8 个 GND 孔） · 浊度 GND · TDS/DS18B20 GND · 继电器模块 GND · 阀/继电器大电流地</text>
+    <!-- board GND dashed -->
+    <polyline points="640,185 640,540" fill="none" stroke="#111827" stroke-width="2" stroke-dasharray="5 3"/>
+    <!-- relay GND dashed -->
+    <polyline points="790,430 790,540" fill="none" stroke="#111827" stroke-width="2" stroke-dasharray="5 3"/>
+    <text x="800" y="650" text-anchor="middle" class="sm">阀/继电器大电流地单独一根线到端子排，不经过开发板地线（防止地弹/复位/ADC 干扰）</text>
+
+    <!-- safety order box -->
+    <rect x="1220" y="70" width="320" height="150" rx="10" fill="#fff7ed" stroke="#fb923c" stroke-width="2"/>
+    <text x="1240" y="96" class="bh" fill="#c2410c">安全顺序</text>
+    <text x="1240" y="120" class="sm">① 先接控制侧，只给 5V：上电/复位 10 次</text>
+    <text x="1240" y="140" class="sm">   继电器不动；V1/V0 各 10 次 10/10</text>
+    <text x="1240" y="160" class="sm">② 再空载接 12V（不接阀）验证触点 10 次</text>
+    <text x="1240" y="180" class="sm">③ 最后接阀 + 1N4007，做断电 fail-safe</text>
+    <text x="1240" y="200" class="sm">④ 12V 适配器最后插、船型开关保持断开</text>
+  </svg>
+  <div class="cap"><b>图 B</b>：5V/2A 进板 → 板载 LDO 出 3.3V（U1-12）+ VIN（U2-19/20）；12V/3A 独立回路 → 2A 保险丝 → 船型开关 → 继电器 COM，NO → 阀线圈(+)，线圈(−) → 12V(−)，1N4007 阴极→线圈+。所有地只在端子排单点汇合（星形），阀/继电器大电流地不经过开发板。</div>
+</div>
+
+<div class="foot">接线图（图形版）v1.0（2026-11-14）｜依据 00/12/15/16/17 文档｜固件 v1.3.0-OLED（high/low 两版按继电器极性选）</div>
+</body>
+</html>
