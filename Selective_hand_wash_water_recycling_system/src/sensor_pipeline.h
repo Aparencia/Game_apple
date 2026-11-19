@@ -114,6 +114,24 @@ typedef struct st_pipeline_out
     char     note[28];        /* OK / ADC_TIMEOUT / NO_BASE / TDS_RAIL / TDS_SAT / NTU_RAIL */
 } pipeline_out_t;
 
+/* ------------------------- 双基线槽（B 方案） ------------------------- */
+#define PIPELINE_BASELINE_SLOTS 2U
+typedef enum e_pipeline_baseline_slot
+{
+    PIPELINE_SLOT_DRAIN = 0,     /* 阀在 DRAIN 位置时的基线 */
+    PIPELINE_SLOT_RECOVER = 1,   /* 阀在 RECOVER 位置时的基线 */
+    PIPELINE_SLOT_COUNT = 2
+} pipeline_baseline_slot_t;
+
+typedef struct st_pipeline_baseline_slot_data
+{
+    bool     valid;
+    float    ec0_mv25;
+    uint32_t ntu0_ao_mv;
+    float    ec_sigma_mv;
+    float    ntu_sigma_mv;
+} pipeline_baseline_slot_data_t;
+
 /* ------------------------- 流水线句柄 ------------------------- */
 typedef struct st_sensor_pipeline
 {
@@ -124,6 +142,10 @@ typedef struct st_sensor_pipeline
     bool           initialized;
     float          water_temp_c;
     bool           water_temp_from_sensor;
+
+    /* B 方案：按阀位保存两条基线，active_slot 指向当前生效的一条 */
+    pipeline_baseline_slot_data_t slots[PIPELINE_BASELINE_SLOTS];
+    uint8_t        active_slot;
 
     /* 基线采集 */
     bool           baseline_capturing;
@@ -169,6 +191,20 @@ bool pipeline_baseline_capturing(const sensor_pipeline_t *p_pipe);
  * 注意：与 pipeline_baseline_begin 的区别——后者会重新开始采集，本函数只作废。
  */
 void pipeline_invalidate_baseline(sensor_pipeline_t *p_pipe, const char *p_note);
+
+/*
+ * 双基线槽（B 方案）：
+ *   - store：把当前 out 中有效的基线存入 slot；
+ *   - select：把 slot 设为 active，并重置 EMA/速率，下一 tick 用新基线算 Δ；
+ *   - set_default：跳过标定时写入默认基线；
+ *   - clear_slots：清空两条（Z / 重新标定）。
+ */
+bool pipeline_baseline_store_slot(sensor_pipeline_t *p_pipe, uint8_t slot);
+bool pipeline_baseline_select_slot(sensor_pipeline_t *p_pipe, uint8_t slot);
+bool pipeline_baseline_slot_valid(const sensor_pipeline_t *p_pipe, uint8_t slot);
+bool pipeline_baseline_set_default(sensor_pipeline_t *p_pipe, uint8_t slot,
+                                   float ec0_mv25, uint32_t ntu0_ao_mv);
+void pipeline_baseline_clear_slots(sensor_pipeline_t *p_pipe);
 
 /* 设置当前水温（app 每次 tick 从 ds18b20 取；from_sensor=false 表示手输/兜底）。 */
 void pipeline_set_water_temp(sensor_pipeline_t *p_pipe, float temp_c, bool from_sensor);

@@ -938,6 +938,97 @@ void pipeline_invalidate_baseline(sensor_pipeline_t *p_pipe, const char *p_note)
     pipeline_note_set(p_out->note, (uint32_t) sizeof(p_out->note), p_pipe->baseline_reject);
 }
 
+/* ---------- B 方案：双基线槽 ---------- */
+bool pipeline_baseline_store_slot(sensor_pipeline_t *p_pipe, uint8_t slot)
+{
+    pipeline_out_t *p_out;
+
+    if ((NULL == p_pipe) || (!p_pipe->initialized)
+        || (slot >= (uint8_t) PIPELINE_BASELINE_SLOTS))
+    {
+        return false;
+    }
+    p_out = &p_pipe->out;
+    if (!p_out->baseline_valid)
+    {
+        return false;
+    }
+
+    p_pipe->slots[slot].valid        = true;
+    p_pipe->slots[slot].ec0_mv25     = p_out->ec0_mv25;
+    p_pipe->slots[slot].ntu0_ao_mv   = p_out->ntu0_ao_mv;
+    p_pipe->slots[slot].ec_sigma_mv  = p_out->ec_sigma_mv;
+    p_pipe->slots[slot].ntu_sigma_mv = p_out->ntu_sigma_mv;
+    return true;
+}
+
+bool pipeline_baseline_select_slot(sensor_pipeline_t *p_pipe, uint8_t slot)
+{
+    pipeline_out_t *p_out;
+
+    if ((NULL == p_pipe) || (!p_pipe->initialized)
+        || (slot >= (uint8_t) PIPELINE_BASELINE_SLOTS)
+        || (!p_pipe->slots[slot].valid))
+    {
+        return false;
+    }
+    p_out = &p_pipe->out;
+
+    p_pipe->active_slot      = slot;
+    p_out->ec0_mv25          = p_pipe->slots[slot].ec0_mv25;
+    p_out->ntu0_ao_mv        = p_pipe->slots[slot].ntu0_ao_mv;
+    p_out->ec_sigma_mv       = p_pipe->slots[slot].ec_sigma_mv;
+    p_out->ntu_sigma_mv      = p_pipe->slots[slot].ntu_sigma_mv;
+    p_out->baseline_valid    = true;
+    p_out->baseline_updated  = false;
+
+    /* 切基线后旧 EMA/速率没有意义：用当前采样值重新播种，并清空速率环。 */
+    p_pipe->ec_ema  = (p_out->tds_mv25 > 1.0f) ? p_out->tds_mv25 : p_pipe->slots[slot].ec0_mv25;
+    p_pipe->ntu_ema = (p_out->ntu_ao_mv > 0U)
+                      ? (float) p_out->ntu_ao_mv
+                      : (float) p_pipe->slots[slot].ntu0_ao_mv;
+    pipeline_rate_reset(p_pipe);
+    pipeline_note_set(p_out->note, (uint32_t) sizeof(p_out->note), "OK");
+    return true;
+}
+
+bool pipeline_baseline_slot_valid(const sensor_pipeline_t *p_pipe, uint8_t slot)
+{
+    if ((NULL == p_pipe) || (slot >= (uint8_t) PIPELINE_BASELINE_SLOTS))
+    {
+        return false;
+    }
+    return p_pipe->slots[slot].valid;
+}
+
+bool pipeline_baseline_set_default(sensor_pipeline_t *p_pipe, uint8_t slot,
+                                   float ec0_mv25, uint32_t ntu0_ao_mv)
+{
+    if ((NULL == p_pipe) || (!p_pipe->initialized)
+        || (slot >= (uint8_t) PIPELINE_BASELINE_SLOTS)
+        || (ec0_mv25 <= 1.0f) || (ntu0_ao_mv == 0U))
+    {
+        return false;
+    }
+
+    p_pipe->slots[slot].valid        = true;
+    p_pipe->slots[slot].ec0_mv25     = ec0_mv25;
+    p_pipe->slots[slot].ntu0_ao_mv   = ntu0_ao_mv;
+    p_pipe->slots[slot].ec_sigma_mv  = p_pipe->cfg.sigma_floor_ec_mv;
+    p_pipe->slots[slot].ntu_sigma_mv = p_pipe->cfg.sigma_floor_ntu_mv;
+    return true;
+}
+
+void pipeline_baseline_clear_slots(sensor_pipeline_t *p_pipe)
+{
+    if ((NULL == p_pipe) || (!p_pipe->initialized))
+    {
+        return;
+    }
+    (void) memset(p_pipe->slots, 0, sizeof(p_pipe->slots));
+    p_pipe->active_slot = 0U;
+}
+
 /*
  * 函数名：pipeline_set_water_temp
  * 作用  ：保存本 tick 使用的水温与来源，供下一次 pipeline_sample 做 TDS 温补。

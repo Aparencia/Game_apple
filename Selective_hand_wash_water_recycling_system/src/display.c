@@ -623,7 +623,8 @@ static void disp_build_water_page(const pipeline_out_t *p_out, const decision_ou
         if ('\0' != ac[0])
         {
             char hint[24];
-            bool calib = (0 == strncmp(ac, "Auto calib", 10U));
+            bool calib = (0 == strncmp(ac, "Cal ", 4U))
+                      || (0 == strncmp(ac, "Auto calib", 10U));
 
             /* 湿态采基线时不要显示"待机"：大字改为"校准"，第二行带 n/40 进度 */
             p_page->big0 = (uint8_t)(calib ? OLED_HZ32_JIAO : OLED_HZ32_DAI);
