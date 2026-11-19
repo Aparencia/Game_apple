@@ -257,7 +257,7 @@
 #include <sys/stat.h>                /* struct stat / S_IFCHR：printf 重定向需要的空桩 */
 
 /* ---------- 应用参数（全部集中在这里，便于标定） ---------- */
-#define APP_FW_VERSION          "SENSOR-NODE v2.8.0-LEVEL-M1b"  /* M1b: 增加 HC 触发/边沿/脉宽诊断 */
+#define APP_FW_VERSION          "SENSOR-NODE v2.8.0-LEVEL-M1c"  /* M1c: 修复 DWT 周期未换算成 us */
 #define APP_TICK_MS             50U                  /* 主循环 tick（项目设想 6.2.1） */
 #define APP_CSV_PERIOD_MS       200U                 /* CSV 输出周期：5 行/秒 */
 #define APP_TIP_PERIOD_MS       2000U                /* 人类可读摘要（# TIP）周期：2 s */

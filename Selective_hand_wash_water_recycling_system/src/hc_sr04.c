@@ -32,7 +32,7 @@ static bool     g_waiting;
 static volatile bool     g_have_rise;
 static volatile bool     g_pulse_ready;
 static volatile uint32_t g_rise_cycles;
-static volatile uint32_t g_pulse_us;
+static volatile uint32_t g_pulse_cycles;
 static volatile uint32_t g_trig_count;
 static volatile uint32_t g_edge_count;
 static volatile uint32_t g_rise_count;
@@ -162,7 +162,8 @@ void hc_sr04_task(uint32_t now_ms)
     {
         if (g_pulse_ready)
         {
-            uint32_t us = g_pulse_us;
+            uint32_t cycles = g_pulse_cycles;
+            uint32_t us = cycles / g_cycles_per_us;
 
             g_pulse_ready = false;
             g_waiting = false;
@@ -264,7 +265,7 @@ void hc_sr04_echo_isr(void)
     }
     else if (g_have_rise)
     {
-        g_pulse_us = now - g_rise_cycles;
+        g_pulse_cycles = now - g_rise_cycles;
         g_have_rise = false;
         g_pulse_ready = true;
         g_fall_count++;
