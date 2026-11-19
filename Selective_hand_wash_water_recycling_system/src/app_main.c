@@ -1891,8 +1891,10 @@ static void app_autocal_task(uint32_t now_ms, const pipeline_out_t *p_out)
         return;
     }
 
-    /* 任何途径建立了"校验通过 + 工况机认可"的基线（手动/本次自检）→ 自检结束 */
-    if ((APP_BASE_OK == g_base_result) && (g_dec.gate.baseline_ok))
+    /* 任何途径建立了"校验通过 + 工况机认可"的基线（手动/本次自检）→ 自检结束。
+     * 两槽标定期间不能在这里提前 DONE：第一段完成后还要切 RECOVER 采第二段。 */
+    if ((APP_BASE_OK == g_base_result) && (g_dec.gate.baseline_ok)
+        && (!g_cal_two_slot))
     {
         g_ac_need_manual = false;
         g_ac_fail_retry  = false;
