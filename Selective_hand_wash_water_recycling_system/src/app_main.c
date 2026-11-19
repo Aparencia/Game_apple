@@ -139,6 +139,12 @@
  *   旧 d1=6% 把它判成 CLEAR。d1 改为 5%：这类“EC 轻升、NTU 不升”进 L1/DRAIN；
  *   真正的肥皂（NTU 也升）仍由双通道判 L2。
  *
+ * v2.7.6-B3（2026-11-19，trim 不能学掉肥皂）：
+ *   肥皂冲洗水 dEC +30 mV 会随时间降到 +22，原因是清洁慢跟踪把 active EC0
+ *   往肥皂水方向拉了 4 mV/s，最终会重新 CLEAR。
+ *   修复：trim 只允许 5 mV ≤ |dEC| < d1；d1 以上的偏移不跟踪，
+ *   肥皂保持 L1/DRAIN，不会被慢慢学成“干净”。
+ *
  * v2.0.0（2026-11-16，现场诊断后重做控制模型）：
  *   旧模型"事件闩锁 + 30 s 超时"被整体替换为"工况门控 + 每 tick 重算的回收许可"：
  *     validity(gate) 先判"能不能判"（FAULT/DRY/SETTLE/MEASURE/LOCKOUT），
@@ -245,7 +251,7 @@
 #include <sys/stat.h>                /* struct stat / S_IFCHR：printf 重定向需要的空桩 */
 
 /* ---------- 应用参数（全部集中在这里，便于标定） ---------- */
-#define APP_FW_VERSION          "SENSOR-NODE v2.7.5-B3"  /* v2.7.5=清水基线确认 + EC 5% 安全层 */
+#define APP_FW_VERSION          "SENSOR-NODE v2.7.6-B3"  /* v2.7.6=trim 只跟踪 d1 以内，避免学掉肥皂 */
 #define APP_TICK_MS             50U                  /* 主循环 tick（项目设想 6.2.1） */
 #define APP_CSV_PERIOD_MS       200U                 /* CSV 输出周期：5 行/秒 */
 #define APP_TIP_PERIOD_MS       2000U                /* 人类可读摘要（# TIP）周期：2 s */
@@ -1127,8 +1133,10 @@ static void app_baseline_trim_task(const pipeline_out_t *p_out)
     {
         d_ec = -d_ec;
     }
-    if ((d_ec < g_dec.out.d1_ec_mv) || (d_ec > 45.0f))
+    if ((d_ec < 5.0f) || (d_ec >= g_dec.out.d1_ec_mv))
     {
+        /* 只跟踪 d1 以内的小漂移；d1 以上的偏移可能是肥皂/脏水，
+         * 绝不能用 trim 把它慢慢学成“干净”。 */
         return;
     }
 
