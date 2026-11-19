@@ -116,6 +116,11 @@
  *         ③ DONE 打印三条槽实际值；
  *         ④ 清洁稳定时以 4 mV/s 慢跟踪 active EC0，吸收标定/运行之间的液位漂移。
  *
+ * v2.7.2-B3（2026-11-19，DRAIN 槽不激活修复）：
+ *   现场部分标定后 DRAIN/RECOVER 槽有效，但 active_slot 初值就是 0（DRAIN），
+ *   旧判断 `best != active_slot` 认为"已经是 DRAIN"而跳过 select，导致一直 NOBASE。
+ *   改为 baseline_valid=false 或 ec0 与槽值不一致时也强制 select。
+ *
  * v2.0.0（2026-11-16，现场诊断后重做控制模型）：
  *   旧模型"事件闩锁 + 30 s 超时"被整体替换为"工况门控 + 每 tick 重算的回收许可"：
  *     validity(gate) 先判"能不能判"（FAULT/DRY/SETTLE/MEASURE/LOCKOUT），
@@ -222,7 +227,7 @@
 #include <sys/stat.h>                /* struct stat / S_IFCHR：printf 重定向需要的空桩 */
 
 /* ---------- 应用参数（全部集中在这里，便于标定） ---------- */
-#define APP_FW_VERSION          "SENSOR-NODE v2.7.1-B3"  /* v2.7.1=部分标定可运行 + 液位慢跟踪 */
+#define APP_FW_VERSION          "SENSOR-NODE v2.7.2-B3"  /* v2.7.2=修复 DRAIN 槽 0 不激活 */
 #define APP_TICK_MS             50U                  /* 主循环 tick（项目设想 6.2.1） */
 #define APP_CSV_PERIOD_MS       200U                 /* CSV 输出周期：5 行/秒 */
 #define APP_TIP_PERIOD_MS       2000U                /* 人类可读摘要（# TIP）周期：2 s */
@@ -1055,7 +1060,10 @@ static void app_baseline_task(const pipeline_out_t *p_out, uint32_t now_ms)
         return;
     }
 
-    if (best != g_pipe.active_slot)
+    if ((!p_out->baseline_valid)
+        || (best != g_pipe.active_slot)
+        || ((p_out->ec0_mv25 > (g_pipe.slots[best].ec0_mv25 + 0.5f))
+            || (p_out->ec0_mv25 < (g_pipe.slots[best].ec0_mv25 - 0.5f))))
     {
         char s_ec0[20];
         char s_ec[20];
