@@ -222,4 +222,7 @@ void hc_sr04_echo_isr(void)
         g_have_rise = false;
         g_pulse_ready = true;
     }
+
+    /* 必须清 IRQ 状态位，否则边沿 IRQ 会一直重入，主循环被饿死/看门狗复位。 */
+    R_ICU->IELSR_b[HC_VECTOR_INDEX].IR = 0U;
 }
