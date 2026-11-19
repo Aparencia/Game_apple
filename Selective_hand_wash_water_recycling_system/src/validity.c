@@ -56,8 +56,8 @@ static const gate_cfg_t g_gate_default_cfg =
     .ec0_default_min_mv = 150.0f,   /* 默认干态（未实测）时，水中基线必须 ≥150 mV */
     .ao_water_delta_mv  = 80.0f,    /* 水 AO 至少比空腔高 80 mV（本装置水 AO 高于空气） */
     .ntu_ao_min_mv      = 20U,      /* 浊度 AO 低于它=未供电/断线 */
-    .rate_stable_mv_s   = 80.0f,    /* 稳定带：EC 变化率（v2.4.1：肥皂约 50、换向约 38，30 太紧会把肥皂踢回 SETTLE） */
-    .rate_stable_pct_s  = 20.0f,    /* 稳定带：浊度相对变化率（肥皂约 16%/s） */
+    .rate_stable_mv_s   = 30.0f,    /* 稳定带：EC 变化率 */
+    .rate_stable_pct_s  = 5.0f,     /* 稳定带：浊度相对变化率 */
     .settle_ms          = 4000U,    /* 入水稳定期（实测 3.8 s 才进 ±1 %） */
     .settle_min_ms      = 1500U,    /* v2.4：最早 1.5 s 进 MEASURE */
     .settle_stable_ms   = 500U,     /* 连续稳定 0.5 s 即可提前进入 */

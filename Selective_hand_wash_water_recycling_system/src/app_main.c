@@ -64,13 +64,6 @@
  *   OLED 英文改为"首字母大写、其余小写"（代码/单位如 L1/EC0/mV 保持大写），
  *   并把状态串控制在 8x16 字体的 16 字符以内。
  *
- * v2.4.1（2026-11-17，洗手情景仿真修正）：
- *   仿真真实洗手过程发现：肥皂水 EC 上升约 50 mV/s、浊度约 16%/s，而 v2.4 的
- *   "稳定"阈值是 30 mV/s / 5%/s，肥皂一进来工况就被判"不稳定"→ 退回 SETTLE，
- *   OLED 显示"待机"约 4 s（虽然阀已排空，但状态不是 SOAP）。
- *   修订：稳定带抬到 80 mV/s / 20%/s（仍高于换向水力漂移约 38 mV/s），
- *   肥皂期间保持 MEASURE，直接由 dEC/dNTU 判 L2/SOAP；进水/失水仍会被判不稳定。
- *
  * v2.0.0（2026-11-16，现场诊断后重做控制模型）：
  *   旧模型"事件闩锁 + 30 s 超时"被整体替换为"工况门控 + 每 tick 重算的回收许可"：
  *     validity(gate) 先判"能不能判"（FAULT/DRY/SETTLE/MEASURE/LOCKOUT），
@@ -177,7 +170,7 @@
 #include <sys/stat.h>                /* struct stat / S_IFCHR：printf 重定向需要的空桩 */
 
 /* ---------- 应用参数（全部集中在这里，便于标定） ---------- */
-#define APP_FW_VERSION          "SENSOR-NODE v2.4.1-FAST"  /* v2.4.1=稳定带 80/20，避免肥皂把工况踢回 SETTLE */
+#define APP_FW_VERSION          "SENSOR-NODE v2.4.0-FAST"  /* v2.4.0=自适应稳定期 + OLED 首字母大写 */
 #define APP_TICK_MS             50U                  /* 主循环 tick（项目设想 6.2.1） */
 #define APP_CSV_PERIOD_MS       200U                 /* CSV 输出周期：5 行/秒 */
 #define APP_TIP_PERIOD_MS       2000U                /* 人类可读摘要（# TIP）周期：2 s */
@@ -302,8 +295,8 @@ static const decision_cfg_t g_app_decision_cfg =
         .ec0_default_min_mv = 150.0f,     /* v2.3：默认干态时基线只需 ≥150 mV（现场水 348） */
         .ao_water_delta_mv  = 80.0f,      /* v2.3：本装置水 AO 比空气高约 400 mV */
         .ntu_ao_min_mv      = 20U,
-        .rate_stable_mv_s   = 80.0f,      /* v2.4.1：肥皂 ~50、换向 ~38，30 太紧会误回 SETTLE */
-        .rate_stable_pct_s  = 20.0f,      /* 肥皂 ~16%/s，5 太紧 */
+        .rate_stable_mv_s   = 30.0f,
+        .rate_stable_pct_s  = 5.0f,
         .settle_ms          = 4000U,      /* 实测 3.8 s 才进 ±1 % */
         .settle_min_ms      = 1500U,      /* v2.4：最早 1.5 s 进 MEASURE */
         .settle_stable_ms   = 500U,       /* 连续稳定 0.5 s 可提前进入 */
