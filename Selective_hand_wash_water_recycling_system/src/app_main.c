@@ -1014,10 +1014,7 @@ static void app_baseline_task(const pipeline_out_t *p_out, uint32_t now_ms)
 
     if (best == 0xFFU)
     {
-        if (p_out->baseline_valid)
-        {
-            pipeline_invalidate_baseline(&g_pipe, "NO_SLOT");
-        }
+        /* 没有任何槽（例如手动 W 基线）：不要作废当前基线，交给手动模式。 */
         return;
     }
 
