@@ -71,6 +71,25 @@
  *   修订：稳定带抬到 80 mV/s / 20%/s（仍高于换向水力漂移约 38 mV/s），
  *   肥皂期间保持 MEASURE，直接由 dEC/dNTU 判 L2/SOAP；进水/失水仍会被判不稳定。
  *
+ * v2.4.2（2026-11-18，湿态基线显示）：
+ *   湿态采基线 2 s 期间不再显示"待机"：大字改为"校准"，第二行显示
+ *   "Auto calib n/40"（8x16 字体 16 字符），第三行 "Keep still"。
+ *   这样现场能区分"等水/稳定"与"正在采基线"。
+ *
+ * v2.4.3（2026-11-18，基线质量）：
+ *   现场四组清水日志：EC0=294.1 mV 固定不变，清水实际 324 mV，dEC=+30 > d2=26.5
+ *   → 所有清水被判 SOAP。根因是湿态基线在进水上升沿被采早（800 ms 后就开采）。
+ *   修订：① 800 ms 后先等连续稳定 300 ms 才采，最多等 3 s（不固定延长）；
+ *         ② 采完比较 EC 与 EC0，漂移 >5 mV 判 BASE_DRIFT，作废重采；
+ *         ③ 自检/手动基线都要求 AO0-AO_DRY ≥250 mV（清水≈409、肥皂≈69），
+ *            挡"脏水当本底"；④ 运行中 g>1.08 且 NTU 干净持续 5 s 打 # BASE_SUSPECT。
+ *
+ * v2.5.0（2026-11-18，独立清水标定）：
+ *   K2 长按 ≥3 s 进入独立标定：作废旧基线 → 等浸没/稳定/AO 清洁 →
+ *   采 2 s → 5 mV 漂移校验 → 成功后才生效。现场先排空并用清水冲 2~3 倍腔体。
+ *   注意：基线目前仍只在 RAM，掉电丢失；Flash 持久化需要 FSP r_flash_lp 模块，
+ *   本工程尚未包含，后续单独接入。
+ *
  * v2.0.0（2026-11-16，现场诊断后重做控制模型）：
  *   旧模型"事件闩锁 + 30 s 超时"被整体替换为"工况门控 + 每 tick 重算的回收许可"：
  *     validity(gate) 先判"能不能判"（FAULT/DRY/SETTLE/MEASURE/LOCKOUT），
@@ -88,7 +107,7 @@
  *   冷却 10 s / 引脚回读自检 / 动作计数）；APP_USE_VALVE=1 为默认，0=假执行器兼容模式。
  *   接线、极性判定与验收见 docs_sensor\15_执行器_二位三通电磁阀_SRD-05VDC-SL-C继电器模块.txt。
  *
- * v1.3.0（2026-11-13）起 OLED 升级为三页现场指示（K2 短按切页，长按仍重采基线）：
+ * v1.3.0（2026-11-13）起 OLED 升级为三页现场指示（K2 短按切页，长按 ≥3 s 进入清水标定）：
  *   P1 水质页（清水/污水/待机/冲洗/故障 + dEC/g/N）；
  *   P2 执行器页（大字"回收/排空/手动"+ 继电器实际状态/吸合次数/通电时长）；
  *   P3 详情页（事件状态与时长/STATE/LEVEL/阀位置/ΔEC/g/ΔNTU/水温/EC0/σ/d1/d2）；
@@ -117,7 +136,7 @@
  * 接线（详细见 00 文档、12 文档与 15 文档）：
  *   TDS AOUT → P014/AN12；TS-300B AO → 1k+2k 分压 → P013/AN11；
  *   DS18B20 DQ → P500（4.7k 上拉到 3.3V）；UART9 → P109/P110（CH340E，115200 8N1）；
- *   LED1 → P111（高电平点亮）；K2 → P000（板载上拉，按下为低；短按切 OLED 页 / 长按重采基线）；
+ *   LED1 → P111（高电平点亮）；K2 → P000（板载上拉，按下为低；短按切 OLED 页 / 长按 ≥3 s 清水标定）；
  *   继电器 IN → P104（U2-8）；GND → U2-18（必须共地）。
  *   继电器供电按模块类型二选一（15 文档 §3 有判定流程）：
  *     A 型（带 JD-VCC 跳线的光耦模块，推荐）：拆掉 JD-VCC 跳线，VCC → 3.3V（U1-12），
@@ -177,11 +196,11 @@
 #include <sys/stat.h>                /* struct stat / S_IFCHR：printf 重定向需要的空桩 */
 
 /* ---------- 应用参数（全部集中在这里，便于标定） ---------- */
-#define APP_FW_VERSION          "SENSOR-NODE v2.4.1-FAST"  /* v2.4.1=稳定带 80/20，避免肥皂把工况踢回 SETTLE */
+#define APP_FW_VERSION          "SENSOR-NODE v2.5.0-CAL"  /* v2.5.0=K2 长按 3s 独立清水标定 */
 #define APP_TICK_MS             50U                  /* 主循环 tick（项目设想 6.2.1） */
 #define APP_CSV_PERIOD_MS       200U                 /* CSV 输出周期：5 行/秒 */
 #define APP_TIP_PERIOD_MS       2000U                /* 人类可读摘要（# TIP）周期：2 s */
-#define APP_KEY_LONG_MS         1500U                /* K2 长按判据：≥1.5 s 重采基线 */
+#define APP_KEY_LONG_MS         3000U                /* K2 长按判据：≥3 s 进入清水标定 */
 #define APP_RX_BUF_SIZE         64U                  /* 串口命令行缓冲（含 '\0'） */
 #define APP_CSV_LINE_MAX        256U                 /* CSV 行缓冲（17 列整数+逗号足够） */
 #define APP_BASELINE_N          40U                  /* 基线点数（40 × 50 ms = 2 s，方案 §10） */
@@ -195,7 +214,9 @@
 #define APP_AUTOCAL_ENABLE       1                   /* 1=上电自动干态→等水→自动湿态；0=只手动 */
 #define APP_AUTOCAL_DRY_MS       10000U              /* 自检干态采集 10 s（200 点） */
 #define APP_AUTOCAL_DRY_N        (APP_AUTOCAL_DRY_MS / APP_TICK_MS)
-#define APP_AUTOCAL_WATER_MS     800U                /* 检测到浸没后，稳定多久再采湿态 */
+#define APP_AUTOCAL_WATER_MS     800U                /* 检测到浸没后，最早 800 ms 再采湿态 */
+#define APP_AUTOCAL_STABLE_MS    300U                /* 连续稳定多久才认为可以采基线 */
+#define APP_AUTOCAL_WATER_MAX_MS 3000U               /* 最多再等 2.2 s，仍不稳也采（标记低置信） */
 #define APP_AUTOCAL_RETRY_MS     8000U               /* 湿态失败后的重试间隔 */
 #define APP_AUTOCAL_WET_TRIES    3U                  /* 湿态最多尝试次数 */
 #define APP_AUTOCAL_WET_TIMEOUT  8000U               /* 单次湿态采集的兜底超时（2 s 标称，留 4× 余量） */
@@ -301,6 +322,7 @@ static const decision_cfg_t g_app_decision_cfg =
         .ec0_max_mv         = 1600.0f,    /* 开路伪值 ~1650 与脏水本底都要挡住 */
         .ec0_default_min_mv = 150.0f,     /* v2.3：默认干态时基线只需 ≥150 mV（现场水 348） */
         .ao_water_delta_mv  = 80.0f,      /* v2.3：本装置水 AO 比空气高约 400 mV */
+        .ao_clean_delta_mv  = 250.0f,     /* v2.4.3：自检要求清亮水，挡肥皂/脏水基线 */
         .ntu_ao_min_mv      = 20U,
         .rate_stable_mv_s   = 80.0f,      /* v2.4.1：肥皂 ~50、换向 ~38，30 太紧会误回 SETTLE */
         .rate_stable_pct_s  = 20.0f,      /* 肥皂 ~16%/s，5 太紧 */
@@ -420,6 +442,7 @@ typedef enum e_app_base_result
 
 static app_autocal_state_t g_ac_state = APP_AC_OFF;
 static uint32_t            g_ac_since_ms = 0U;
+static uint32_t            g_ac_stable_since_ms = 0U;   /* SETTLE 内连续稳定起点 */
 static uint8_t             g_ac_dry_tries = 0U;
 static uint8_t             g_ac_wet_tries = 0U;
 static bool                g_ac_start_pending = true;
@@ -429,6 +452,8 @@ static bool                g_ac_fail_retry = false;    /* 自检 base_fail 后�
 static bool                g_ac_need_manual = false;   /* 自检失败，需要人工 W（OLED 提示） */
 static uint32_t            g_ac_done_since_ms = 0U;    /* 进入 DONE 的时刻 */
 static app_base_result_t   g_base_result = APP_BASE_NONE;
+static uint32_t            g_base_suspect_since_ms = 0U; /* g>1.08 持续起点 */
+static uint32_t            g_base_suspect_log_ms = 0U;   /* 上次 # BASE_SUSPECT 时刻 */
 
 static bool g_oled_warned = false;           /* OLED 掉线只报一次（显示不是安全路径） */
 
@@ -451,6 +476,7 @@ static bool        app_valve_recover_requested(const decision_out_t *p_dec);
 static void        app_led_task(const decision_out_t *p_dec, uint32_t now_ms);
 static void        app_baseline_begin(uint32_t now_ms, const char *p_src);
 static void        app_baseline_validate(uint32_t now_ms, const pipeline_out_t *p_out);
+static void        app_base_suspect_task(uint32_t now_ms, const pipeline_out_t *p_out);
 static void        app_dry_task(uint32_t now_ms, const pipeline_out_t *p_out);
 static void        app_dry_begin(uint32_t now_ms, uint16_t target_n, bool auto_cap);
 static void        app_autocal_start(uint32_t now_ms);
@@ -1150,6 +1176,18 @@ static void app_baseline_validate(uint32_t now_ms, const pipeline_out_t *p_out)
         return;
     }
 
+    /* 基线必须是"清亮水"：AO 离空腔太近说明浊度高/肥皂多，不能当本底。
+     * 清水 AO-AO_DRY≈409 mV；肥皂≈69 mV；门槛 ao_clean_delta=250 mV。 */
+    if ((g_dec.gate.dry_valid)
+        && (p_out->ntu0_ao_mv
+            < (g_dec.gate.ao_dry_mv + g_dec.gate.cfg.ao_clean_delta_mv)))
+    {
+        pipeline_invalidate_baseline(&g_pipe, "BASE_TURBID");
+        g_base_result = APP_BASE_REJECT;
+        printf("# BASELINE REJECT note=BASE_TURBID (clean water required; AO too close to dry)\r\n");
+        return;
+    }
+
     if (g_dec.gate.dry_valid)
     {
         if (p_out->ec0_mv25 < (g_dec.gate.ec_dry_mv + g_dec.gate.cfg.ec_wet_delta_mv))
@@ -1168,6 +1206,50 @@ static void app_baseline_validate(uint32_t now_ms, const pipeline_out_t *p_out)
 
     g_base_result = APP_BASE_OK;
     app_print_baseline_ok(p_out);
+}
+
+/*
+ * 基线过期监测（只报警，不改控制）：
+ *   MEASURE 中 g_ec>1.08（EC 比基线高 8%）、且 NTU 仍干净，持续 5 s
+ *   → 每 30 s 打一行 # BASE_SUSPECT。正常清水 g≈1.0；长期 >1.08 多半是
+ *   基线在进水过渡段采低了（本机 294 vs 清水 324 就是 g≈1.10）。
+ */
+static void app_base_suspect_task(uint32_t now_ms, const pipeline_out_t *p_out)
+{
+    char s_g[20];
+    char s_ec0[20];
+    char s_dec[20];
+
+    if ((NULL == p_out) || (!p_out->baseline_valid)
+        || (REGIME_MEASURE != g_dec.gate.regime) || (p_out->adc_timeout))
+    {
+        g_base_suspect_since_ms = now_ms;
+        return;
+    }
+
+    if ((p_out->g_ec > 1.08f) && (p_out->d_ntu_pct < 4.0f))
+    {
+        if (0U == g_base_suspect_since_ms)
+        {
+            g_base_suspect_since_ms = now_ms;
+        }
+        if ((uint32_t)(now_ms - g_base_suspect_since_ms) >= 5000U)
+        {
+            if ((uint32_t)(now_ms - g_base_suspect_log_ms) >= 30000U)
+            {
+                app_fmt_x1000(s_g, sizeof(s_g), p_out->g_ec);
+                app_fmt_x10(s_ec0, sizeof(s_ec0), p_out->ec0_mv25);
+                app_fmt_x10(s_dec, sizeof(s_dec), p_out->d_ec_mv);
+                printf("# BASE_SUSPECT t=%lums g=%s ec0=%smV dEC=%smV (clean EC is above baseline; re-run W)\r\n",
+                       (unsigned long)now_ms, s_g, s_ec0, s_dec);
+                g_base_suspect_log_ms = now_ms;
+            }
+        }
+    }
+    else
+    {
+        g_base_suspect_since_ms = now_ms;
+    }
 }
 
 /* ---------- 干态指纹采集（命令 D） ---------- */
@@ -1414,6 +1496,10 @@ static void app_autocal_enter(app_autocal_state_t state, uint32_t now_ms, const 
 {
     g_ac_state    = state;
     g_ac_since_ms = now_ms;
+    if (APP_AC_SETTLE == state)
+    {
+        g_ac_stable_since_ms = now_ms;
+    }
     if (APP_AC_DONE == state)
     {
         g_ac_done_since_ms = now_ms;
@@ -1460,8 +1546,18 @@ void app_autocal_text(char *p_buf, uint32_t buf_size)
             break;
 
         case APP_AC_WET:
-            (void)snprintf(p_buf, (size_t)buf_size, "Auto calib");
+        {
+            const pipeline_out_t *p_base = pipeline_get_out(&g_pipe);
+            unsigned n = (NULL != p_base) ? (unsigned)p_base->baseline_n : 0U;
+
+            if (n > APP_BASELINE_N)
+            {
+                n = APP_BASELINE_N;
+            }
+            (void)snprintf(p_buf, (size_t)buf_size, "Auto calib %u/%u",
+                           n, (unsigned)APP_BASELINE_N);
             break;
+        }
 
         case APP_AC_RETRY:
             (void)snprintf(p_buf, (size_t)buf_size, "Auto retry %u",
@@ -1584,6 +1680,30 @@ static void app_autocal_start(uint32_t now_ms)
 #else
     (void)now_ms;
 #endif
+}
+
+/*
+ * 独立清水标定（K2 长按 ≥3 s）：
+ *   1) 作废旧基线，避免旧 EC0 继续参与判别；
+ *   2) 直接复用自检的 SETTLE→WET 流程：等浸没、稳定 300 ms、AO 清洁、
+ *      采 2 s、采后 5 mV 漂移校验；成功后才重新生效。
+ *   3) 现场流程：先排空/用清水冲 2~3 倍腔体，再淹过电极，然后长按 3 s。
+ * 注意：这一步只重建水基线；干态指纹沿用开机自检（DEFAULT/MEASURED）。
+ */
+static void app_cal_start(uint32_t now_ms)
+{
+    app_autocal_cancel("KEY CAL");
+    pipeline_invalidate_baseline(&g_pipe, "KEY_CAL");
+
+    g_ac_dry_tries   = 0U;
+    g_ac_wet_tries   = 0U;
+    g_ac_dry_blocked = false;
+    g_ac_fail_retry  = false;
+    g_ac_need_manual = false;
+    g_base_result    = APP_BASE_NONE;
+
+    printf("# CAL: clean-water calibration requested (flush 2~3x, keep electrode immersed)\r\n");
+    app_autocal_enter(APP_AC_SETTLE, now_ms, "key_cal");
 }
 
 /*
@@ -1743,40 +1863,71 @@ static void app_autocal_task(uint32_t now_ms, const pipeline_out_t *p_out)
         case APP_AC_SETTLE:
         {
             bool allow_wet = true;
+            bool stable_hold = false;
 
             if (!g_dec.gate.immersed)
             {
                 app_autocal_enter(APP_AC_WAIT, now_ms, "water_lost");
             }
-            else if ((uint32_t)(now_ms - g_ac_since_ms) >= APP_AUTOCAL_WATER_MS)
+            else
             {
-                /* 两道证据（无论干态是否实测都要过）：
-                 *   ① EC 比干态高 ec_wet_delta（默认 80 mV）；
-                 *   ② 浊度 AO 比空腔高 ao_water_delta（本装置水 AO 高于空气约 400 mV，
-                 *      与"空气满量程"的常见假设相反，故用正差值）。
-                 * 只有一层水膜的电极通常过不了第 ② 条，避免把水膜当成水体。 */
-                allow_wet = (p_out->tds_mv25 >= (g_dec.gate.ec_dry_mv
-                                                 + g_dec.gate.cfg.ec_wet_delta_mv))
-                         && ((float)p_out->ntu_ao_mv >= (g_dec.gate.ao_dry_mv
-                                                         + g_dec.gate.cfg.ao_water_delta_mv));
-
-                if (!allow_wet)
+                if (g_dec.gate.stable)
                 {
-                    /* 没有足够证据证明"腔里是水"：不允许自动采湿态（否则可能采到水膜） */
-                    g_ac_fail_retry  = true;
-                    g_ac_need_manual = true;
-                    app_autocal_enter(APP_AC_DONE, now_ms, "water_unconfirmed");
+                    if ((uint32_t)(now_ms - g_ac_stable_since_ms)
+                        >= APP_AUTOCAL_STABLE_MS)
+                    {
+                        stable_hold = true;
+                    }
                 }
                 else
                 {
-                    app_baseline_begin(now_ms, "AUTO");
-                    if (pipeline_baseline_capturing(&g_pipe))
+                    g_ac_stable_since_ms = now_ms;   /* 不稳定：连续稳定计时清零 */
+                }
+
+                if (((uint32_t)(now_ms - g_ac_since_ms) >= APP_AUTOCAL_WATER_MS)
+                    && ((stable_hold)
+                        || ((uint32_t)(now_ms - g_ac_since_ms)
+                            >= APP_AUTOCAL_WATER_MAX_MS)))
+                {
+                    /* 两道证据（无论干态是否实测都要过）：
+                     *   ① EC 比干态高 ec_wet_delta（默认 80 mV）；
+                     *   ② 浊度 AO 比空腔高 ao_water_delta（本装置水 AO 高于空气约 400 mV，
+                     *      与"空气满量程"的常见假设相反，故用正差值）。
+                     * 只有一层水膜的电极通常过不了第 ② 条，避免把水膜当成水体。 */
+                    allow_wet = (p_out->tds_mv25 >= (g_dec.gate.ec_dry_mv
+                                                     + g_dec.gate.cfg.ec_wet_delta_mv))
+                             && ((float)p_out->ntu_ao_mv >= (g_dec.gate.ao_dry_mv
+                                                             + g_dec.gate.cfg.ao_water_delta_mv));
+
+                    if (!allow_wet)
                     {
-                        app_autocal_enter(APP_AC_WET, now_ms, "calib");
+                        /* 没有足够证据证明"腔里是水"：不允许自动采湿态（否则可能采到水膜） */
+                        g_ac_fail_retry  = true;
+                        g_ac_need_manual = true;
+                        app_autocal_enter(APP_AC_DONE, now_ms, "water_unconfirmed");
+                    }
+                    else if ((float)p_out->ntu_ao_mv
+                             < (g_dec.gate.ao_dry_mv
+                                + g_dec.gate.cfg.ao_clean_delta_mv))
+                    {
+                        /* 是水，但不够清亮（AO 离空腔太近）：肥皂/脏水不能当本底。
+                         * 清水 AO≈2650、空腔≈2241（+409）；肥皂≈2310（+69）。 */
+                        g_ac_fail_retry  = true;
+                        g_ac_need_manual = true;
+                        app_autocal_enter(APP_AC_DONE, now_ms, "base_turbid");
                     }
                     else
                     {
-                        app_autocal_enter(APP_AC_RETRY, now_ms, "start_refused");
+                        app_baseline_begin(now_ms, "AUTO");
+                        if (pipeline_baseline_capturing(&g_pipe))
+                        {
+                            app_autocal_enter(APP_AC_WET, now_ms,
+                                              stable_hold ? "calib" : "calib_low_conf");
+                        }
+                        else
+                        {
+                            app_autocal_enter(APP_AC_RETRY, now_ms, "start_refused");
+                        }
                     }
                 }
             }
@@ -1784,9 +1935,19 @@ static void app_autocal_task(uint32_t now_ms, const pipeline_out_t *p_out)
         }
 
         case APP_AC_WET:
+        {
             if (APP_BASE_OK == g_base_result)
             {
-                if (g_dec.gate.baseline_ok)
+                float drift = p_out->tds_mv25 - p_out->ec0_mv25;
+
+                if (drift < 0.0f)
+                {
+                    drift = -drift;
+                }
+
+                /* 采完立即校验：基线均值与当前 EC 差太多，说明采到了上升沿。
+                 * 典型现场：基线 294、2 s 后水已到 310~324 → 必须丢弃重采。 */
+                if ((g_dec.gate.baseline_ok) && (drift <= 5.0f))
                 {
                     g_ac_need_manual = false;
                     g_ac_fail_retry  = false;
@@ -1794,13 +1955,24 @@ static void app_autocal_task(uint32_t now_ms, const pipeline_out_t *p_out)
                 }
                 else
                 {
-                    /* pipeline 认为基线有效，但工况机仍拒（量程/干态差值不满足）：
-                     * 不能报"自检成功"，否则会停在待机却不给原因。 */
-                    g_base_result = APP_BASE_NONE;
-                    app_autocal_enter(APP_AC_RETRY, now_ms, "gate_reject");
+                    if (drift > 5.0f)
+                    {
+                        char s_ec0[20];
+                        char s_ec[20];
+
+                        app_fmt_x10(s_ec0, sizeof(s_ec0), p_out->ec0_mv25);
+                        app_fmt_x10(s_ec, sizeof(s_ec), p_out->tds_mv25);
+                        printf("# BASELINE REJECT note=BASE_DRIFT ec0=%smV ec=%smV\r\n",
+                               s_ec0, s_ec);
+                    }
+                    pipeline_invalidate_baseline(&g_pipe,
+                                                 (drift > 5.0f) ? "BASE_DRIFT"
+                                                                : "BASE_GATE");
+                    g_base_result = APP_BASE_REJECT;
                 }
             }
-            else if (APP_BASE_REJECT == g_base_result)
+
+            if (APP_BASE_REJECT == g_base_result)
             {
                 g_ac_wet_tries++;
                 if (g_ac_wet_tries >= APP_AUTOCAL_WET_TRIES)
@@ -1814,11 +1986,12 @@ static void app_autocal_task(uint32_t now_ms, const pipeline_out_t *p_out)
                     app_autocal_enter(APP_AC_RETRY, now_ms, "base_retry");
                 }
             }
-            else
+            else if (APP_BASE_NONE == g_base_result)
             {
                 /* 正在采（墙钟超时已在函数开头处理） */
             }
             break;
+        }
 
         case APP_AC_RETRY:
             /* 到时判定已在函数开头处理 */
@@ -1960,7 +2133,7 @@ static void app_print_mark(const char *p_src, uint32_t now_ms)
 /*
  * 函数名：app_key_task
  * 作用：扫描板载 K2：短按（释放时）切换 OLED 页（P1→P2→P3→P1）；
- *       按住 ≥1.5 s 触发基线校准（只触发一次，长按优先）。
+ *       按住 ≥3 s 触发清水标定（只触发一次，长按优先）。
  * 参数：now_ms —— 当前时间（时基 ms）。
  * 返回：无。
  * 时序/边界：每 50 ms 调一次；软件消抖靠"边沿 + 长按计时"，板上已有 4.7 kΩ 上拉。
@@ -1985,9 +2158,8 @@ static void app_key_task(uint32_t now_ms)
         ((uint32_t)(now_ms - g_key_press_ms) >= APP_KEY_LONG_MS))
     {
         g_key_long_fired = true;
-        printf("# KEY: long press -> baseline recalibration\r\n");
-        app_autocal_cancel("manual KEY");   /* 与 W 命令一致：手动接管，先停自检 */
-        app_baseline_begin(now_ms, "KEY");
+        printf("# KEY: long press >=3s -> clean-water calibration\r\n");
+        app_cal_start(now_ms);
     }
 
     if ((!down) && g_key_prev_down)
@@ -2040,7 +2212,7 @@ static void app_print_help(void)
     printf("#  P             print status / gate / thresholds / parameters\r\n");
     printf("#  V1 / V0 / VA  manual valve: RECOVER (relay ON) / DRAIN (relay OFF) / auto\r\n");
     printf("#  K2 short press: next OLED page (P1 water / P2 exec / P3 info)\r\n");
-    printf("#  K2 long press >=1.5s: re-capture wet baseline (MARK is serial 'M' only)\r\n");
+    printf("#  K2 long press >=3s: clean-water calibration (MARK is serial 'M' only)\r\n");
     printf("# ---------------------------------------------------------------------\r\n");
 }
 
@@ -2810,7 +2982,7 @@ static void app_print_boot_summary(void)
     printf("# uart: 115200 8N1 polled-TX | tx_poll_fail=%lu (0=正常, >0=发送异常)\r\n",
            (unsigned long)g_uart_tx_timeouts);
     printf("# display: SSD1306 128x64 I2C0 addr=0x3C | 3 pages: P1 water / P2 exec / P3 info\r\n");
-    printf("# display: K2 short = next page; K2 long >=1.5s = baseline; M (UART) = mark\r\n");
+    printf("# display: K2 short = next page; K2 long >=3s = clean-water calibration; M (UART) = mark\r\n");
     printf("# display: site indicator only; CSV remains the record (display is NOT safety path)\r\n");
     printf("# IMPORTANT: baseline must be captured in water; TDS probe in air is a fake ~1.6V value\r\n");
     printf("# operation: autocal at boot (dry -> wait water -> wet). manual D/W/G/Z still available.\r\n");
@@ -2958,6 +3130,9 @@ static void app_tick(uint32_t now_ms)
         app_baseline_validate(now_ms, p_out);
     }
 
+    /* 7b) 基线过期监测（只报警，不改变控制） */
+    app_base_suspect_task(now_ms, p_out);
+
     /* 8) 执行器：LED 假执行器（P111）+ 真阀（P104 → 继电器 → 12V 二位三通阀） */
     recover = app_valve_recover_requested(p_dec);
     app_valve_apply(recover, now_ms);
@@ -2971,7 +3146,7 @@ static void app_tick(uint32_t now_ms)
         printf("# WARN: OLED lost at t=%lu ms -> UART only\r\n", (unsigned long)now_ms);
     }
 
-    /* 10) 按键 K2：短按切 OLED 页 / 长按 ≥1.5 s 重新采基线 */
+    /* 10) 按键 K2：短按切 OLED 页 / 长按 ≥3 s 进入清水标定 */
     app_key_task(now_ms);
 
     /* 11) 串口命令：整行解析，命令只改状态，耗时 <1 ms */

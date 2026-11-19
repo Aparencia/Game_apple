@@ -56,8 +56,8 @@ extern "C" {
 #define OLED_SEG_REMAP_CMD   0xA0U
 
 /* 32x32 汉字索引：与 oledfont.h 的 oled_hz32_bitmaps[] 顺序一一对应（改顺序必须两边一起改）。
- * 字库共 15 个字：清水污待机冲洗故障 + v1.3.0 追加 回收排空手动；
- * 不要指望显示任意中文——字库只有这 15 个字形（新增字必须改 oledfont.h 并同步本枚举）。 */
+ * 字库共 17 个字：清水污待机冲洗故障 + v1.3.0 追加 回收排空手动 + v2.4.2 追加 校准；
+ * 不要指望显示任意中文——字库只有这 17 个字形（新增字必须改 oledfont.h 并同步本枚举）。 */
 typedef enum e_oled_hz32_id
 {
     OLED_HZ32_QING = 0,   /* 清 */
@@ -75,6 +75,8 @@ typedef enum e_oled_hz32_id
     OLED_HZ32_KONG,       /* 空 */
     OLED_HZ32_HAND,       /* 手 */
     OLED_HZ32_DONG,       /* 动 */
+    OLED_HZ32_JIAO,       /* 校（v2.4.2 湿态基线页） */
+    OLED_HZ32_ZHUN,       /* 准（v2.4.2 湿态基线页） */
     OLED_HZ32_COUNT
 } oled_hz32_id_t;
 

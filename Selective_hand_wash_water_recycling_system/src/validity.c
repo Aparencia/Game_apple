@@ -55,6 +55,7 @@ static const gate_cfg_t g_gate_default_cfg =
     .ec0_max_mv         = 1600.0f,  /* 基线上限：开路伪值约 1650 mV 与脏水本底都要排除 */
     .ec0_default_min_mv = 150.0f,   /* 默认干态（未实测）时，水中基线必须 ≥150 mV */
     .ao_water_delta_mv  = 80.0f,    /* 水 AO 至少比空腔高 80 mV（本装置水 AO 高于空气） */
+    .ao_clean_delta_mv  = 250.0f,   /* 自检基线要求清亮水：清水 AO-AO_DRY≈409，肥皂≈69 */
     .ntu_ao_min_mv      = 20U,      /* 浊度 AO 低于它=未供电/断线 */
     .rate_stable_mv_s   = 80.0f,    /* 稳定带：EC 变化率（v2.4.1：肥皂约 50、换向约 38，30 太紧会把肥皂踢回 SETTLE） */
     .rate_stable_pct_s  = 20.0f,    /* 稳定带：浊度相对变化率（肥皂约 16%/s） */
@@ -271,6 +272,8 @@ void gate_init(gate_t *p_gate, const gate_cfg_t *p_cfg)
                                           g_gate_default_cfg.ec0_default_min_mv);
     p_c->ao_water_delta_mv  = gate_clampf(p_c->ao_water_delta_mv, -500.0f, 500.0f,
                                           g_gate_default_cfg.ao_water_delta_mv);
+    p_c->ao_clean_delta_mv  = gate_clampf(p_c->ao_clean_delta_mv, 0.0f, 1500.0f,
+                                          g_gate_default_cfg.ao_clean_delta_mv);
     if (0U == p_c->ntu_ao_min_mv)
     {
         p_c->ntu_ao_min_mv = g_gate_default_cfg.ntu_ao_min_mv;

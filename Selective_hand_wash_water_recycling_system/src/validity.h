@@ -118,6 +118,7 @@ typedef struct st_gate_cfg
      *   若更换模块后方向相反，把该值设为负数即可。
      */
     float    ao_water_delta_mv;     /* 默认 +80 mV：水 AO 至少比空腔高 80 mV */
+    float    ao_clean_delta_mv;     /* 默认 250 mV：自检湿态基线要求"清亮水"的 AO 门槛 */
     /* 浊度故障判据：AO 小于它视为未供电/断线（NTU_RAIL） */
     uint32_t ntu_ao_min_mv;         /* 默认 20 */
     /* 稳定判据（方案 §6.2） */
