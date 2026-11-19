@@ -33,6 +33,12 @@ static volatile bool     g_have_rise;
 static volatile bool     g_pulse_ready;
 static volatile uint32_t g_rise_cycles;
 static volatile uint32_t g_pulse_us;
+static volatile uint32_t g_trig_count;
+static volatile uint32_t g_edge_count;
+static volatile uint32_t g_rise_count;
+static volatile uint32_t g_fall_count;
+static volatile uint32_t g_timeout_count;
+static volatile uint32_t g_last_pulse_us;
 
 static uint16_t g_hist_mm[3];
 static uint8_t  g_hist_count;
@@ -136,6 +142,12 @@ bool hc_sr04_init(void)
     g_valid = false;
     g_hist_count = 0U;
     g_hist_pos = 0U;
+    g_trig_count = 0U;
+    g_edge_count = 0U;
+    g_rise_count = 0U;
+    g_fall_count = 0U;
+    g_timeout_count = 0U;
+    g_last_pulse_us = 0U;
     return true;
 }
 
@@ -154,6 +166,7 @@ void hc_sr04_task(uint32_t now_ms)
 
             g_pulse_ready = false;
             g_waiting = false;
+            g_last_pulse_us = us;
 
             if ((us >= HC_MIN_PULSE_US) && (us <= HC_MAX_PULSE_US))
             {
@@ -169,6 +182,7 @@ void hc_sr04_task(uint32_t now_ms)
         else if ((uint32_t)(now_ms - g_last_trig_ms) >= HC_ECHO_TIMEOUT_MS)
         {
             g_waiting = false;
+            g_timeout_count++;
         }
     }
 
@@ -183,6 +197,7 @@ void hc_sr04_task(uint32_t now_ms)
 
         g_last_trig_ms = now_ms;
         g_waiting = true;
+        g_trig_count++;
     }
 
     if (g_valid && ((uint32_t)(now_ms - g_last_valid_ms) > 1000U))
@@ -204,23 +219,55 @@ bool hc_sr04_get_mm(uint16_t *p_mm, bool *p_valid)
     return g_valid;
 }
 
+void hc_sr04_get_diag(uint32_t *p_trig, uint32_t *p_edges, uint32_t *p_rise,
+                      uint32_t *p_fall, uint32_t *p_timeout, uint32_t *p_last_us)
+{
+    if (NULL != p_trig)
+    {
+        *p_trig = g_trig_count;
+    }
+    if (NULL != p_edges)
+    {
+        *p_edges = g_edge_count;
+    }
+    if (NULL != p_rise)
+    {
+        *p_rise = g_rise_count;
+    }
+    if (NULL != p_fall)
+    {
+        *p_fall = g_fall_count;
+    }
+    if (NULL != p_timeout)
+    {
+        *p_timeout = g_timeout_count;
+    }
+    if (NULL != p_last_us)
+    {
+        *p_last_us = g_last_pulse_us;
+    }
+}
+
 void hc_sr04_echo_isr(void)
 {
     uint32_t now = DWT->CYCCNT;
     bsp_io_level_t level = BSP_IO_LEVEL_LOW;
 
     (void)R_IOPORT_PinRead(&g_ioport_ctrl, HC_ECHO_PIN, &level);
+    g_edge_count++;
 
     if (BSP_IO_LEVEL_HIGH == level)
     {
         g_rise_cycles = now;
         g_have_rise = true;
+        g_rise_count++;
     }
     else if (g_have_rise)
     {
         g_pulse_us = now - g_rise_cycles;
         g_have_rise = false;
         g_pulse_ready = true;
+        g_fall_count++;
     }
 
     /* 必须清 IRQ 状态位，否则边沿 IRQ 会一直重入，主循环被饿死/看门狗复位。 */

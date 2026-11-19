@@ -257,7 +257,7 @@
 #include <sys/stat.h>                /* struct stat / S_IFCHR：printf 重定向需要的空桩 */
 
 /* ---------- 应用参数（全部集中在这里，便于标定） ---------- */
-#define APP_FW_VERSION          "SENSOR-NODE v2.8.0-LEVEL-M1a"  /* M1a: 清 IRQ 状态，修复重启 */
+#define APP_FW_VERSION          "SENSOR-NODE v2.8.0-LEVEL-M1b"  /* M1b: 增加 HC 触发/边沿/脉宽诊断 */
 #define APP_TICK_MS             50U                  /* 主循环 tick（项目设想 6.2.1） */
 #define APP_CSV_PERIOD_MS       200U                 /* CSV 输出周期：5 行/秒 */
 #define APP_TIP_PERIOD_MS       2000U                /* 人类可读摘要（# TIP）周期：2 s */
@@ -3535,11 +3535,20 @@ static void app_tick(uint32_t now_ms)
     {
         uint16_t level_mm = 0U;
         bool level_valid = false;
+        uint32_t trig_n = 0U;
+        uint32_t edge_n = 0U;
+        uint32_t rise_n = 0U;
+        uint32_t fall_n = 0U;
+        uint32_t timeout_n = 0U;
+        uint32_t last_us = 0U;
 
         g_level_log_ms = now_ms;
         (void)hc_sr04_get_mm(&level_mm, &level_valid);
-        printf("# LEVEL t=%lums mm=%u valid=%u\r\n",
-               (unsigned long)now_ms, (unsigned)level_mm, level_valid ? 1U : 0U);
+        hc_sr04_get_diag(&trig_n, &edge_n, &rise_n, &fall_n, &timeout_n, &last_us);
+        printf("# LEVEL t=%lums mm=%u valid=%u trig=%lu edge=%lu rise=%lu fall=%lu to=%lu us=%lu\r\n",
+               (unsigned long)now_ms, (unsigned)level_mm, level_valid ? 1U : 0U,
+               (unsigned long)trig_n, (unsigned long)edge_n, (unsigned long)rise_n,
+               (unsigned long)fall_n, (unsigned long)timeout_n, (unsigned long)last_us);
     }
 
     /* 4) 干态指纹采集（命令 D，非阻塞；完成后写入 gate 并影响本 tick 的工况） */

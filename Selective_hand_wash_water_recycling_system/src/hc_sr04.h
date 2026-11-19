@@ -28,6 +28,10 @@ void hc_sr04_task(uint32_t now_ms);
 /* 读取最近一次中值；valid=false 表示无回波/超时/尚未采样。 */
 bool hc_sr04_get_mm(uint16_t *p_mm, bool *p_valid);
 
+/* 诊断计数：触发次数/边沿/上升/下降/超时/最近脉宽。 */
+void hc_sr04_get_diag(uint32_t *p_trig, uint32_t *p_edges, uint32_t *p_rise,
+                      uint32_t *p_fall, uint32_t *p_timeout, uint32_t *p_last_us);
+
 /* Echo 双边沿中断处理（vector_data.c 使用）。 */
 void hc_sr04_echo_isr(void);
 
