@@ -127,6 +127,12 @@
  *   修复：① AO 清洁门槛只在第一段 DRAIN 检查；同一腔水切阀后不再复检 AO；
  *         ② 最近槽距离 >30 mV 时保留当前基线（EC 单独高走 L1），不再 NOBASE。
  *
+ * v2.7.4-B3（2026-11-19，肥皂冲洗水误当清水基线）：
+ *   现场首轮自检时腔内是肥皂冲洗水（DRAIN 373.8、RECOVER 553.0、ntu0≈2581），
+ *   自动标定把它当成本底，之后整段 CLEAR，直到失水才 SOAP。
+ *   修复：AO 清洁门槛 250→300 mV（清水 AO-AO_DRY≈500，肥皂≈244），
+ *         肥皂/浑浊冲洗水不再能通过第一段 DRAIN 的清水确认。
+ *
  * v2.0.0（2026-11-16，现场诊断后重做控制模型）：
  *   旧模型"事件闩锁 + 30 s 超时"被整体替换为"工况门控 + 每 tick 重算的回收许可"：
  *     validity(gate) 先判"能不能判"（FAULT/DRY/SETTLE/MEASURE/LOCKOUT），
@@ -233,7 +239,7 @@
 #include <sys/stat.h>                /* struct stat / S_IFCHR：printf 重定向需要的空桩 */
 
 /* ---------- 应用参数（全部集中在这里，便于标定） ---------- */
-#define APP_FW_VERSION          "SENSOR-NODE v2.7.3-B3"  /* v2.7.3=保留第二槽 + 无近槽不作废基线 */
+#define APP_FW_VERSION          "SENSOR-NODE v2.7.4-B3"  /* v2.7.4=拒绝肥皂水当清水基线 */
 #define APP_TICK_MS             50U                  /* 主循环 tick（项目设想 6.2.1） */
 #define APP_CSV_PERIOD_MS       200U                 /* CSV 输出周期：5 行/秒 */
 #define APP_TIP_PERIOD_MS       2000U                /* 人类可读摘要（# TIP）周期：2 s */
@@ -369,7 +375,7 @@ static const decision_cfg_t g_app_decision_cfg =
         .ec0_max_mv         = 1600.0f,    /* 开路伪值 ~1650 与脏水本底都要挡住 */
         .ec0_default_min_mv = 150.0f,     /* v2.3：默认干态时基线只需 ≥150 mV（现场水 348） */
         .ao_water_delta_mv  = 80.0f,      /* v2.3：本装置水 AO 比空气高约 400 mV */
-        .ao_clean_delta_mv  = 250.0f,     /* v2.4.3：自检要求清亮水，挡肥皂/脏水基线 */
+        .ao_clean_delta_mv  = 300.0f,     /* v2.7.4：清水 AO-AO_DRY≈500，肥皂冲洗水≈244，250 太松 */
         .ntu_ao_min_mv      = 20U,
         .rate_stable_mv_s   = 80.0f,      /* v2.4.1：肥皂 ~50、换向 ~38，30 太紧会误回 SETTLE */
         .rate_stable_pct_s  = 20.0f,      /* 肥皂 ~16%/s，5 太紧 */
