@@ -108,6 +108,14 @@
  *     - L0 要求两路都低。
  *   标定三段：DRAIN → RECOVER → FULL（FULL 段要求 EC ≥ max(DRAIN,RECOVER)+10 mV）。
  *
+ * v2.7.1-B3（2026-11-19，现场标定失败修复）：
+ *   现场 FULL 段因失水失败后，g_cal_multi_slot 一直为 true，运行时不再选槽，
+ *   手工 W 基线 346 mV 被两个液位平台共用 → CLEAR↔UNCERT 横跳。
+ *   修复：① 任何 DONE（成功/部分/失败）都恢复槽选择；
+ *         ② FULL 段 15 s 等不到满水就保留 DRAIN/RECOVER 两槽并结束；
+ *         ③ DONE 打印三条槽实际值；
+ *         ④ 清洁稳定时以 4 mV/s 慢跟踪 active EC0，吸收标定/运行之间的液位漂移。
+ *
  * v2.0.0（2026-11-16，现场诊断后重做控制模型）：
  *   旧模型"事件闩锁 + 30 s 超时"被整体替换为"工况门控 + 每 tick 重算的回收许可"：
  *     validity(gate) 先判"能不能判"（FAULT/DRY/SETTLE/MEASURE/LOCKOUT），
@@ -214,7 +222,7 @@
 #include <sys/stat.h>                /* struct stat / S_IFCHR：printf 重定向需要的空桩 */
 
 /* ---------- 应用参数（全部集中在这里，便于标定） ---------- */
-#define APP_FW_VERSION          "SENSOR-NODE v2.7.0-B3"  /* v2.7.0=三槽最近基线 + EC/NTU 双通道 */
+#define APP_FW_VERSION          "SENSOR-NODE v2.7.1-B3"  /* v2.7.1=部分标定可运行 + 液位慢跟踪 */
 #define APP_TICK_MS             50U                  /* 主循环 tick（项目设想 6.2.1） */
 #define APP_CSV_PERIOD_MS       200U                 /* CSV 输出周期：5 行/秒 */
 #define APP_TIP_PERIOD_MS       2000U                /* 人类可读摘要（# TIP）周期：2 s */
@@ -239,6 +247,7 @@
 #define APP_AUTOCAL_WET_TRIES    3U                  /* 湿态最多尝试次数 */
 #define APP_AUTOCAL_WET_TIMEOUT  8000U               /* 单次湿态采集的兜底超时（2 s 标称，留 4× 余量） */
 #define APP_AUTOCAL_FAIL_RETRY_MS 300000U            /* 自检失败后每 5 min 低频重试一次 */
+#define APP_AUTOCAL_FULL_WAIT_MS  15000U             /* FULL 段最多等 15 s，等不到就保留前两槽 */
 /* 默认干态指纹：来自 2026-11-16 现场实测（空腔 TDS 43.7~58 mV、浊度 AO≈2337 mV）。
  * 只用于"是否浸没"的绝对门限；没有水中基线时工况仍是 FAULT，不会回收。 */
 #define APP_EC_DRY_DEFAULT_MV    60.0f
@@ -508,6 +517,7 @@ static void        app_baseline_validate(uint32_t now_ms, const pipeline_out_t *
 static void        app_base_suspect_task(uint32_t now_ms, const pipeline_out_t *p_out);
 static void        app_dry_task(uint32_t now_ms, const pipeline_out_t *p_out);
 static void        app_baseline_task(const pipeline_out_t *p_out, uint32_t now_ms);
+static void        app_baseline_trim_task(const pipeline_out_t *p_out);
 static void        app_dry_begin(uint32_t now_ms, uint16_t target_n, bool auto_cap);
 static void        app_autocal_start(uint32_t now_ms);
 static void        app_cal_start(uint32_t now_ms);
@@ -1033,7 +1043,7 @@ static void app_baseline_task(const pipeline_out_t *p_out, uint32_t now_ms)
         }
     }
 
-    if (best_d > 45.0f)
+    if (best_d > 30.0f)
     {
         if (p_out->baseline_valid)
         {
@@ -1056,6 +1066,46 @@ static void app_baseline_task(const pipeline_out_t *p_out, uint32_t now_ms)
             decision_note_valve_switch(&g_dec, now_ms);
         }
     }
+}
+
+/*
+ * B3 液位漂移跟踪：
+ *   清洁、稳定、非屏蔽窗内，若 |dEC| 超过 d1 但不到 45 mV，说明当前
+ *   液位平台比 active 槽高/低（不是肥皂，因为 dNTU 干净），把 active EC0
+ *   以 1 mV/s 缓慢拉向当前 EC。肥皂时 dNTU 会抬起来，自动停止跟踪。
+ */
+static void app_baseline_trim_task(const pipeline_out_t *p_out)
+{
+    float d_ec;
+    float d_ntu;
+    float step = 0.20f;   /* 50 ms tick × 0.2 mV = 4 mV/s（清洁时才允许） */
+
+    if ((NULL == p_out) || g_cal_multi_slot || (!p_out->baseline_valid))
+    {
+        return;
+    }
+    if ((REGIME_MEASURE != g_dec.out.regime) || g_dec.out.blanking || (!g_dec.gate.stable))
+    {
+        return;
+    }
+
+    d_ntu = p_out->d_ntu_pct;
+    if ((d_ntu > 5.0f) || (d_ntu < -5.0f))
+    {
+        return;   /* 浊度已经不干净：可能是肥皂/脏水，禁止跟踪 */
+    }
+
+    d_ec = p_out->tds_mv25 - p_out->ec0_mv25;
+    if (d_ec < 0.0f)
+    {
+        d_ec = -d_ec;
+    }
+    if ((d_ec < g_dec.out.d1_ec_mv) || (d_ec > 45.0f))
+    {
+        return;
+    }
+
+    pipeline_baseline_trim_active(&g_pipe, p_out->tds_mv25, step);
 }
 
 /*
@@ -1629,7 +1679,40 @@ static void app_autocal_enter(app_autocal_state_t state, uint32_t now_ms, const 
     }
     if (APP_AC_DONE == state)
     {
+        char s_d[20];
+        char s_r[20];
+        char s_f[20];
+
         g_ac_done_since_ms = now_ms;
+        /* 任何结束（成功/部分成功/失败）都必须恢复运行时槽选择；
+         * 否则 g_cal_multi_slot 会一直为 true，运行永远用旧/手工基线。 */
+        g_cal_multi_slot = false;
+
+        if (pipeline_baseline_slot_valid(&g_pipe, (uint8_t)PIPELINE_SLOT_DRAIN))
+        {
+            app_fmt_x10(s_d, sizeof(s_d), g_pipe.slots[PIPELINE_SLOT_DRAIN].ec0_mv25);
+        }
+        else
+        {
+            (void)snprintf(s_d, sizeof(s_d), "INVALID");
+        }
+        if (pipeline_baseline_slot_valid(&g_pipe, (uint8_t)PIPELINE_SLOT_RECOVER))
+        {
+            app_fmt_x10(s_r, sizeof(s_r), g_pipe.slots[PIPELINE_SLOT_RECOVER].ec0_mv25);
+        }
+        else
+        {
+            (void)snprintf(s_r, sizeof(s_r), "INVALID");
+        }
+        if (pipeline_baseline_slot_valid(&g_pipe, (uint8_t)PIPELINE_SLOT_FULL))
+        {
+            app_fmt_x10(s_f, sizeof(s_f), g_pipe.slots[PIPELINE_SLOT_FULL].ec0_mv25);
+        }
+        else
+        {
+            (void)snprintf(s_f, sizeof(s_f), "INVALID");
+        }
+        printf("# SLOTS DRAIN=%s RECOVER=%s FULL=%s\r\n", s_d, s_r, s_f);
     }
 
     printf("# AUTOCAL state=%s%s%s\r\n",
@@ -2049,7 +2132,15 @@ static void app_autocal_task(uint32_t now_ms, const pipeline_out_t *p_out)
 
             if (!g_dec.gate.immersed)
             {
-                app_autocal_enter(APP_AC_WAIT, now_ms, "water_lost");
+                if ((g_cal_multi_slot) && (2U == g_cal_stage))
+                {
+                    printf("# CAL FULL skipped: water lost -> keep DRAIN/RECOVER slots\r\n");
+                    app_autocal_enter(APP_AC_DONE, now_ms, "full_no_water");
+                }
+                else
+                {
+                    app_autocal_enter(APP_AC_WAIT, now_ms, "water_lost");
+                }
             }
             else
             {
@@ -2100,6 +2191,14 @@ static void app_autocal_task(uint32_t now_ms, const pipeline_out_t *p_out)
                             full_min = lo + APP_CAL_FULL_MIN_MARGIN_MV;
                         }
                         full_ready = (p_out->tds_mv25 >= full_min);
+                    }
+
+                    if ((g_cal_multi_slot) && (2U == g_cal_stage)
+                        && ((uint32_t)(now_ms - g_ac_since_ms) >= APP_AUTOCAL_FULL_WAIT_MS))
+                    {
+                        printf("# CAL FULL timeout: no full-flow plateau -> keep DRAIN/RECOVER slots\r\n");
+                        app_autocal_enter(APP_AC_DONE, now_ms, "full_timeout");
+                        break;
                     }
 
                     if (!allow_wet)
@@ -3400,6 +3499,9 @@ static void app_tick(uint32_t now_ms)
     {
         return;
     }
+
+    /* 5a) 清洁稳定时缓慢跟踪液位漂移，避免校准后水位变化导致 dEC 偏 20~30 mV */
+    app_baseline_trim_task(p_out);
 
     /* 5b) 开机自检（v2.1）：必须在 decision_update 之后（gate.immersed 才是最新的）。
      *     上电自动干态 → 等水 → 自动湿态；手动 D/W 会接管并中止自检。 */

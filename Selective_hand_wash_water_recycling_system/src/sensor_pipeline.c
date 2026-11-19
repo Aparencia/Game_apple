@@ -1019,6 +1019,35 @@ bool pipeline_baseline_set_default(sensor_pipeline_t *p_pipe, uint8_t slot,
     return true;
 }
 
+void pipeline_baseline_trim_active(sensor_pipeline_t *p_pipe, float target_ec_mv,
+                                   float max_step_mv)
+{
+    float delta;
+
+    if ((NULL == p_pipe) || (!p_pipe->initialized) || (!p_pipe->out.baseline_valid)
+        || (target_ec_mv <= 1.0f) || (max_step_mv <= 0.0f))
+    {
+        return;
+    }
+    if (p_pipe->active_slot >= (uint8_t)PIPELINE_BASELINE_SLOTS)
+    {
+        return;
+    }
+
+    delta = target_ec_mv - p_pipe->out.ec0_mv25;
+    if (delta > max_step_mv)
+    {
+        delta = max_step_mv;
+    }
+    else if (delta < -max_step_mv)
+    {
+        delta = -max_step_mv;
+    }
+
+    p_pipe->out.ec0_mv25 += delta;
+    p_pipe->slots[p_pipe->active_slot].ec0_mv25 = p_pipe->out.ec0_mv25;
+}
+
 void pipeline_baseline_clear_slots(sensor_pipeline_t *p_pipe)
 {
     if ((NULL == p_pipe) || (!p_pipe->initialized))

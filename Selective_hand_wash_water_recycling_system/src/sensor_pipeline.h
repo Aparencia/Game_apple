@@ -205,6 +205,9 @@ bool pipeline_baseline_select_slot(sensor_pipeline_t *p_pipe, uint8_t slot);
 bool pipeline_baseline_slot_valid(const sensor_pipeline_t *p_pipe, uint8_t slot);
 bool pipeline_baseline_set_default(sensor_pipeline_t *p_pipe, uint8_t slot,
                                    float ec0_mv25, uint32_t ntu0_ao_mv);
+/* 清洁/稳定时把 active EC0 缓慢拉向当前 EC（液位漂移跟踪，单 tick 限幅 max_step_mv） */
+void pipeline_baseline_trim_active(sensor_pipeline_t *p_pipe, float target_ec_mv,
+                                   float max_step_mv);
 void pipeline_baseline_clear_slots(sensor_pipeline_t *p_pipe);
 
 /* 设置当前水温（app 每次 tick 从 ds18b20 取；from_sensor=false 表示手输/兜底）。 */
