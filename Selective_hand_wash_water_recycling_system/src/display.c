@@ -479,73 +479,6 @@ static const char *disp_regime_tag(regime_t regime)
     }
 }
 
-/* 状态 → 首字母大写、其余小写（OLED 用；L0/L1/L2 等代码不在此函数）。 */
-static const char *disp_state_title(decision_state_t state)
-{
-    switch (state)
-    {
-        case DEC_STATE_CLEAR:
-            return "Clear";
-
-        case DEC_STATE_FLUSH:
-            return "Flush";
-
-        case DEC_STATE_UNCERTAIN:
-            return "Uncertain";
-
-        case DEC_STATE_SOAP:
-            return "Soap";
-
-        case DEC_STATE_WAIT:
-        default:
-            return "Wait";
-    }
-}
-
-/* 阀位置 → 首字母大写（OLED 用）。 */
-static const char *disp_pos_title(valve_pos_t pos)
-{
-    return (VALVE_POS_RECOVER == pos) ? "Recover" : "Drain";
-}
-
-/* 工况原因 → 首字母大写（OLED 用；避免 "L1 NO_BASE" 全大写）。 */
-static const char *disp_gate_reason_title(const char *p_reason)
-{
-    if (NULL == p_reason)
-    {
-        return "No base";
-    }
-    if (0 == strcmp(p_reason, "NO_BASE"))
-    {
-        return "No base";
-    }
-    if (0 == strcmp(p_reason, "NO_CAL"))
-    {
-        return "No cal";
-    }
-    if (0 == strcmp(p_reason, "SENSOR"))
-    {
-        return "Sensor";
-    }
-    if (0 == strcmp(p_reason, "DRY"))
-    {
-        return "Dry";
-    }
-    if (0 == strcmp(p_reason, "SETTLE"))
-    {
-        return "Settle";
-    }
-    if (0 == strcmp(p_reason, "LOCKOUT"))
-    {
-        return "Lockout";
-    }
-    if (0 == strcmp(p_reason, "MEASURE"))
-    {
-        return "Measure";
-    }
-    return p_reason;
-}
-
 /*
  * 函数名：disp_valve_manual
  * 作用：判断当前阀是否处于"手动覆盖"（V1/V0）状态。
@@ -610,7 +543,7 @@ static void disp_build_water_page(const pipeline_out_t *p_out, const decision_ou
         p_page->big0    = (uint8_t)OLED_HZ32_GU;      /* 故 */
         p_page->big1    = (uint8_t)OLED_HZ32_ZHANG;   /* 障 */
         p_page->inverse = false;
-        disp_copy(p_page->r1, (uint32_t)sizeof(p_page->r1), "L1 Sensor fault");
+        disp_copy(p_page->r1, (uint32_t)sizeof(p_page->r1), "L1 SENSOR_FAULT");
         disp_fmt_note(p_page->r2, (uint32_t)sizeof(p_page->r2), p_out->note);
         return;
     }
@@ -622,15 +555,10 @@ static void disp_build_water_page(const pipeline_out_t *p_out, const decision_ou
         app_autocal_text(ac, (uint32_t)sizeof(ac));
         if ('\0' != ac[0])
         {
-            char hint[24];
-            bool calib = (0 == strncmp(ac, "Auto calib", 10U));
-
-            /* 湿态采基线时不要显示"待机"：大字改为"校准"，第二行带 n/40 进度 */
-            p_page->big0 = (uint8_t)(calib ? OLED_HZ32_JIAO : OLED_HZ32_DAI);
-            p_page->big1 = (uint8_t)(calib ? OLED_HZ32_ZHUN : OLED_HZ32_JI);
+            p_page->big0 = (uint8_t)OLED_HZ32_DAI;    /* 待 */
+            p_page->big1 = (uint8_t)OLED_HZ32_JI;     /* 机 */
             disp_copy(p_page->r1, (uint32_t)sizeof(p_page->r1), ac);
-            app_autocal_hint(hint, (uint32_t)sizeof(hint));
-            disp_copy(p_page->r2, (uint32_t)sizeof(p_page->r2), hint);
+            disp_copy(p_page->r2, (uint32_t)sizeof(p_page->r2), "auto self-check");
             return;
         }
     }
@@ -642,7 +570,7 @@ static void disp_build_water_page(const pipeline_out_t *p_out, const decision_ou
     {
         p_page->big0 = (uint8_t)OLED_HZ32_DAI;    /* 待 */
         p_page->big1 = (uint8_t)OLED_HZ32_JI;     /* 机 */
-        disp_copy(p_page->r1, (uint32_t)sizeof(p_page->r1), "Dry    No water");
+        disp_copy(p_page->r1, (uint32_t)sizeof(p_page->r1), "DRY    NO WATER");
         disp_fmt_numbers(p_page->r2, (uint32_t)sizeof(p_page->r2), p_out);
         return;
     }
@@ -651,7 +579,7 @@ static void disp_build_water_page(const pipeline_out_t *p_out, const decision_ou
     {
         p_page->big0 = (uint8_t)OLED_HZ32_DAI;
         p_page->big1 = (uint8_t)OLED_HZ32_JI;
-        disp_copy(p_page->r1, (uint32_t)sizeof(p_page->r1), "Settle wait 4s");
+        disp_copy(p_page->r1, (uint32_t)sizeof(p_page->r1), "SETTLE WAIT 4s");
         disp_fmt_numbers(p_page->r2, (uint32_t)sizeof(p_page->r2), p_out);
         return;
     }
@@ -660,7 +588,7 @@ static void disp_build_water_page(const pipeline_out_t *p_out, const decision_ou
     {
         p_page->big0 = (uint8_t)OLED_HZ32_DAI;
         p_page->big1 = (uint8_t)OLED_HZ32_JI;
-        disp_copy(p_page->r1, (uint32_t)sizeof(p_page->r1), "Lockout  check");
+        disp_copy(p_page->r1, (uint32_t)sizeof(p_page->r1), "LOCKOUT  CHECK");
         disp_fmt_numbers(p_page->r2, (uint32_t)sizeof(p_page->r2), p_out);
         return;
     }
@@ -675,17 +603,16 @@ static void disp_build_water_page(const pipeline_out_t *p_out, const decision_ou
             p_page->big0 = (uint8_t)OLED_HZ32_DAI;    /* 待 */
             p_page->big1 = (uint8_t)OLED_HZ32_JI;     /* 机 */
             (void)snprintf(p_page->r1, (size_t)sizeof(p_page->r1),
-                           "Baseline %2u/%u", (unsigned)n,
+                           "BASELINE %2u/%u", (unsigned)n,
                            (unsigned)DISPLAY_BASELINE_TOTAL);
-            disp_copy(p_page->r2, (uint32_t)sizeof(p_page->r2), "Probe in water");
+            disp_copy(p_page->r2, (uint32_t)sizeof(p_page->r2), "hold probe in water");
         }
         else
         {
             p_page->big0 = (uint8_t)OLED_HZ32_GU;
             p_page->big1 = (uint8_t)OLED_HZ32_ZHANG;
             (void)snprintf(p_page->r1, (size_t)sizeof(p_page->r1), "L1 %s",
-                           disp_gate_reason_title((NULL != p_dec->gate_reason)
-                                                  ? p_dec->gate_reason : "NO_BASE"));
+                           (NULL != p_dec->gate_reason) ? p_dec->gate_reason : "NO_BASE");
             disp_fmt_note(p_page->r2, (uint32_t)sizeof(p_page->r2), p_out->note);
         }
         return;
@@ -699,34 +626,34 @@ static void disp_build_water_page(const pipeline_out_t *p_out, const decision_ou
         case DEC_STATE_CLEAR:
             p_page->big0 = (uint8_t)OLED_HZ32_QING;   /* 清 */
             p_page->big1 = (uint8_t)OLED_HZ32_SHUI;   /* 水 */
-            disp_copy(p_page->r1, (uint32_t)sizeof(p_page->r1), "Clear  Recover");
+            disp_copy(p_page->r1, (uint32_t)sizeof(p_page->r1), "CLEAR  RECOVER");
             break;
 
         case DEC_STATE_UNCERTAIN:
             p_page->big0    = (uint8_t)OLED_HZ32_WU;  /* 污 */
             p_page->big1    = (uint8_t)OLED_HZ32_SHUI;
             p_page->inverse = true;
-            disp_copy(p_page->r1, (uint32_t)sizeof(p_page->r1), "L1 Uncertain");
+            disp_copy(p_page->r1, (uint32_t)sizeof(p_page->r1), "L1 UNCERTAIN");
             break;
 
         case DEC_STATE_SOAP:
             p_page->big0    = (uint8_t)OLED_HZ32_WU;
             p_page->big1    = (uint8_t)OLED_HZ32_SHUI;
             p_page->inverse = true;
-            disp_copy(p_page->r1, (uint32_t)sizeof(p_page->r1), "L2 Soap  Drain");
+            disp_copy(p_page->r1, (uint32_t)sizeof(p_page->r1), "L2 SOAP  DRAIN");
             break;
 
         case DEC_STATE_FLUSH:
             p_page->big0 = (uint8_t)OLED_HZ32_CHONG;  /* 冲 */
             p_page->big1 = (uint8_t)OLED_HZ32_XI;     /* 洗 */
-            disp_copy(p_page->r1, (uint32_t)sizeof(p_page->r1), "Flush  Drain");
+            disp_copy(p_page->r1, (uint32_t)sizeof(p_page->r1), "FLUSH  DRAIN");
             break;
 
         case DEC_STATE_WAIT:
         default:
             p_page->big0 = (uint8_t)OLED_HZ32_DAI;
             p_page->big1 = (uint8_t)OLED_HZ32_JI;
-            disp_copy(p_page->r1, (uint32_t)sizeof(p_page->r1), "Wait   EV:Off");
+            disp_copy(p_page->r1, (uint32_t)sizeof(p_page->r1), "WAIT   EV:OFF");
             break;
     }
 }
@@ -755,11 +682,11 @@ static void disp_build_exec_page(const pipeline_out_t *p_out, const decision_out
 
     if (NULL == p_valve)
     {
-        disp_copy(p_page->r0, (uint32_t)sizeof(p_page->r0), "P2/3 Exec no valve");
+        disp_copy(p_page->r0, (uint32_t)sizeof(p_page->r0), "P2/3 EXEC NO VALVE");
         p_page->big0 = (uint8_t)OLED_HZ32_GU;
         p_page->big1 = (uint8_t)OLED_HZ32_ZHANG;
-        disp_copy(p_page->r1, (uint32_t)sizeof(p_page->r1), "Valve no data");
-        disp_copy(p_page->r2, (uint32_t)sizeof(p_page->r2), "Check p_valve arg");
+        disp_copy(p_page->r1, (uint32_t)sizeof(p_page->r1), "VALVE NO DATA");
+        disp_copy(p_page->r2, (uint32_t)sizeof(p_page->r2), "check p_valve arg");
         return;
     }
 
@@ -768,15 +695,15 @@ static void disp_build_exec_page(const pipeline_out_t *p_out, const decision_out
     /* 页头：页号 + 执行器 + 模式 */
     if (p_valve->pin_fault)
     {
-        disp_copy(p_page->r0, (uint32_t)sizeof(p_page->r0), "P2/3 Exec  Mode:Fault");
+        disp_copy(p_page->r0, (uint32_t)sizeof(p_page->r0), "P2/3 EXEC  MODE:FAULT");
     }
     else if (manual)
     {
-        disp_copy(p_page->r0, (uint32_t)sizeof(p_page->r0), "P2/3 Exec Mode:Manual");
+        disp_copy(p_page->r0, (uint32_t)sizeof(p_page->r0), "P2/3 EXEC MODE:MANUAL");
     }
     else
     {
-        disp_copy(p_page->r0, (uint32_t)sizeof(p_page->r0), "P2/3 Exec  Mode:Auto");
+        disp_copy(p_page->r0, (uint32_t)sizeof(p_page->r0), "P2/3 EXEC  MODE:AUTO");
     }
 
     /* ① 引脚故障（写/回读失败）：安全侧仍是排空，但必须让人看见 */
@@ -784,9 +711,9 @@ static void disp_build_exec_page(const pipeline_out_t *p_out, const decision_out
     {
         p_page->big0 = (uint8_t)OLED_HZ32_GU;
         p_page->big1 = (uint8_t)OLED_HZ32_ZHANG;
-        disp_copy(p_page->r1, (uint32_t)sizeof(p_page->r1), "Pin fault");
+        disp_copy(p_page->r1, (uint32_t)sizeof(p_page->r1), "PIN_FAULT");
         (void)snprintf(p_page->r2, (size_t)sizeof(p_page->r2),
-                       "Check P104 count=%lu", (unsigned long)p_valve->fault_count);
+                       "check P104 count=%lu", (unsigned long)p_valve->fault_count);
         return;
     }
 
@@ -795,7 +722,7 @@ static void disp_build_exec_page(const pipeline_out_t *p_out, const decision_out
     {
         p_page->big0 = (uint8_t)OLED_HZ32_GU;
         p_page->big1 = (uint8_t)OLED_HZ32_ZHANG;
-        disp_copy(p_page->r1, (uint32_t)sizeof(p_page->r1), "Sensor fault");
+        disp_copy(p_page->r1, (uint32_t)sizeof(p_page->r1), "SENSOR_FAULT");
         disp_fmt_note(p_page->r2, (uint32_t)sizeof(p_page->r2), p_out->note);
         return;
     }
@@ -805,8 +732,8 @@ static void disp_build_exec_page(const pipeline_out_t *p_out, const decision_out
     {
         p_page->big0 = (uint8_t)OLED_HZ32_DAI;
         p_page->big1 = (uint8_t)OLED_HZ32_JI;
-        disp_copy(p_page->r1, (uint32_t)sizeof(p_page->r1), "Dry  Drain");
-        disp_copy(p_page->r2, (uint32_t)sizeof(p_page->r2), "No water");
+        disp_copy(p_page->r1, (uint32_t)sizeof(p_page->r1), "DRY  DRAIN");
+        disp_copy(p_page->r2, (uint32_t)sizeof(p_page->r2), "no water");
         return;
     }
 
@@ -818,15 +745,15 @@ static void disp_build_exec_page(const pipeline_out_t *p_out, const decision_out
         {
             p_page->big0 = (uint8_t)OLED_HZ32_DAI;
             p_page->big1 = (uint8_t)OLED_HZ32_JI;
-            disp_copy(p_page->r1, (uint32_t)sizeof(p_page->r1), "Baselining");
-            disp_copy(p_page->r2, (uint32_t)sizeof(p_page->r2), "Probe in water");
+            disp_copy(p_page->r1, (uint32_t)sizeof(p_page->r1), "BASELINING");
+            disp_copy(p_page->r2, (uint32_t)sizeof(p_page->r2), "hold probe in water");
         }
         else
         {
             p_page->big0 = (uint8_t)OLED_HZ32_GU;
             p_page->big1 = (uint8_t)OLED_HZ32_ZHANG;
-            disp_copy(p_page->r1, (uint32_t)sizeof(p_page->r1), "No baseline");
-            disp_copy(p_page->r2, (uint32_t)sizeof(p_page->r2), "Send W (D first)");
+            disp_copy(p_page->r1, (uint32_t)sizeof(p_page->r1), "NO_BASELINE");
+            disp_copy(p_page->r2, (uint32_t)sizeof(p_page->r2), "send W (D first)");
         }
         return;
     }
@@ -853,10 +780,10 @@ static void disp_build_exec_page(const pipeline_out_t *p_out, const decision_out
     }
 
     /* 第二行（8x16，16 字符）：阀位置 + 继电器实际状态 */
-    (void)snprintf(p_page->r1, (size_t)sizeof(p_page->r1), "%s%sRly:%s",
-                   recover ? "Recover" : "Drain",
+    (void)snprintf(p_page->r1, (size_t)sizeof(p_page->r1), "%s%sRLY:%s",
+                   recover ? "RECOVER" : "DRAIN",
                    recover ? "  " : "    ",
-                   p_valve->relay_on ? "On" : "Off");
+                   p_valve->relay_on ? "ON" : "OFF");
 
     /* 第三行（6x8，21 字符）：模式短标签 + 吸合次数 + 本次通电时长
      * （整秒显示；count/秒数都限幅到 4/3 位，保证最坏情况下不超 21 字符） */
@@ -872,8 +799,8 @@ static void disp_build_exec_page(const pipeline_out_t *p_out, const decision_out
         {
             sec = 999U;
         }
-        disp_copy(temp, (uint32_t)sizeof(temp), manual ? disp_manual_tag(p_valve) : "Auto");
-        (void)snprintf(p_page->r2, (size_t)sizeof(p_page->r2), "%s Cnt:%lu On:%lus",
+        disp_copy(temp, (uint32_t)sizeof(temp), manual ? disp_manual_tag(p_valve) : "AUTO");
+        (void)snprintf(p_page->r2, (size_t)sizeof(p_page->r2), "%s CNT:%lu ON:%lus",
                        temp, (unsigned long)cnt, (unsigned long)sec);
     }
 }
@@ -918,29 +845,29 @@ static void disp_build_info_page(uint32_t now_ms, const pipeline_out_t *p_out,
         {
             ev_s = 99U;   /* 行宽限制；事件只是日志标记，不需要更长 */
         }
-        (void)snprintf(p_page->rows[0], DISP_ROW_BUF, "P3/3 Reg:%s EV:%lus",
+        (void)snprintf(p_page->rows[0], DISP_ROW_BUF, "P3/3 REG:%s EV:%lus",
                        disp_regime_tag(p_dec->regime), (unsigned long)ev_s);
     }
     else
     {
-        (void)snprintf(p_page->rows[0], DISP_ROW_BUF, "P3/3 Reg:%s EV:Off",
+        (void)snprintf(p_page->rows[0], DISP_ROW_BUF, "P3/3 REG:%s EV:OFF",
                        disp_regime_tag(p_dec->regime));
     }
 
     /* 行 1：判别状态/等级 */
-    (void)snprintf(p_page->rows[1], DISP_ROW_BUF, "State:%s Lv:%s",
-                   disp_state_title(p_dec->state), decision_level_str(p_dec->level));
+    (void)snprintf(p_page->rows[1], DISP_ROW_BUF, "STATE:%s LEVEL:%s",
+                   decision_state_str(p_dec->state), decision_level_str(p_dec->level));
 
     /* 行 2：阀实际位置 + 继电器实际状态 */
     if (NULL != p_valve)
     {
-        (void)snprintf(p_page->rows[2], DISP_ROW_BUF, "Valve:%s Rly:%s",
-                       disp_pos_title(p_valve->position),
-                       p_valve->relay_on ? "On" : "Off");
+        (void)snprintf(p_page->rows[2], DISP_ROW_BUF, "VALVE:%s RLY:%s",
+                       valve_pos_str(p_valve->position),
+                       p_valve->relay_on ? "ON" : "OFF");
     }
     else
     {
-        disp_copy(p_page->rows[2], DISP_ROW_BUF, "Valve:no data");
+        disp_copy(p_page->rows[2], DISP_ROW_BUF, "VALVE:NO DATA");
     }
 
     /* 行 3：模式 + 吸合次数 */
@@ -952,13 +879,13 @@ static void disp_build_info_page(uint32_t now_ms, const pipeline_out_t *p_out,
         {
             cnt = 9999U;
         }
-        (void)snprintf(p_page->rows[3], DISP_ROW_BUF, "Mode:%s Cnt:%lu",
-                       disp_valve_manual(p_valve) ? disp_manual_tag(p_valve) : "Auto",
+        (void)snprintf(p_page->rows[3], DISP_ROW_BUF, "MODE:%s CNT:%lu",
+                       disp_valve_manual(p_valve) ? disp_manual_tag(p_valve) : "AUTO",
                        (unsigned long)cnt);
     }
     else
     {
-        disp_copy(p_page->rows[3], DISP_ROW_BUF, "Mode:no data");
+        disp_copy(p_page->rows[3], DISP_ROW_BUF, "MODE:NO DATA");
     }
 
     /* 行 4：dEC + g */
@@ -1009,7 +936,7 @@ static void disp_build_info_page(uint32_t now_ms, const pipeline_out_t *p_out,
     }
     else if (!p_out->baseline_valid)
     {
-        disp_copy(p_page->rows[7], DISP_ROW_BUF, "Send D then W");
+        disp_copy(p_page->rows[7], DISP_ROW_BUF, "send D then W");
     }
     else
     {
@@ -1190,13 +1117,13 @@ bool display_init(void)
 
     /* 开机页：7 行固定文案，全部 8 像素对齐（字库/文本函数只支持页对齐） */
     oled_clear();                                            /* 全屏黑 + 8 页全脏 */
-    oled_text_6x8(0U, 0U,  "RA4M2 Water Judge");
-    oled_text_8x16(0U, 8U, "OLED Ok");
+    oled_text_6x8(0U, 0U,  "RA4M2 WATER JUDGE");
+    oled_text_8x16(0U, 8U, "OLED OK");
     oled_text_6x8(0U, 24U, "SSD1306 128x64");
     oled_text_6x8(0U, 32U, "I2C0 0x3C 400kHz");
     oled_text_6x8(0U, 40U, "SENSOR-NODE v1.3");
-    oled_text_6x8(0U, 48U, "P1/P2/P3 K2=Next");
-    oled_text_6x8(0U, 56U, "M=Mark (UART)");
+    oled_text_6x8(0U, 48U, "P1/P2/P3 K2=NEXT");
+    oled_text_6x8(0U, 56U, "M=MARK (UART)");
 
     if (!oled_flush())
     {

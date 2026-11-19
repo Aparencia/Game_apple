@@ -99,26 +99,14 @@ typedef enum e_dry_source
  */
 typedef struct st_gate_cfg
 {
-    /* 浸没判据（v2.3 改为"差值"而非固定倍数）：
-     *   - 现场清水 EC0≈348 mV、空腔 23 mV，3×EC_DRY 在干态被残水抬高时会误判"没水"；
-     *   - 改用 EC ≥ EC_DRY + ec_wet_delta_mv（默认 80 mV），同时保留 g ≥ wet_ratio。
-     *   - ec_dry_ratio 保留但不再参与判据（旧版 3× 逻辑已弃用）。 */
+    /* 浸没判据（方案 §6.1）：g = EC/EC0 ≥ wet_ratio，且 EC ≥ ec_dry_ratio×EC_DRY */
     float    wet_ratio;             /* 默认 0.30：低于它认为是"没淹到电极" */
-    float    ec_wet_delta_mv;       /* 默认 80 mV：EC 至少比干态高这么多才算"有水" */
-    float    ec_dry_ratio;          /* 已弃用（保留字段避免旧配置编译失败） */
+    float    ec_dry_ratio;          /* 默认 3.0：EC 至少是干态的 3 倍才算"有水" */
     float    ec_dry_max_mv;         /* 默认 200：干态指纹超过它就不可信（防止拿湿态当干态） */
-    /* 基线量程校验：EC0 必须落在 [ec0_min, ec0_max]，且 ≥ EC_DRY + ec_wet_delta_mv */
+    /* 基线量程校验：EC0 必须落在 [ec0_min, ec0_max]，且 ≥ dry_ratio×EC_DRY */
     float    ec0_min_mv;            /* 默认 50：低于它视为模块未供电/探头悬空 */
     float    ec0_max_mv;            /* 默认 1600：开路伪值约 1650 与脏水本底都要挡住 */
-    float    ec0_default_min_mv;    /* 默认 150：干态指纹是 DEFAULT 时，水中基线必须 ≥ 它 */
-    /*
-     * 浊度"有水"确认（v2.3，按现场实测方向）：
-     *   本装置 清水 AO≈2639 mV > 空腔 AO≈2241 mV，与"空气满量程"的常见假设相反。
-     *   自动采湿态时要求 AO ≥ AO_DRY + ao_water_delta_mv；
-     *   若更换模块后方向相反，把该值设为负数即可。
-     */
-    float    ao_water_delta_mv;     /* 默认 +80 mV：水 AO 至少比空腔高 80 mV */
-    float    ao_clean_delta_mv;     /* 默认 250 mV：自检湿态基线要求"清亮水"的 AO 门槛 */
+    float    ec0_default_min_mv;    /* 默认 400：干态指纹是 DEFAULT 时，水中基线必须 ≥ 它 */
     /* 浊度故障判据：AO 小于它视为未供电/断线（NTU_RAIL） */
     uint32_t ntu_ao_min_mv;         /* 默认 20 */
     /* 稳定判据（方案 §6.2） */
@@ -126,9 +114,6 @@ typedef struct st_gate_cfg
     float    rate_stable_pct_s;     /* 默认 5 %/s（浊度相对变化率） */
     /* 时序（方案 §5 / §10） */
     uint32_t settle_ms;             /* 默认 4000：入水后稳定期 */
-    uint32_t settle_min_ms;         /* 默认 1500：最早允许进 MEASURE 的时间（v2.4 自适应） */
-    uint32_t settle_stable_ms;      /* 默认 500：连续稳定多久即可提前进 MEASURE */
-    uint32_t settle_timeout_ms;     /* 默认 6000：即使 STABLE 一直不成立，也应进入 MEASURE */
     uint32_t blank_ms;              /* 默认 400：换向屏蔽窗 */
     uint32_t wet_debounce_ms;       /* 默认 500：DRY→SETTLE 需连续浸没 */
     uint32_t dry_debounce_ms;       /* 默认 300：MEASURE→DRY 需连续失浸没（安全侧要快） */
@@ -160,7 +145,6 @@ typedef struct st_gate
     uint32_t   dry_since_ms;        /* 连续失浸没起始（MEASURE/SETTLE→DRY） */
     uint32_t   unstable_since_ms;   /* 连续不稳定起始（MEASURE→SETTLE） */
     uint32_t   fault_since_ms;      /* 连续"故障条件消失"起始（FAULT→LOCKOUT） */
-    uint32_t   settle_stable_since_ms; /* SETTLE 内连续稳定起始（自适应提前进入） */
     bool       first_update;        /* 上电第一次更新：允许直接落到 DRY */
 
     /* 换向屏蔽 */

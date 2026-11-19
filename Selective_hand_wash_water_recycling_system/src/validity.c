@@ -48,21 +48,15 @@ static const char *const g_gate_reason_lockout  = "LOCKOUT";   /* 故障恢复�
 static const gate_cfg_t g_gate_default_cfg =
 {
     .wet_ratio          = 0.30f,    /* g = EC/EC0 ≥ 0.30 才算"淹到电极" */
-    .ec_wet_delta_mv    = 80.0f,    /* EC 至少比干态高 80 mV 才算有水（v2.3） */
-    .ec_dry_ratio       = 3.0f,     /* 已弃用：仅保留字段，不再参与判据 */
+    .ec_dry_ratio       = 3.0f,     /* EC 至少是干态的 3 倍才算"有水" */
     .ec_dry_max_mv      = 200.0f,   /* 干态指纹上限（本次实测 58 mV） */
     .ec0_min_mv         = 50.0f,    /* 基线下限：低于它=模块没供电/探头悬空 */
     .ec0_max_mv         = 1600.0f,  /* 基线上限：开路伪值约 1650 mV 与脏水本底都要排除 */
-    .ec0_default_min_mv = 150.0f,   /* 默认干态（未实测）时，水中基线必须 ≥150 mV */
-    .ao_water_delta_mv  = 80.0f,    /* 水 AO 至少比空腔高 80 mV（本装置水 AO 高于空气） */
-    .ao_clean_delta_mv  = 250.0f,   /* 自检基线要求清亮水：清水 AO-AO_DRY≈409，肥皂≈69 */
+    .ec0_default_min_mv = 400.0f,   /* 默认干态（未实测）时，水中基线必须 ≥400 mV */
     .ntu_ao_min_mv      = 20U,      /* 浊度 AO 低于它=未供电/断线 */
-    .rate_stable_mv_s   = 80.0f,    /* 稳定带：EC 变化率（v2.4.1：肥皂约 50、换向约 38，30 太紧会把肥皂踢回 SETTLE） */
-    .rate_stable_pct_s  = 20.0f,    /* 稳定带：浊度相对变化率（肥皂约 16%/s） */
+    .rate_stable_mv_s   = 30.0f,    /* 稳定带：EC 变化率 */
+    .rate_stable_pct_s  = 5.0f,     /* 稳定带：浊度相对变化率 */
     .settle_ms          = 4000U,    /* 入水稳定期（实测 3.8 s 才进 ±1 %） */
-    .settle_min_ms      = 1500U,    /* v2.4：最早 1.5 s 进 MEASURE */
-    .settle_stable_ms   = 500U,     /* 连续稳定 0.5 s 即可提前进入 */
-    .settle_timeout_ms  = 6000U,    /* STABLE 一直不满足时的兜底（避免永远停在待机） */
     .blank_ms           = 400U,     /* 换向屏蔽窗 */
     .wet_debounce_ms    = 500U,     /* DRY→SETTLE 去抖 */
     .dry_debounce_ms    = 300U,     /* MEASURE→DRY 去抖（安全侧要快） */
@@ -130,7 +124,6 @@ static void gate_enter(gate_t *p_gate, regime_t regime, uint32_t now_ms)
         p_gate->dry_since_ms       = now_ms;
         p_gate->unstable_since_ms  = now_ms;
         p_gate->fault_since_ms     = now_ms;
-        p_gate->settle_stable_since_ms = now_ms;
     }
 }
 
@@ -254,8 +247,6 @@ void gate_init(gate_t *p_gate, const gate_cfg_t *p_cfg)
     /* 逐项限幅：0/负/NaN 一律落回默认，保证状态机不会"永远触发/永远不触发" */
     p_c->wet_ratio         = gate_clampf(p_c->wet_ratio, 0.02f, 0.95f,
                                          g_gate_default_cfg.wet_ratio);
-    p_c->ec_wet_delta_mv   = gate_clampf(p_c->ec_wet_delta_mv, 10.0f, 500.0f,
-                                         g_gate_default_cfg.ec_wet_delta_mv);
     p_c->ec_dry_ratio      = gate_clampf(p_c->ec_dry_ratio, 1.2f, 20.0f,
                                          g_gate_default_cfg.ec_dry_ratio);
     p_c->ec_dry_max_mv     = gate_clampf(p_c->ec_dry_max_mv, 10.0f, 2000.0f,
@@ -268,12 +259,8 @@ void gate_init(gate_t *p_gate, const gate_cfg_t *p_cfg)
     {
         p_c->ec0_max_mv = p_c->ec0_min_mv * 4.0f;
     }
-    p_c->ec0_default_min_mv = gate_clampf(p_c->ec0_default_min_mv, 50.0f, 1000.0f,
+    p_c->ec0_default_min_mv = gate_clampf(p_c->ec0_default_min_mv, 100.0f, 1600.0f,
                                           g_gate_default_cfg.ec0_default_min_mv);
-    p_c->ao_water_delta_mv  = gate_clampf(p_c->ao_water_delta_mv, -500.0f, 500.0f,
-                                          g_gate_default_cfg.ao_water_delta_mv);
-    p_c->ao_clean_delta_mv  = gate_clampf(p_c->ao_clean_delta_mv, 0.0f, 1500.0f,
-                                          g_gate_default_cfg.ao_clean_delta_mv);
     if (0U == p_c->ntu_ao_min_mv)
     {
         p_c->ntu_ao_min_mv = g_gate_default_cfg.ntu_ao_min_mv;
@@ -286,20 +273,6 @@ void gate_init(gate_t *p_gate, const gate_cfg_t *p_cfg)
 
     p_c->settle_ms         = gate_clampu32(p_c->settle_ms, 200U, 120000U,
                                            g_gate_default_cfg.settle_ms);
-    p_c->settle_min_ms     = gate_clampu32(p_c->settle_min_ms, 200U, 120000U,
-                                           g_gate_default_cfg.settle_min_ms);
-    p_c->settle_stable_ms  = gate_clampu32(p_c->settle_stable_ms, 0U, 10000U,
-                                           g_gate_default_cfg.settle_stable_ms);
-    if (p_c->settle_min_ms > p_c->settle_ms)
-    {
-        p_c->settle_min_ms = p_c->settle_ms;
-    }
-    p_c->settle_timeout_ms = gate_clampu32(p_c->settle_timeout_ms, 2000U, 120000U,
-                                           g_gate_default_cfg.settle_timeout_ms);
-    if (p_c->settle_timeout_ms <= p_c->settle_ms)
-    {
-        p_c->settle_timeout_ms = p_c->settle_ms + 2000U;
-    }
     p_c->blank_ms          = gate_clampu32(p_c->blank_ms, 0U, 10000U,
                                            g_gate_default_cfg.blank_ms);
     p_c->wet_debounce_ms   = gate_clampu32(p_c->wet_debounce_ms, 0U, 10000U,
@@ -324,7 +297,6 @@ void gate_init(gate_t *p_gate, const gate_cfg_t *p_cfg)
     p_gate->dry_since_ms      = 0U;
     p_gate->unstable_since_ms = 0U;
     p_gate->fault_since_ms    = 0U;
-    p_gate->settle_stable_since_ms = 0U;
     p_gate->first_update      = true;
     p_gate->switch_seen      = false;
     p_gate->last_switch_ms   = 0U;
@@ -458,7 +430,7 @@ void gate_update(gate_t *p_gate, const pipeline_out_t *p_out, uint32_t now_ms)
     bool blanking;
     bool fault;
     bool this_tick_fault;
-    float dry_thr_mv;
+    uint32_t dry_thr_mv;
     float ec_now;
     float ntu_pct_rate = 0.0f;
 
@@ -490,7 +462,7 @@ void gate_update(gate_t *p_gate, const pipeline_out_t *p_out, uint32_t now_ms)
                && p_gate->dry_valid
                && (p_out->ec0_mv25 >= p_gate->cfg.ec0_min_mv)
                && (p_out->ec0_mv25 <= p_gate->cfg.ec0_max_mv)
-               && (p_out->ec0_mv25 >= (p_gate->ec_dry_mv + p_gate->cfg.ec_wet_delta_mv));
+               && (p_out->ec0_mv25 >= (p_gate->cfg.ec_dry_ratio * p_gate->ec_dry_mv));
 
     /*
      * 干态指纹若是"默认值"（没实测），水中基线还要过一道更高的绝对门限：
@@ -504,17 +476,17 @@ void gate_update(gate_t *p_gate, const pipeline_out_t *p_out, uint32_t now_ms)
     }
 
     ec_now = p_out->tds_mv25;
-    dry_thr_mv = p_gate->ec_dry_mv + p_gate->cfg.ec_wet_delta_mv;
+    dry_thr_mv = (uint32_t)(p_gate->cfg.ec_dry_ratio * p_gate->ec_dry_mv);
 
     if ((p_gate->dry_valid) && (baseline_ok))
     {
-        /* 差值判据：比干态高 80 mV 以上才算有水；再用 g≥WET_RATIO 防"基线被写坏" */
-        immersed = (ec_now >= dry_thr_mv) && (p_out->g_ec >= p_gate->cfg.wet_ratio);
+        /* 双条件：绝对量（≥3×干态）防"基线被写坏"，比值（≥WET_RATIO）与电极几何无关 */
+        immersed = (ec_now >= (float)dry_thr_mv) && (p_out->g_ec >= p_gate->cfg.wet_ratio);
     }
     else if (p_gate->dry_valid)
     {
-        /* 没有水中基线时，只能用绝对差值判"有水/没水"（此时也不可能进 MEASURE） */
-        immersed = (ec_now >= dry_thr_mv);
+        /* 没有水中基线时，只能用绝对值判"有水/没水"（此时也不可能进 MEASURE） */
+        immersed = (ec_now >= (float)dry_thr_mv);
     }
     else
     {
@@ -630,45 +602,13 @@ void gate_update(gate_t *p_gate, const pipeline_out_t *p_out, uint32_t now_ms)
                 }
                 else
                 {
-                    bool settle_ready = false;
-
                     p_gate->dry_since_ms = now_ms;   /* 浸没保持：失浸没计时清零 */
 
-                    if (stable)
+                    if (gate_elapsed(now_ms, p_gate->regime_since_ms, p_gate->cfg.settle_ms)
+                        && stable)
                     {
-                        /*
-                         * v2.4 自适应提前：现场进水数据里，EC/浊度在进水后约 1 s 就稳定
-                         * （rate 从 +450 降到 <30），但旧逻辑固定等 4 s，表现为"水已淹到
-                         * 电极却一直待机"。现在只要连续稳定 settle_stable_ms、不早于
-                         * settle_min_ms，**且 dEC ≤ 0（水不比基线脏）**，就提前进 MEASURE；
-                         * dEC>0（可能正在变脏）仍等 4 s/6 s，避免慢速污染被提前放行。
-                         */
-                        if (gate_elapsed(now_ms, p_gate->settle_stable_since_ms,
-                                         p_gate->cfg.settle_stable_ms)
-                            && gate_elapsed(now_ms, p_gate->regime_since_ms,
-                                            p_gate->cfg.settle_min_ms)
-                            && (p_out->d_ec_mv <= 0.0f))
-                        {
-                            settle_ready = true;
-                        }
-                    }
-                    else
-                    {
-                        p_gate->settle_stable_since_ms = now_ms;
-                    }
-
-                    if ((!settle_ready)
-                        && ((gate_elapsed(now_ms, p_gate->regime_since_ms,
-                                          p_gate->cfg.settle_ms)
-                             && stable)
-                            || gate_elapsed(now_ms, p_gate->regime_since_ms,
-                                            p_gate->cfg.settle_timeout_ms)))
-                    {
-                        settle_ready = true;
-                    }
-
-                    if (settle_ready)
-                    {
+                        /* 进 MEASURE 必须用真实稳定判据：屏蔽窗内"按稳定处理"只用于
+                         * 防止 MEASURE 被换向瞬态踢回 SETTLE，不能反过来放行一次还没稳的入水。 */
                         gate_enter(p_gate, REGIME_MEASURE, now_ms);
                     }
                 }
