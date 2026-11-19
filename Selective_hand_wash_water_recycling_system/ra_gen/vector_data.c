@@ -13,6 +13,7 @@
             [6] = iic_master_txi_isr, /* IIC0 TXI (Transmit data empty) */
             [7] = iic_master_tei_isr, /* IIC0 TEI (Transmit end) */
             [8] = iic_master_eri_isr, /* IIC0 ERI (Transfer error) */
+            [9] = hc_sr04_echo_isr, /* ICU IRQ6 (External pin interrupt 6) */
         };
         #if BSP_FEATURE_ICU_HAS_IELSR
         const bsp_interrupt_event_t g_interrupt_event_link_select[BSP_ICU_VECTOR_NUM_ENTRIES] =
@@ -26,6 +27,7 @@
             [6] = BSP_PRV_VECT_ENUM(EVENT_IIC0_TXI,GROUP6), /* IIC0 TXI (Transmit data empty) */
             [7] = BSP_PRV_VECT_ENUM(EVENT_IIC0_TEI,GROUP7), /* IIC0 TEI (Transmit end) */
             [8] = BSP_PRV_VECT_ENUM(EVENT_IIC0_ERI,GROUP0), /* IIC0 ERI (Transfer error) */
+            [9] = (bsp_interrupt_event_t) 0x007U, /* ICU IRQ6 (External pin interrupt 6) */
         };
         #endif
         #endif

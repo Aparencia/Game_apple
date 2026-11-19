@@ -6,7 +6,7 @@
         #endif
 /* Number of interrupts allocated */
 #ifndef VECTOR_DATA_IRQ_COUNT
-#define VECTOR_DATA_IRQ_COUNT    (9)
+#define VECTOR_DATA_IRQ_COUNT    (10)
 #endif
 /* ISR prototypes */
 void adc_scan_end_isr(void);
@@ -18,6 +18,7 @@ void iic_master_rxi_isr(void);
 void iic_master_txi_isr(void);
 void iic_master_tei_isr(void);
 void iic_master_eri_isr(void);
+void hc_sr04_echo_isr(void);
 
 /* Vector table allocations */
 #define VECTOR_NUMBER_ADC0_SCAN_END ((IRQn_Type) 0) /* ADC0 SCAN END (End of A/D scanning operation) */
@@ -38,8 +39,10 @@ void iic_master_eri_isr(void);
 #define IIC0_TEI_IRQn          ((IRQn_Type) 7) /* IIC0 TEI (Transmit end) */
 #define VECTOR_NUMBER_IIC0_ERI ((IRQn_Type) 8) /* IIC0 ERI (Transfer error) */
 #define IIC0_ERI_IRQn          ((IRQn_Type) 8) /* IIC0 ERI (Transfer error) */
+#define VECTOR_NUMBER_IRQ6     ((IRQn_Type) 9) /* ICU IRQ6 (External pin interrupt 6) */
+#define IRQ6_IRQn              ((IRQn_Type) 9) /* ICU IRQ6 (External pin interrupt 6) */
 /* The number of entries required for the ICU vector table. */
-#define BSP_ICU_VECTOR_NUM_ENTRIES (9)
+#define BSP_ICU_VECTOR_NUM_ENTRIES (10)
 
 #ifdef __cplusplus
         }

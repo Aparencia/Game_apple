@@ -145,6 +145,11 @@
  *   修复：trim 只允许 5 mV ≤ |dEC| < d1；d1 以上的偏移不跟踪，
  *   肥皂保持 L1/DRAIN，不会被慢慢学成“干净”。
  *
+ * v2.8.0-LEVEL-M1（2026-11-19，HC-SR04 液位接入）：
+ *   只加液位，不接流量计。HC-SR04 TRIG=P402/U1-2、ECHO=P409/U2-3（IRQ6，5V 容忍），
+ *   用 DWT CYCCNT 测 Echo 脉宽，非阻塞 100 ms 一轮；先输出 # LEVEL 事件行，
+ *   不改 17 列 CSV，也不改 EC/NTU 阈值。液位状态机/门控在 M2 接入。
+ *
  * v2.0.0（2026-11-16，现场诊断后重做控制模型）：
  *   旧模型"事件闩锁 + 30 s 超时"被整体替换为"工况门控 + 每 tick 重算的回收许可"：
  *     validity(gate) 先判"能不能判"（FAULT/DRY/SETTLE/MEASURE/LOCKOUT），
@@ -243,6 +248,7 @@
 #include "decision.h"
 #include "display.h"                 /* 板载 OLED 状态页（display_init/display_task） */
 #include "actuator_valve.h"          /* 阀/继电器执行器（P104 → SRD-05VDC-SL-C → 12V 阀） */
+#include "hc_sr04.h"                 /* HC-SR04 液位（P402 TRIG / P409 ECHO IRQ6） */
 
 #include <stdio.h>
 #include <stdbool.h>
@@ -251,7 +257,7 @@
 #include <sys/stat.h>                /* struct stat / S_IFCHR：printf 重定向需要的空桩 */
 
 /* ---------- 应用参数（全部集中在这里，便于标定） ---------- */
-#define APP_FW_VERSION          "SENSOR-NODE v2.7.6-B3"  /* v2.7.6=trim 只跟踪 d1 以内，避免学掉肥皂 */
+#define APP_FW_VERSION          "SENSOR-NODE v2.8.0-LEVEL-M1"  /* M1: HC-SR04 液位驱动/事件行 */
 #define APP_TICK_MS             50U                  /* 主循环 tick（项目设想 6.2.1） */
 #define APP_CSV_PERIOD_MS       200U                 /* CSV 输出周期：5 行/秒 */
 #define APP_TIP_PERIOD_MS       2000U                /* 人类可读摘要（# TIP）周期：2 s */
@@ -519,6 +525,7 @@ static uint32_t            g_ac_done_since_ms = 0U;    /* 进入 DONE 的时刻 
 static volatile app_base_result_t g_base_result = APP_BASE_NONE;
 static uint8_t             g_cal_stage = 0U;           /* B3：0=DRAIN 1=RECOVER 2=FULL */
 static volatile bool       g_cal_multi_slot = false;     /* true=正在做三槽标定 */
+static uint32_t            g_level_log_ms = 0U;          /* HC-SR04 事件行节流 */
 static uint32_t            g_base_suspect_since_ms = 0U; /* g>1.08 持续起点 */
 static uint32_t            g_base_suspect_log_ms = 0U;   /* 上次 # BASE_SUSPECT 时刻 */
 
@@ -3522,6 +3529,19 @@ static void app_tick(uint32_t now_ms)
         return;   /* 防御：正常不会发生（pipeline 句柄是静态分配的） */
     }
 
+    /* 3b) HC-SR04 液位：非阻塞，每 1 s 打一行事件（不改 17 列 CSV） */
+    hc_sr04_task(now_ms);
+    if ((uint32_t)(now_ms - g_level_log_ms) >= 1000U)
+    {
+        uint16_t level_mm = 0U;
+        bool level_valid = false;
+
+        g_level_log_ms = now_ms;
+        (void)hc_sr04_get_mm(&level_mm, &level_valid);
+        printf("# LEVEL t=%lums mm=%u valid=%u\r\n",
+               (unsigned long)now_ms, (unsigned)level_mm, level_valid ? 1U : 0U);
+    }
+
     /* 4) 干态指纹采集（命令 D，非阻塞；完成后写入 gate 并影响本 tick 的工况） */
     app_dry_task(now_ms, p_out);
 
@@ -3665,6 +3685,16 @@ void app_main(void)
     {
         printf("# ERR: timebase_init failed (SysTick), halting\r\n");
         app_fatal_led_forever();
+    }
+
+    /* ----- 步骤 3b：HC-SR04 液位（非阻塞，失败只 WARN） ----- */
+    if (hc_sr04_init())
+    {
+        printf("# hc-sr04: ready (TRIG=P402/U1-2, ECHO=P409/U2-3 IRQ6)\r\n");
+    }
+    else
+    {
+        printf("# WARN: hc-sr04 init failed -> level disabled, fallback to v2.7.6 gate\r\n");
     }
 
     /* ----- 步骤 4：ADC0 Open + ScanCfg（失败打印 ERR，但继续跑） ----- */
