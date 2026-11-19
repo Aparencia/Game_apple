@@ -121,6 +121,12 @@
  *   旧判断 `best != active_slot` 认为"已经是 DRAIN"而跳过 select，导致一直 NOBASE。
  *   改为 baseline_valid=false 或 ec0 与槽值不一致时也强制 select。
  *
+ * v2.7.3-B3（2026-11-19，第二槽被 AO 门槛误杀修复）：
+ *   现场第一段 DRAIN 成功后，切 RECOVER 仅 0.8 s 就以 base_turbid 结束，
+ *   导致 RECOVER 槽永远 INVALID；运行时 RECOVER 只能用 DRAIN 基线，dEC+60。
+ *   修复：① AO 清洁门槛只在第一段 DRAIN 检查；同一腔水切阀后不再复检 AO；
+ *         ② 最近槽距离 >30 mV 时保留当前基线（EC 单独高走 L1），不再 NOBASE。
+ *
  * v2.0.0（2026-11-16，现场诊断后重做控制模型）：
  *   旧模型"事件闩锁 + 30 s 超时"被整体替换为"工况门控 + 每 tick 重算的回收许可"：
  *     validity(gate) 先判"能不能判"（FAULT/DRY/SETTLE/MEASURE/LOCKOUT），
@@ -227,7 +233,7 @@
 #include <sys/stat.h>                /* struct stat / S_IFCHR：printf 重定向需要的空桩 */
 
 /* ---------- 应用参数（全部集中在这里，便于标定） ---------- */
-#define APP_FW_VERSION          "SENSOR-NODE v2.7.2-B3"  /* v2.7.2=修复 DRAIN 槽 0 不激活 */
+#define APP_FW_VERSION          "SENSOR-NODE v2.7.3-B3"  /* v2.7.3=保留第二槽 + 无近槽不作废基线 */
 #define APP_TICK_MS             50U                  /* 主循环 tick（项目设想 6.2.1） */
 #define APP_CSV_PERIOD_MS       200U                 /* CSV 输出周期：5 行/秒 */
 #define APP_TIP_PERIOD_MS       2000U                /* 人类可读摘要（# TIP）周期：2 s */
@@ -1053,10 +1059,8 @@ static void app_baseline_task(const pipeline_out_t *p_out, uint32_t now_ms)
 
     if (best_d > 30.0f)
     {
-        if (p_out->baseline_valid)
-        {
-            pipeline_invalidate_baseline(&g_pipe, "NO_SLOT");
-        }
+        /* 没有足够近的槽：保留当前基线，交给双通道判 L1（EC 单独高不判 SOAP），
+         * 不要作废基线，否则会反复 NOBASE。 */
         return;
     }
 
@@ -2219,12 +2223,13 @@ static void app_autocal_task(uint32_t now_ms, const pipeline_out_t *p_out)
                         g_ac_need_manual = true;
                         app_autocal_enter(APP_AC_DONE, now_ms, "water_unconfirmed");
                     }
-                    else if ((float)p_out->ntu_ao_mv
-                             < (g_dec.gate.ao_dry_mv
-                                + g_dec.gate.cfg.ao_clean_delta_mv))
+                    else if ((0U == g_cal_stage)
+                             && ((float)p_out->ntu_ao_mv
+                                 < (g_dec.gate.ao_dry_mv
+                                    + g_dec.gate.cfg.ao_clean_delta_mv)))
                     {
-                        /* 是水，但不够清亮（AO 离空腔太近）：肥皂/脏水不能当本底。
-                         * 清水 AO≈2650、空腔≈2241（+409）；肥皂≈2310（+69）。 */
+                        /* 只对第一段 DRAIN 做 AO 清洁门槛；同一腔水切到 RECOVER/FULL 后，
+                         * 光学路径/液位会变，AO 可能暂时偏低，不能因此丢掉整个槽。 */
                         g_ac_fail_retry  = true;
                         g_ac_need_manual = true;
                         app_autocal_enter(APP_AC_DONE, now_ms, "base_turbid");
