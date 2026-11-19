@@ -1028,8 +1028,11 @@ static void app_baseline_task(const pipeline_out_t *p_out, uint32_t now_ms)
         return;
     }
 
-    /* 当前槽还足够近时保持，防止在两条槽中间来回切 */
-    if (p_out->baseline_valid)
+    /* 当前槽还足够近时保持，防止在两条槽中间来回切；
+     * 只有当前基线确实来自有效槽时才保持，手工 W 基线不能挡住选槽。 */
+    if (p_out->baseline_valid
+        && (g_pipe.active_slot < (uint8_t)PIPELINE_BASELINE_SLOTS)
+        && pipeline_baseline_slot_valid(&g_pipe, g_pipe.active_slot))
     {
         float d_cur = ec - p_out->ec0_mv25;
 
