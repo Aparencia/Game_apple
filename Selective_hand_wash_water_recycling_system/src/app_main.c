@@ -98,6 +98,16 @@
  *     - 长按 K2 ≥3 s 可跳过标定，使用默认 EC0=348 / NTU0=2659；
  *     - 正常运行时阀换向自动切换对应基线槽。
  *
+ * v2.7.0-B3（2026-11-19，三槽 + 双通道）：
+ *   同一批清水三次注水出现三个液位平台：DRAIN 静态≈258、RECOVER 静态≈305、
+ *   FULL 流动≈333 mV；两槽仍覆盖不了满水/流动段。改为三槽，运行时按 EC 选最近槽，
+ *   带 8 mV 保持迟滞。判定改为 EC/NTU 双通道：
+ *     - NTU 单独脏（dNTU>9%）→ L2；
+ *     - EC 高且 dNTU>0.9×d2 → L2；
+ *     - EC 单独高、NTU 干净 → L1（液位/流动，不判 SOAP）；
+ *     - L0 要求两路都低。
+ *   标定三段：DRAIN → RECOVER → FULL（FULL 段要求 EC ≥ max(DRAIN,RECOVER)+10 mV）。
+ *
  * v2.0.0（2026-11-16，现场诊断后重做控制模型）：
  *   旧模型"事件闩锁 + 30 s 超时"被整体替换为"工况门控 + 每 tick 重算的回收许可"：
  *     validity(gate) 先判"能不能判"（FAULT/DRY/SETTLE/MEASURE/LOCKOUT），
@@ -204,7 +214,7 @@
 #include <sys/stat.h>                /* struct stat / S_IFCHR：printf 重定向需要的空桩 */
 
 /* ---------- 应用参数（全部集中在这里，便于标定） ---------- */
-#define APP_FW_VERSION          "SENSOR-NODE v2.6.0-B2"  /* v2.6.0=双基线 B 方案 + 首轮强制清水标定 */
+#define APP_FW_VERSION          "SENSOR-NODE v2.7.0-B3"  /* v2.7.0=三槽最近基线 + EC/NTU 双通道 */
 #define APP_TICK_MS             50U                  /* 主循环 tick（项目设想 6.2.1） */
 #define APP_CSV_PERIOD_MS       200U                 /* CSV 输出周期：5 行/秒 */
 #define APP_TIP_PERIOD_MS       2000U                /* 人类可读摘要（# TIP）周期：2 s */
@@ -234,9 +244,14 @@
 #define APP_EC_DRY_DEFAULT_MV    60.0f
 #define APP_AO_DRY_DEFAULT_MV    2337.0f
 
-/* B 方案：跳过标定时的默认基线（两条阀位槽，先给同一组清水名义值） */
-#define APP_DEFAULT_EC0_MV       348.0f
-#define APP_DEFAULT_NTU0_AO_MV   2659U
+/* B3：三条液位/阀位槽的默认基线（来自 2026-11-19 同一批清水实测）
+ *   DRAIN 静态≈258、RECOVER 静态≈305、FULL 流动≈333；跳过标定时直接使用。 */
+#define APP_DEFAULT_EC0_DRAIN_MV   258.0f
+#define APP_DEFAULT_EC0_RECOVER_MV 305.0f
+#define APP_DEFAULT_EC0_FULL_MV    333.0f
+#define APP_DEFAULT_NTU0_AO_MV     2659U
+#define APP_CAL_FULL_MIN_MARGIN_MV 10.0f   /* FULL 段至少比 DRAIN/RECOVER 高 10 mV */
+#define APP_SLOT_FULL_HYST_MV      15.0f   /* FULL 槽进入/退出迟滞 */
 
 /* ---------- 串口发送自检/兜底 ---------- */
 /* 背景：printf 走 _write → __io_putchar，每字节用忙等等 TX_COMPLETE 回调置位。
@@ -311,8 +326,8 @@ static const decision_cfg_t g_app_decision_cfg =
     .ec_d1_pct           = 6.0f,      /* v2.2：清水漂移 ±5%×EC0，d1 取 6% */
     .ec_d2_pct           = 9.0f,      /* 肥皂现场 +11.5%×EC0，d2 取 9% */
     .ec_hyst_ratio       = 0.25f,     /* 25% 迟滞，防阈值附近抖 */
-    .ntu_d1_pct          = 4.0f,      /* v2.2：清水 dNTU -2.6..-0.3，肥皂 +8.6..+13.1 */
-    .ntu_d2_pct          = 8.0f,      /* 肥皂最小值 8.6 > 8 → L2；清水不会触发 */
+    .ntu_d1_pct          = 7.0f,      /* v2.7：清水稳定段 dNTU 实测最高 7.6%，取 7.0 */
+    .ntu_d2_pct          = 9.0f,      /* v2.7：肥皂 dNTU ≥8.6；EC+NTU 双通道仍可判 L2 */
     .ntu_hyst_ratio      = 0.25f,
     .ec_rate_th_mv_s     = 120.0f,    /* v2：40→120（≈3× 实测换向瞬态 38 mV/s） */
     .ec_rate_min_jump_mv = 5.0f,
@@ -464,8 +479,8 @@ static bool                g_ac_fail_retry = false;    /* 自检 base_fail 后�
 static bool                g_ac_need_manual = false;   /* 自检失败，需要人工 W（OLED 提示） */
 static uint32_t            g_ac_done_since_ms = 0U;    /* 进入 DONE 的时刻 */
 static volatile app_base_result_t g_base_result = APP_BASE_NONE;
-static uint8_t             g_cal_stage = 0U;           /* B 方案：0=DRAIN 槽，1=RECOVER 槽 */
-static volatile bool       g_cal_two_slot = false;     /* true=正在做两阀位标定 */
+static uint8_t             g_cal_stage = 0U;           /* B3：0=DRAIN 1=RECOVER 2=FULL */
+static volatile bool       g_cal_multi_slot = false;     /* true=正在做三槽标定 */
 static uint32_t            g_base_suspect_since_ms = 0U; /* g>1.08 持续起点 */
 static uint32_t            g_base_suspect_log_ms = 0U;   /* 上次 # BASE_SUSPECT 时刻 */
 
@@ -492,6 +507,7 @@ static void        app_baseline_begin(uint32_t now_ms, const char *p_src);
 static void        app_baseline_validate(uint32_t now_ms, const pipeline_out_t *p_out);
 static void        app_base_suspect_task(uint32_t now_ms, const pipeline_out_t *p_out);
 static void        app_dry_task(uint32_t now_ms, const pipeline_out_t *p_out);
+static void        app_baseline_task(const pipeline_out_t *p_out, uint32_t now_ms);
 static void        app_dry_begin(uint32_t now_ms, uint16_t target_n, bool auto_cap);
 static void        app_autocal_start(uint32_t now_ms);
 static void        app_cal_start(uint32_t now_ms);
@@ -954,6 +970,98 @@ static void app_valve_init(void)
 }
 
 /*
+ * B3：最近基线槽选择。
+ *   三条槽分别覆盖 DRAIN 静态 / RECOVER 静态 / FULL 流动；
+ *   按当前 EC 找最近槽，带 8 mV 保持迟滞，避免两槽之间来回切。
+ *   标定期间不选（由标定流程保存槽并最终选择）。
+ */
+static void app_baseline_task(const pipeline_out_t *p_out, uint32_t now_ms)
+{
+    float ec;
+    float best_d = 1.0e9f;
+    uint8_t best = 0xFFU;
+    uint8_t i;
+
+    if ((NULL == p_out) || g_cal_multi_slot || (!g_pipe.initialized))
+    {
+        return;
+    }
+    ec = p_out->tds_mv25;
+    if (ec <= 1.0f)
+    {
+        return;
+    }
+
+    for (i = 0U; i < (uint8_t)PIPELINE_BASELINE_SLOTS; i++)
+    {
+        float d;
+
+        if (!pipeline_baseline_slot_valid(&g_pipe, i))
+        {
+            continue;
+        }
+        d = ec - g_pipe.slots[i].ec0_mv25;
+        if (d < 0.0f)
+        {
+            d = -d;
+        }
+        if (d < best_d)
+        {
+            best_d = d;
+            best = i;
+        }
+    }
+
+    if (best == 0xFFU)
+    {
+        if (p_out->baseline_valid)
+        {
+            pipeline_invalidate_baseline(&g_pipe, "NO_SLOT");
+        }
+        return;
+    }
+
+    /* 当前槽还足够近时保持，防止在两条槽中间来回切 */
+    if (p_out->baseline_valid)
+    {
+        float d_cur = ec - p_out->ec0_mv25;
+
+        if (d_cur < 0.0f)
+        {
+            d_cur = -d_cur;
+        }
+        if (d_cur <= (best_d + 8.0f))
+        {
+            return;
+        }
+    }
+
+    if (best_d > 45.0f)
+    {
+        if (p_out->baseline_valid)
+        {
+            pipeline_invalidate_baseline(&g_pipe, "NO_SLOT");
+        }
+        return;
+    }
+
+    if (best != g_pipe.active_slot)
+    {
+        char s_ec0[20];
+        char s_ec[20];
+        static const char *const names[3] = {"DRAIN", "RECOVER", "FULL"};
+
+        if (pipeline_baseline_select_slot(&g_pipe, best))
+        {
+            app_fmt_x10(s_ec0, sizeof(s_ec0), g_pipe.slots[best].ec0_mv25);
+            app_fmt_x10(s_ec, sizeof(s_ec), ec);
+            printf("# BASE slot=%s ec0=%smV ec=%smV\r\n", names[best], s_ec0, s_ec);
+            decision_note_valve_switch(&g_dec, now_ms);
+        }
+    }
+}
+
+/*
  * 函数名：app_valve_apply
  * 作用：把本 tick 的目标位置交给执行器：手动覆盖优先，否则跟随判别动作；然后跑状态机。
  * 参数：recover —— true=回收位 / false=排空位；now_ms —— 当前时间（驻留/超时计时）。
@@ -968,10 +1076,10 @@ static void app_valve_apply(bool recover, uint32_t now_ms)
     const valve_out_t *p_valve;
     valve_pos_t pos_before;
 
-    /* B 方案标定期间强制阀位：槽 0=DRAIN，槽 1=RECOVER */
-    if (g_cal_two_slot && app_autocal_active())
+    /* B3 标定期间强制阀位：槽 0=DRAIN，槽 1=RECOVER，槽 2=FULL 也保持 DRAIN */
+    if (g_cal_multi_slot && app_autocal_active())
     {
-        recover = (0U != g_cal_stage);
+        recover = (1U == g_cal_stage);
     }
 
     if (APP_VALVE_FORCE_RECOVER == g_valve_mode)
@@ -999,18 +1107,6 @@ static void app_valve_apply(bool recover, uint32_t now_ms)
     if ((NULL != p_valve) && (p_valve->position != pos_before))
     {
         decision_note_valve_switch(&g_dec, now_ms);
-
-        /* B 方案：正常运行时按阀位切换基线槽；标定期间由标定流程自己保存/选择。 */
-        if (!g_cal_two_slot)
-        {
-            uint8_t slot = (VALVE_POS_RECOVER == p_valve->position)
-                           ? (uint8_t)PIPELINE_SLOT_RECOVER : (uint8_t)PIPELINE_SLOT_DRAIN;
-
-            if (!pipeline_baseline_select_slot(&g_pipe, slot))
-            {
-                pipeline_invalidate_baseline(&g_pipe, "NO_SLOT");
-            }
-        }
     }
 }
 
@@ -1568,19 +1664,20 @@ void app_autocal_text(char *p_buf, uint32_t buf_size)
     {
         case APP_AC_DRY:
             (void)snprintf(p_buf, (size_t)buf_size,
-                           g_cal_two_slot ? "Cal dry %u/%u" : "Auto dry %u/%u",
+                           g_cal_multi_slot ? "Cal dry %u/%u" : "Auto dry %u/%u",
                            (unsigned)g_dry_capture.n, (unsigned)g_dry_capture.target_n);
             break;
 
         case APP_AC_WAIT:
             (void)snprintf(p_buf, (size_t)buf_size,
-                           g_cal_two_slot ? "Cal wait water" : "Auto wait water");
+                           g_cal_multi_slot ? "Cal wait water" : "Auto wait water");
             break;
 
         case APP_AC_SETTLE:
             (void)snprintf(p_buf, (size_t)buf_size,
-                           g_cal_two_slot
-                               ? ((0U == g_cal_stage) ? "Cal D wait" : "Cal R wait")
+                           g_cal_multi_slot
+                               ? ((0U == g_cal_stage) ? "Cal D wait"
+                                  : ((1U == g_cal_stage) ? "Cal R wait" : "Cal F fill"))
                                : "Auto water ok");
             break;
 
@@ -1594,8 +1691,9 @@ void app_autocal_text(char *p_buf, uint32_t buf_size)
                 n = APP_BASELINE_N;
             }
             (void)snprintf(p_buf, (size_t)buf_size,
-                           g_cal_two_slot
-                               ? ((0U == g_cal_stage) ? "Cal D %u/%u" : "Cal R %u/%u")
+                           g_cal_multi_slot
+                               ? ((0U == g_cal_stage) ? "Cal D %u/%u"
+                                  : ((1U == g_cal_stage) ? "Cal R %u/%u" : "Cal F %u/%u"))
                                : "Auto calib %u/%u",
                            n, (unsigned)APP_BASELINE_N);
             break;
@@ -1643,14 +1741,16 @@ void app_autocal_hint(char *p_buf, uint32_t buf_size)
                 break;
 
             case APP_AC_SETTLE:
-                p_hint = g_cal_two_slot
-                         ? ((0U == g_cal_stage) ? "Drain slot" : "Recover slot")
+                p_hint = g_cal_multi_slot
+                         ? ((0U == g_cal_stage) ? "Drain slot"
+                            : ((1U == g_cal_stage) ? "Recover slot" : "Keep flow on"))
                          : "Water detected";
                 break;
 
             case APP_AC_WET:
-                p_hint = g_cal_two_slot
-                         ? ((0U == g_cal_stage) ? "Drain slot" : "Recover slot")
+                p_hint = g_cal_multi_slot
+                         ? ((0U == g_cal_stage) ? "Drain slot"
+                            : ((1U == g_cal_stage) ? "Recover slot" : "Fill full"))
                          : "Keep still";
                 break;
 
@@ -1688,7 +1788,7 @@ static void app_autocal_cancel(const char *p_why)
     }
 
     printf("# AUTOCAL cancelled (%s)\r\n", (NULL != p_why) ? p_why : "manual");
-    g_cal_two_slot = false;
+    g_cal_multi_slot = false;
     g_ac_state = APP_AC_OFF;
 }
 
@@ -1706,8 +1806,8 @@ static void app_autocal_start(uint32_t now_ms)
     g_ac_need_manual   = false;
     g_dry_last_mean_mv = 0.0f;
     g_base_result      = APP_BASE_NONE;
-    g_cal_stage        = 0U;      /* 先 DRAIN，后 RECOVER */
-    g_cal_two_slot     = true;
+    g_cal_stage        = 0U;      /* 0=DRAIN、1=RECOVER、2=FULL */
+    g_cal_multi_slot     = true;
     pipeline_baseline_clear_slots(&g_pipe);
     pipeline_invalidate_baseline(&g_pipe, "AUTOCAL_START");
 
@@ -1754,13 +1854,13 @@ static void app_cal_start(uint32_t now_ms)
     g_ac_need_manual = false;
     g_base_result    = APP_BASE_NONE;
     g_cal_stage      = 0U;
-    g_cal_two_slot   = true;
+    g_cal_multi_slot   = true;
 
-    printf("# CAL: two-slot clean-water calibration requested (DRAIN then RECOVER)\r\n");
+    printf("# CAL: three-slot clean-water calibration requested (DRAIN, RECOVER, FULL)\r\n");
     app_autocal_enter(APP_AC_SETTLE, now_ms, "key_cal");
 }
 
-/* 长按跳过标定：两条槽都写入默认清水基线，按当前阀位选 active。 */
+/* 长按跳过标定：三条槽写入默认清水基线，按当前阀位选 active。 */
 static void app_cal_skip_defaults(uint32_t now_ms)
 {
     const valve_out_t *p_valve = valve_get_out(&g_valve);
@@ -1774,15 +1874,17 @@ static void app_cal_skip_defaults(uint32_t now_ms)
     pipeline_invalidate_baseline(&g_pipe, "CAL_SKIP");
 
     (void)pipeline_baseline_set_default(&g_pipe, (uint8_t)PIPELINE_SLOT_DRAIN,
-                                        APP_DEFAULT_EC0_MV, APP_DEFAULT_NTU0_AO_MV);
+                                        APP_DEFAULT_EC0_DRAIN_MV, APP_DEFAULT_NTU0_AO_MV);
     (void)pipeline_baseline_set_default(&g_pipe, (uint8_t)PIPELINE_SLOT_RECOVER,
-                                        APP_DEFAULT_EC0_MV, APP_DEFAULT_NTU0_AO_MV);
+                                        APP_DEFAULT_EC0_RECOVER_MV, APP_DEFAULT_NTU0_AO_MV);
+    (void)pipeline_baseline_set_default(&g_pipe, (uint8_t)PIPELINE_SLOT_FULL,
+                                        APP_DEFAULT_EC0_FULL_MV, APP_DEFAULT_NTU0_AO_MV);
     (void)pipeline_baseline_select_slot(&g_pipe, slot);
 
-    g_cal_two_slot   = false;
+    g_cal_multi_slot = false;
     g_ac_need_manual = false;
     g_ac_fail_retry  = false;
-    printf("# CAL SKIP: using default EC0=348mV ntu0=2659mV (no clean-water calibration)\r\n");
+    printf("# CAL SKIP: default slots DRAIN=258 RECOVER=305 FULL=333 ntu0=2659mV\r\n");
     app_autocal_enter(APP_AC_DONE, now_ms, "skip_default");
 }
 
@@ -1892,9 +1994,9 @@ static void app_autocal_task(uint32_t now_ms, const pipeline_out_t *p_out)
     }
 
     /* 任何途径建立了"校验通过 + 工况机认可"的基线（手动/本次自检）→ 自检结束。
-     * 两槽标定期间不能在这里提前 DONE：第一段完成后还要切 RECOVER 采第二段。 */
+     * 三槽标定期间不能在这里提前 DONE：前一段完成后还要继续下一段。 */
     if ((APP_BASE_OK == g_base_result) && (g_dec.gate.baseline_ok)
-        && (!g_cal_two_slot))
+        && (!g_cal_multi_slot))
     {
         g_ac_need_manual = false;
         g_ac_fail_retry  = false;
@@ -1946,6 +2048,7 @@ static void app_autocal_task(uint32_t now_ms, const pipeline_out_t *p_out)
         {
             bool allow_wet = true;
             bool stable_hold = false;
+            bool full_ready = true;
 
             if (!g_dec.gate.immersed)
             {
@@ -1981,6 +2084,27 @@ static void app_autocal_task(uint32_t now_ms, const pipeline_out_t *p_out)
                              && ((float)p_out->ntu_ao_mv >= (g_dec.gate.ao_dry_mv
                                                              + g_dec.gate.cfg.ao_water_delta_mv));
 
+                    /* FULL 段必须确认水已满/在流动：EC 至少比 DRAIN/RECOVER 槽高 10 mV，
+                     * 否则保持 SETTLE，等用户继续进水（OLED 显示 Cal F fill）。 */
+                    if ((g_cal_multi_slot) && (2U == g_cal_stage))
+                    {
+                        float full_min = APP_DEFAULT_EC0_FULL_MV - 10.0f;
+
+                        if (pipeline_baseline_slot_valid(&g_pipe, (uint8_t)PIPELINE_SLOT_DRAIN)
+                            && pipeline_baseline_slot_valid(&g_pipe,
+                                                            (uint8_t)PIPELINE_SLOT_RECOVER))
+                        {
+                            float lo = g_pipe.slots[PIPELINE_SLOT_DRAIN].ec0_mv25;
+
+                            if (g_pipe.slots[PIPELINE_SLOT_RECOVER].ec0_mv25 > lo)
+                            {
+                                lo = g_pipe.slots[PIPELINE_SLOT_RECOVER].ec0_mv25;
+                            }
+                            full_min = lo + APP_CAL_FULL_MIN_MARGIN_MV;
+                        }
+                        full_ready = (p_out->tds_mv25 >= full_min);
+                    }
+
                     if (!allow_wet)
                     {
                         /* 没有足够证据证明"腔里是水"：不允许自动采湿态（否则可能采到水膜） */
@@ -1997,6 +2121,10 @@ static void app_autocal_task(uint32_t now_ms, const pipeline_out_t *p_out)
                         g_ac_fail_retry  = true;
                         g_ac_need_manual = true;
                         app_autocal_enter(APP_AC_DONE, now_ms, "base_turbid");
+                    }
+                    else if (!full_ready)
+                    {
+                        /* FULL 段还没到满水/流动条件：保持 SETTLE，继续进水。 */
                     }
                     else
                     {
@@ -2035,7 +2163,7 @@ static void app_autocal_task(uint32_t now_ms, const pipeline_out_t *p_out)
                     g_ac_need_manual = false;
                     g_ac_fail_retry  = false;
 
-                    if ((g_cal_two_slot) && (0U == g_cal_stage))
+                    if ((g_cal_multi_slot) && (0U == g_cal_stage))
                     {
                         /* 第一段（DRAIN）完成：保存槽 0，强制切 RECOVER 采第二段。 */
                         char s_ec0[20];
@@ -2049,23 +2177,54 @@ static void app_autocal_task(uint32_t now_ms, const pipeline_out_t *p_out)
                         pipeline_invalidate_baseline(&g_pipe, "CAL_NEXT");
                         app_autocal_enter(APP_AC_SETTLE, now_ms, "calib_recover");
                     }
-                    else if ((g_cal_two_slot) && (1U == g_cal_stage))
+                    else if ((g_cal_multi_slot) && (1U == g_cal_stage))
                     {
-                        /* 第二段（RECOVER）完成：保存槽 1，按当前阀位选 active。 */
-                        const valve_out_t *p_valve = valve_get_out(&g_valve);
-                        uint8_t slot = ((NULL != p_valve)
-                                        && (VALVE_POS_RECOVER == p_valve->position))
-                                       ? (uint8_t)PIPELINE_SLOT_RECOVER
-                                       : (uint8_t)PIPELINE_SLOT_DRAIN;
+                        /* 第二段（RECOVER）完成：保存槽 1，继续 FULL 流动段。 */
                         char s_ec0[20];
 
                         (void)pipeline_baseline_store_slot(&g_pipe,
                                                            (uint8_t)PIPELINE_SLOT_RECOVER);
-                        (void)pipeline_baseline_select_slot(&g_pipe, slot);
                         app_fmt_x10(s_ec0, sizeof(s_ec0), p_out->ec0_mv25);
                         printf("# BASELINE SLOT RECOVER ec0=%smV\r\n", s_ec0);
-                        g_cal_two_slot = false;
-                        app_autocal_enter(APP_AC_DONE, now_ms, "base_ok_two_slot");
+                        g_cal_stage   = 2U;
+                        g_base_result = APP_BASE_NONE;
+                        pipeline_invalidate_baseline(&g_pipe, "CAL_NEXT");
+                        app_autocal_enter(APP_AC_SETTLE, now_ms, "calib_full");
+                    }
+                    else if ((g_cal_multi_slot) && (2U == g_cal_stage))
+                    {
+                        /* 第三段（FULL 流动）完成：保存槽 2，选最近槽进入正常测量。 */
+                        char s_ec0[20];
+                        uint8_t slot = (uint8_t)PIPELINE_SLOT_FULL;
+                        float best_d = 1.0e9f;
+                        uint8_t i;
+
+                        (void)pipeline_baseline_store_slot(&g_pipe,
+                                                           (uint8_t)PIPELINE_SLOT_FULL);
+                        for (i = 0U; i < (uint8_t)PIPELINE_BASELINE_SLOTS; i++)
+                        {
+                            float d;
+
+                            if (!pipeline_baseline_slot_valid(&g_pipe, i))
+                            {
+                                continue;
+                            }
+                            d = p_out->tds_mv25 - g_pipe.slots[i].ec0_mv25;
+                            if (d < 0.0f)
+                            {
+                                d = -d;
+                            }
+                            if (d < best_d)
+                            {
+                                best_d = d;
+                                slot = i;
+                            }
+                        }
+                        (void)pipeline_baseline_select_slot(&g_pipe, slot);
+                        app_fmt_x10(s_ec0, sizeof(s_ec0), p_out->ec0_mv25);
+                        printf("# BASELINE SLOT FULL ec0=%smV\r\n", s_ec0);
+                        g_cal_multi_slot = false;
+                        app_autocal_enter(APP_AC_DONE, now_ms, "base_ok_three_slot");
                     }
                     else
                     {
@@ -2278,7 +2437,7 @@ static void app_key_task(uint32_t now_ms)
     {
         g_key_long_fired = true;
 
-        if (app_autocal_active() || g_cal_two_slot)
+        if (app_autocal_active() || g_cal_multi_slot)
         {
             printf("# KEY: long press >=3s -> skip calibration, use defaults\r\n");
             app_cal_skip_defaults(now_ms);
@@ -2340,7 +2499,7 @@ static void app_print_help(void)
     printf("#  P             print status / gate / thresholds / parameters\r\n");
     printf("#  V1 / V0 / VA  manual valve: RECOVER (relay ON) / DRAIN (relay OFF) / auto\r\n");
     printf("#  K2 short press: next OLED page (P1 water / P2 exec / P3 info)\r\n");
-    printf("#  K2 long press >=3s: two-slot clean-water calibration; during calibration=skip(default)\r\n");
+    printf("#  K2 long press >=3s: three-slot clean-water calibration; during calibration=skip(default)\r\n");
     printf("# ---------------------------------------------------------------------\r\n");
 }
 
@@ -2668,7 +2827,7 @@ static void app_handle_command(char *p_cmd, uint32_t now_ms)
 
         case 'Z':
             app_autocal_cancel("manual Z");
-            g_cal_two_slot = false;
+            g_cal_multi_slot = false;
             pipeline_baseline_clear_slots(&g_pipe);
             pipeline_invalidate_baseline(&g_pipe, "CLEARED");
             printf("# NOTE: wet baseline cleared -> regime leaves MEASURE (drain)\r\n");
@@ -3112,7 +3271,7 @@ static void app_print_boot_summary(void)
     printf("# uart: 115200 8N1 polled-TX | tx_poll_fail=%lu (0=正常, >0=发送异常)\r\n",
            (unsigned long)g_uart_tx_timeouts);
     printf("# display: SSD1306 128x64 I2C0 addr=0x3C | 3 pages: P1 water / P2 exec / P3 info\r\n");
-    printf("# display: K2 short = next page; K2 long >=3s = two-slot calibration / skip; M = mark\r\n");
+    printf("# display: K2 short = next page; K2 long >=3s = three-slot calibration / skip; M = mark\r\n");
     printf("# display: site indicator only; CSV remains the record (display is NOT safety path)\r\n");
     printf("# IMPORTANT: baseline must be captured in water; TDS probe in air is a fake ~1.6V value\r\n");
     printf("# operation: autocal at boot (dry -> wait water -> wet). manual D/W/G/Z still available.\r\n");
@@ -3233,6 +3392,9 @@ static void app_tick(uint32_t now_ms)
 
     /* 4) 干态指纹采集（命令 D，非阻塞；完成后写入 gate 并影响本 tick 的工况） */
     app_dry_task(now_ms, p_out);
+
+    /* 4b) B3：按当前 EC 选最近基线槽（DRAIN/RECOVER/FULL），切槽时开屏蔽窗 */
+    app_baseline_task(p_out, now_ms);
 
     /* 5) 判别（内部先跑工况机，只在 REGIME_MEASURE 里分类；许可每 tick 重算） */
     decision_update(&g_dec, &g_pipe, now_ms);

@@ -270,7 +270,7 @@ static void decision_update_thresholds(decision_t *p_dec, const pipeline_out_t *
 
 /*
  * 三级分类（双侧门限）：
- *   ① 任一路 > 上边界            → L2（明显变脏）
+ *   ① 浊度单独 > 上边界，或 EC 高且浊度接近上边界 → L2（明显变脏）
  *   ② 任一路 < -上边界           → L1（"突然变太干净"同样可疑：电极脱水/气泡/水位下降）
  *   ③ 两路都 < 下边界            → L0
  *   ④ 其余                       → L1（拿不准=排空）
@@ -282,7 +282,14 @@ static decision_level_t decision_classify(const pipeline_out_t *p_out,
                                           float e1_ntu, float e2_ntu,
                                           const char **p_reason)
 {
-    if ((p_out->d_ec_mv > e2_ec) || (p_out->d_ntu_pct > e2_ntu))
+    /*
+     * B3 双通道：浊度单独脏 → L2；EC 单独高 → 只算 L1（液位/流动，不是肥皂）。
+     * EC 要参与 L2，必须同时有接近上阈的浊度（≥0.9×e2_ntu）；
+     * 现场清水满水 EC+52mV 但 dNTU 仅 +1~+7%，不能判 SOAP。
+     */
+    if ((p_out->d_ntu_pct > e2_ntu)
+        || ((p_out->d_ec_mv > e2_ec)
+            && (p_out->d_ntu_pct > (0.9f * e2_ntu))))
     {
         *p_reason = g_reason_soap_high;
         return DEC_LEVEL_L2;

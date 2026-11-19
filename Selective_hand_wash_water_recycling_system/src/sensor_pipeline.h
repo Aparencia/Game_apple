@@ -114,13 +114,14 @@ typedef struct st_pipeline_out
     char     note[28];        /* OK / ADC_TIMEOUT / NO_BASE / TDS_RAIL / TDS_SAT / NTU_RAIL */
 } pipeline_out_t;
 
-/* ------------------------- 双基线槽（B 方案） ------------------------- */
-#define PIPELINE_BASELINE_SLOTS 2U
+/* ------------------------- 三基线槽（B3 方案） ------------------------- */
+#define PIPELINE_BASELINE_SLOTS 3U
 typedef enum e_pipeline_baseline_slot
 {
-    PIPELINE_SLOT_DRAIN = 0,     /* 阀在 DRAIN 位置时的基线 */
-    PIPELINE_SLOT_RECOVER = 1,   /* 阀在 RECOVER 位置时的基线 */
-    PIPELINE_SLOT_COUNT = 2
+    PIPELINE_SLOT_DRAIN = 0,     /* 阀 DRAIN、静态液位 */
+    PIPELINE_SLOT_RECOVER = 1,   /* 阀 RECOVER、静态液位 */
+    PIPELINE_SLOT_FULL = 2,      /* 进水流动、腔体满 */
+    PIPELINE_SLOT_COUNT = 3
 } pipeline_baseline_slot_t;
 
 typedef struct st_pipeline_baseline_slot_data
@@ -143,7 +144,7 @@ typedef struct st_sensor_pipeline
     float          water_temp_c;
     bool           water_temp_from_sensor;
 
-    /* B 方案：按阀位保存两条基线，active_slot 指向当前生效的一条 */
+    /* B3：按阀位/流动状态保存三条基线，active_slot 指向当前生效的一条 */
     pipeline_baseline_slot_data_t slots[PIPELINE_BASELINE_SLOTS];
     uint8_t        active_slot;
 
@@ -197,7 +198,7 @@ void pipeline_invalidate_baseline(sensor_pipeline_t *p_pipe, const char *p_note)
  *   - store：把当前 out 中有效的基线存入 slot；
  *   - select：把 slot 设为 active，并重置 EMA/速率，下一 tick 用新基线算 Δ；
  *   - set_default：跳过标定时写入默认基线；
- *   - clear_slots：清空两条（Z / 重新标定）。
+ *   - clear_slots：清空三条（Z / 重新标定）。
  */
 bool pipeline_baseline_store_slot(sensor_pipeline_t *p_pipe, uint8_t slot);
 bool pipeline_baseline_select_slot(sensor_pipeline_t *p_pipe, uint8_t slot);
