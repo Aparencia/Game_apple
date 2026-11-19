@@ -133,6 +133,12 @@
  *   修复：AO 清洁门槛 250→300 mV（清水 AO-AO_DRY≈500，肥皂≈244），
  *         肥皂/浑浊冲洗水不再能通过第一段 DRAIN 的清水确认。
  *
+ * v2.7.5-B3（2026-11-19，肥皂冲洗水只升 EC 不升 NTU）：
+ *   现场确认基线水是清水（AO 2581，AO-AO_DRY≈244），v2.7.4 的 300 mV 会误杀，
+ *   恢复 250 mV。最后一次肥皂冲洗水只有 EC +5.4%（+30 mV），dNTU 仅 +0.6~1.0%，
+ *   旧 d1=6% 把它判成 CLEAR。d1 改为 5%：这类“EC 轻升、NTU 不升”进 L1/DRAIN；
+ *   真正的肥皂（NTU 也升）仍由双通道判 L2。
+ *
  * v2.0.0（2026-11-16，现场诊断后重做控制模型）：
  *   旧模型"事件闩锁 + 30 s 超时"被整体替换为"工况门控 + 每 tick 重算的回收许可"：
  *     validity(gate) 先判"能不能判"（FAULT/DRY/SETTLE/MEASURE/LOCKOUT），
@@ -239,7 +245,7 @@
 #include <sys/stat.h>                /* struct stat / S_IFCHR：printf 重定向需要的空桩 */
 
 /* ---------- 应用参数（全部集中在这里，便于标定） ---------- */
-#define APP_FW_VERSION          "SENSOR-NODE v2.7.4-B3"  /* v2.7.4=拒绝肥皂水当清水基线 */
+#define APP_FW_VERSION          "SENSOR-NODE v2.7.5-B3"  /* v2.7.5=清水基线确认 + EC 5% 安全层 */
 #define APP_TICK_MS             50U                  /* 主循环 tick（项目设想 6.2.1） */
 #define APP_CSV_PERIOD_MS       200U                 /* CSV 输出周期：5 行/秒 */
 #define APP_TIP_PERIOD_MS       2000U                /* 人类可读摘要（# TIP）周期：2 s */
@@ -349,7 +355,7 @@ static const decision_cfg_t g_app_decision_cfg =
     .ec_d2_sigma         = 8.0f,      /* d2 = max(8σ, 20 mV) */
     .ec_d1_min_mv        = 8.0f,
     .ec_d2_min_mv        = 20.0f,
-    .ec_d1_pct           = 6.0f,      /* v2.2：清水漂移 ±5%×EC0，d1 取 6% */
+    .ec_d1_pct           = 5.0f,      /* v2.7.5：清水槽内 dEC≈0；肥皂冲洗水 +5.4% 要能进 L1 */
     .ec_d2_pct           = 9.0f,      /* 肥皂现场 +11.5%×EC0，d2 取 9% */
     .ec_hyst_ratio       = 0.25f,     /* 25% 迟滞，防阈值附近抖 */
     .ntu_d1_pct          = 7.0f,      /* v2.7：清水稳定段 dNTU 实测最高 7.6%，取 7.0 */
@@ -375,7 +381,7 @@ static const decision_cfg_t g_app_decision_cfg =
         .ec0_max_mv         = 1600.0f,    /* 开路伪值 ~1650 与脏水本底都要挡住 */
         .ec0_default_min_mv = 150.0f,     /* v2.3：默认干态时基线只需 ≥150 mV（现场水 348） */
         .ao_water_delta_mv  = 80.0f,      /* v2.3：本装置水 AO 比空气高约 400 mV */
-        .ao_clean_delta_mv  = 300.0f,     /* v2.7.4：清水 AO-AO_DRY≈500，肥皂冲洗水≈244，250 太松 */
+        .ao_clean_delta_mv  = 250.0f,     /* 现场清水 AO-AO_DRY≈244，300 会误杀清水，恢复 250 */
         .ntu_ao_min_mv      = 20U,
         .rate_stable_mv_s   = 80.0f,      /* v2.4.1：肥皂 ~50、换向 ~38，30 太紧会误回 SETTLE */
         .rate_stable_pct_s  = 20.0f,      /* 肥皂 ~16%/s，5 太紧 */
