@@ -48,6 +48,7 @@ static const char *const g_reason_rate_pending = "RATE_PEND";
 static const char *const g_reason_too_clean    = "TOO_CLEAN";
 static const char *const g_reason_block_split  = "BLOCK_SPLIT";
 static const char *const g_reason_blank        = "BLANK";
+static const char *const g_reason_soap_latch   = "SOAP_LATCH";
 
 /* ---------- 枚举 → 字符串/状态 静态表 ---------- */
 /*
@@ -98,7 +99,8 @@ static const decision_cfg_t g_default_cfg =
     .ntu_hyst_ratio      = 0.25f,    /* 浊度迟滞 25% */
     .ec_rate_th_mv_s     = 120.0f,   /* 正向变化率阈值（≥3× 实测瞬态 38 mV/s） */
     .ec_rate_min_jump_mv = 5.0f,     /* 触发抢先所需最小绝对跳变 mV */
-    .ntu_rate_th_pct_s   = 150.0f,   /* 浊度变化率阈值 %/s（原 50 太大，先抬到 150） */
+    .ntu_rate_th_pct_s   = 15.0f,    /* M2h：肥皂浊度前沿≈16 %/s，150 永不触发 */
+    .soap_latch_ms       = 45000U,   /* L2 后强制 DRAIN 45 s，覆盖稀释尾水 */
     .rate_confirm_ticks  = 2U,       /* 连续 2 tick 才认 */
     .block_ms            = 400U,     /* 消抖块 400 ms */
     .block_samples       = 8U,       /* 400 ms / 50 ms */
@@ -193,6 +195,13 @@ static void decision_apply_output(decision_t *p_dec, decision_state_t state, dec
     p_dec->out.event_active = p_dec->event_active;
     p_dec->out.changed      = changed;
     p_dec->out.reason       = (NULL != reason) ? reason : g_reason_idle;
+
+    /* M2h：第一次采纳 L2 时启动锁存；锁存期间强制 SOAP/DRAIN。 */
+    if ((DEC_STATE_SOAP == state) && (!p_dec->soap_latch_active))
+    {
+        p_dec->soap_latch_active   = true;
+        p_dec->soap_latch_until_ms = now_ms + p_dec->cfg.soap_latch_ms;
+    }
 }
 
 /* 单侧 EC 阈值：max(σ 倍数项, 绝对下限, EC0 百分比下限)。
@@ -550,6 +559,10 @@ void decision_init(decision_t *p_dec, const decision_cfg_t *p_cfg)
     p_c->ec_rate_th_mv_s     = sensor_clampf(p_c->ec_rate_th_mv_s, 1.0f, 100000.0f);
     p_c->ec_rate_min_jump_mv = sensor_clampf(p_c->ec_rate_min_jump_mv, 0.5f, 1000.0f);
     p_c->ntu_rate_th_pct_s   = sensor_clampf(p_c->ntu_rate_th_pct_s, 1.0f, 100000.0f);
+    if ((p_c->soap_latch_ms < 5000U) || (p_c->soap_latch_ms > 300000U))
+    {
+        p_c->soap_latch_ms = 45000U;
+    }
     if (p_c->rate_confirm_ticks < 1U)
     {
         p_c->rate_confirm_ticks = 1U;
@@ -614,6 +627,8 @@ void decision_init(decision_t *p_dec, const decision_cfg_t *p_cfg)
     p_dec->event_since_ms = 0U;
     p_dec->event_active   = false;
     p_dec->blank_active   = false;
+    p_dec->soap_latch_active   = false;
+    p_dec->soap_latch_until_ms = 0U;
     decision_clear_counters(p_dec, 0U);
 
     /* --- 输出初值：安全侧 WAIT/L1/DRAIN；changed=true 让上电第一帧日志可打印 --- */
@@ -751,6 +766,23 @@ void decision_update(decision_t *p_dec, const sensor_pipeline_t *p_pipe, uint32_
         return;
     }
 
+    /* ---------- M2h：肥皂锁存（覆盖稀释尾水） ---------- */
+    if (p_dec->soap_latch_active)
+    {
+        if ((int32_t)(p_dec->soap_latch_until_ms - now_ms) > 0)
+        {
+            p_dec->rate_hits      = 0U;
+            p_dec->upgrade_blocks = 0U;
+            p_dec->downgrade_hits = 0U;
+            p_dec->blank_active   = false;
+            decision_reset_block(p_dec, now_ms);
+            decision_apply_output(p_dec, DEC_STATE_SOAP, DEC_LEVEL_L2, DEC_ACTION_DRAIN,
+                                  false, g_reason_soap_latch, now_ms);
+            return;
+        }
+        p_dec->soap_latch_active = false;
+    }
+
     /* ---------- ③ 自适应阈值（每 tick 更新：σ 变了阈值跟着变） ---------- */
     decision_update_thresholds(p_dec, p_out);
     d1_ec  = p_dec->out.d1_ec_mv;
@@ -795,7 +827,8 @@ void decision_update(decision_t *p_dec, const sensor_pipeline_t *p_pipe, uint32_
 
     rate_event = ((p_out->ec_rate_mv_s > p_dec->cfg.ec_rate_th_mv_s) &&
                   (p_out->d_ec_mv > p_dec->cfg.ec_rate_min_jump_mv))
-              || (ntu_rate_pct_s > p_dec->cfg.ntu_rate_th_pct_s);
+              || ((ntu_rate_pct_s > p_dec->cfg.ntu_rate_th_pct_s) &&
+                  (p_out->d_ntu_pct > 2.0f));
 
     if (rate_event)
     {
@@ -883,6 +916,17 @@ void decision_update(decision_t *p_dec, const sensor_pipeline_t *p_pipe, uint32_
 }
 
 /* 读取最近一次输出（只读指针）。 */
+/* M2h：清除 SOAP 锁存（重新标定/清基线时调用）。 */
+void decision_clear_soap_latch(decision_t *p_dec)
+{
+    if (NULL == p_dec)
+    {
+        return;
+    }
+    p_dec->soap_latch_active   = false;
+    p_dec->soap_latch_until_ms = 0U;
+}
+
 const decision_out_t *decision_get_out(const decision_t *p_dec)
 {
     if (NULL == p_dec)

@@ -52,7 +52,7 @@
 #include <sys/stat.h>                /* struct stat / S_IFCHR：printf 重定向需要的空桩 */
 
 /* ---------- 应用参数（全部集中在这里，便于标定） ---------- */
-#define APP_FW_VERSION          "SENSOR-NODE v2.8.0-LEVEL-M2g"  /* M2g: AO 低但液位+EC 确认水时降级继续标定 */
+#define APP_FW_VERSION          "SENSOR-NODE v2.8.0-LEVEL-M2h"  /* M2h: SOAP_LATCH + NTU rate + level-aware settle */
 #define APP_TICK_MS             50U                  /* 主循环 tick（项目设想 6.2.1） */
 #define APP_CSV_PERIOD_MS       200U                 /* CSV 输出周期：5 行/秒 */
 #define APP_TIP_PERIOD_MS       2000U                /* 人类可读摘要（# TIP）周期：2 s */
@@ -68,7 +68,7 @@
 
 /* ---------- 开机自检（v2.1：不要求用户输入 D/W） ---------- */
 #define APP_AUTOCAL_ENABLE       1                   /* 1=上电自动干态→等水→自动湿态；0=只手动 */
-#define APP_AUTOCAL_DRY_MS       3000U               /* v2.6：空腔自检缩短到 3 s（60 点） */
+#define APP_AUTOCAL_DRY_MS       2000U               /* M2h：空腔自检 3 s → 2 s（40 点） */
 #define APP_AUTOCAL_DRY_N        (APP_AUTOCAL_DRY_MS / APP_TICK_MS)
 #define APP_AUTOCAL_WATER_MS     800U                /* 检测到浸没后，最早 800 ms 再采湿态 */
 #define APP_AUTOCAL_STABLE_MS    300U                /* 连续稳定多久才认为可以采基线 */
@@ -169,7 +169,8 @@ static const decision_cfg_t g_app_decision_cfg =
     .ntu_hyst_ratio      = 0.25f,
     .ec_rate_th_mv_s     = 120.0f,    /* v2：40→120（≈3× 实测换向瞬态 38 mV/s） */
     .ec_rate_min_jump_mv = 5.0f,
-    .ntu_rate_th_pct_s   = 150.0f,    /* v2：50→150（原阈值等于永不触发） */
+    .ntu_rate_th_pct_s   = 15.0f,     /* M2h：肥皂浊度前沿≈16 %/s，150 永不触发 */
+    .soap_latch_ms       = 45000U,    /* M2h：L2 后强制 DRAIN 45 s，覆盖稀释尾水 */
     .rate_confirm_ticks  = 2U,        /* 连续 2 tick 才认（排单点毛刺） */
     .block_ms            = 400U,      /* v2：200→400，与 5 Hz CSV / 4 s 稳定期匹配 */
     .block_samples       = 8U,        /* v2：4→8（400 ms / 50 ms） */
@@ -319,7 +320,6 @@ static uint32_t            g_ac_done_since_ms = 0U;    /* 进入 DONE 的时刻 
 static volatile app_base_result_t g_base_result = APP_BASE_NONE;
 static uint8_t             g_cal_stage = 0U;           /* B3：0=DRAIN 1=RECOVER 2=FULL */
 static bool                g_cal_multi_slot = false;     /* true=正在做三槽标定 */
-static bool                g_cal_soft_water = false;     /* Auto fail 降级：AO 低但液位+EC 确认水 */
 static uint32_t            g_level_log_ms = 0U;          /* HC-SR04 事件行节流 */
 static bool                g_level_hold = false;        /* M2：液位变化中冻结判定 */
 static bool                g_level_has_last = false;
@@ -351,7 +351,7 @@ static void        app_base_suspect_task(uint32_t now_ms, const pipeline_out_t *
 static void        app_dry_task(uint32_t now_ms, const pipeline_out_t *p_out);
 static void        app_baseline_task(const pipeline_out_t *p_out, uint32_t now_ms);
 static void        app_baseline_trim_task(const pipeline_out_t *p_out);
-static void        app_level_task(uint32_t now_ms);
+static void        app_level_task(uint32_t now_ms, const pipeline_out_t *p_out);
 static void        app_dry_begin(uint32_t now_ms, uint16_t target_n, bool auto_cap);
 static void        app_autocal_start(uint32_t now_ms);
 static void        app_cal_start(uint32_t now_ms);
@@ -676,12 +676,60 @@ static void app_valve_init(void)
 }
 
 /*
+ * M2h：液位相关的稳定带 / SETTLE。
+ *   液位稳定且水质安静 → 30 mV/s、5 %/s；SETTLE 1 s（min 0.5 s）
+ *   液位变化/水质有事件/液位无效 → 80 mV/s、20 %/s；SETTLE 4 s（兼容旧行为）
+ */
+static void app_level_apply_gate_cfg(bool level_ok, bool level_hold,
+                                     const pipeline_out_t *p_out)
+{
+    bool quiet = true;
+    bool tight;
+
+    if (NULL != p_out)
+    {
+        float dec = p_out->d_ec_mv;
+        float dnt = p_out->d_ntu_pct;
+
+        if (dec < 0.0f)
+        {
+            dec = -dec;
+        }
+        if (dnt < 0.0f)
+        {
+            dnt = -dnt;
+        }
+        quiet = (dec < 3.0f) && (dnt < 3.0f);
+    }
+
+    tight = (level_ok) && (!level_hold) && quiet;
+
+    g_dec.gate.cfg.rate_stable_mv_s  = tight ? 30.0f : 80.0f;
+    g_dec.gate.cfg.rate_stable_pct_s = tight ? 5.0f : 20.0f;
+
+    if ((level_ok) && (!level_hold) && quiet)
+    {
+        g_dec.gate.cfg.settle_ms         = 1000U;
+        g_dec.gate.cfg.settle_min_ms     = 500U;
+        g_dec.gate.cfg.settle_stable_ms  = 300U;
+        g_dec.gate.cfg.settle_timeout_ms = 3000U;
+    }
+    else
+    {
+        g_dec.gate.cfg.settle_ms         = 4000U;
+        g_dec.gate.cfg.settle_min_ms     = 1500U;
+        g_dec.gate.cfg.settle_stable_ms  = 500U;
+        g_dec.gate.cfg.settle_timeout_ms = 6000U;
+    }
+}
+
+/*
  * M2：液位状态门控。
- *   液位变化 >5 mm/s → hold，强制 WAIT/DRAIN；
+ *   液位变化 >5 mm/s → hold，只冻结 trim；
  *   连续稳定 <1 mm/s 1 s → 释放；
  *   液位无效 → 回退 v2.7.6 gate。
  */
-static void app_level_task(uint32_t now_ms)
+static void app_level_task(uint32_t now_ms, const pipeline_out_t *p_out)
 {
     uint16_t mm = 0U;
     bool valid = false;
@@ -695,6 +743,7 @@ static void app_level_task(uint32_t now_ms)
         g_level_hold       = false;
         g_level_has_last   = false;
         g_level_stable_since_ms = 0U;
+        app_level_apply_gate_cfg(false, false, p_out);
         return;
     }
 
@@ -704,6 +753,7 @@ static void app_level_task(uint32_t now_ms)
         g_level_last_mm    = mm;
         g_level_last_ms    = now_ms;
         g_level_stable_since_ms = now_ms;
+        app_level_apply_gate_cfg(true, g_level_hold, p_out);
         return;
     }
 
@@ -740,7 +790,9 @@ static void app_level_task(uint32_t now_ms)
         g_level_stable_since_ms = now_ms;
     }
 
-    /* 注意：level_hold 只冻结基线选槽/trim，不覆盖 decision；
+    app_level_apply_gate_cfg(true, g_level_hold, p_out);
+
+    /* 注意：level_hold 只冻结 trim，不覆盖 decision；
      * 识别状态保持连续，不插入 WAIT 区间。 */
 }
 
@@ -876,10 +928,10 @@ static void app_baseline_trim_task(const pipeline_out_t *p_out)
     {
         d_ec = -d_ec;
     }
-    if ((d_ec < 5.0f) || (d_ec >= (0.7f * g_dec.out.d1_ec_mv)))
+    if ((d_ec < 1.0f) || (d_ec > 4.0f))
     {
-        /* 只跟踪 d1 以内的小漂移；超过 0.7×d1 的偏移可能是肥皂/脏水，
-         * 不能用 trim 把它慢慢学成“干净”。 */
+        /* M2h：trim 只跟踪 ≤4 mV 的微小漂移；更大偏移可能是肥皂/液位变化，
+         * 不能用 trim 把它慢慢学成“干净”。液位 hold 时已在上面直接返回。 */
         return;
     }
 
@@ -1080,20 +1132,12 @@ static void app_baseline_validate(uint32_t now_ms, const pipeline_out_t *p_out)
         return;
     }
 
-    /* 基线必须是"清亮水"：AO 离空腔太近说明浊度高/肥皂多，不能当本底。
-     * 清水 AO-AO_DRY≈409 mV；肥皂≈69 mV；门槛 ao_clean_delta=250 mV。 */
+    /* M2h：AO 只告警，不再硬拒基线。 */
     if ((g_dec.gate.dry_valid)
         && (p_out->ntu0_ao_mv
             < (g_dec.gate.ao_dry_mv + g_dec.gate.cfg.ao_clean_delta_mv)))
     {
-        if (!g_cal_soft_water)
-        {
-            pipeline_invalidate_baseline(&g_pipe, "BASE_TURBID");
-            g_base_result = APP_BASE_REJECT;
-            printf("# BASELINE REJECT note=BASE_TURBID (clean water required; AO too close to dry)\r\n");
-            return;
-        }
-        printf("# CAL WARN: accept low-AO baseline (LEVEL+EC confirmed water)\r\n");
+        printf("# CAL WARN: low-AO baseline accepted (AO advisory; EC/level decide water)\r\n");
     }
 
     if (g_dec.gate.dry_valid)
@@ -1601,7 +1645,6 @@ static void app_ac_reset(void)
     g_base_result    = APP_BASE_NONE;
     g_cal_stage      = 0U;      /* 0=DRAIN、1=RECOVER、2=FULL */
     g_cal_multi_slot = true;
-    g_cal_soft_water = false;
 }
 
 /* 湿态采集失败计数：达到上限 → DONE(p_done) 并置"需要人工"，否则 RETRY(p_retry)。 */
@@ -1687,6 +1730,7 @@ static void app_autocal_start(uint32_t now_ms)
 static void app_cal_start(uint32_t now_ms)
 {
     app_autocal_cancel("KEY CAL");
+    decision_clear_soap_latch(&g_dec);
     pipeline_baseline_clear_slots(&g_pipe);
     pipeline_invalidate_baseline(&g_pipe, "KEY_CAL");
 
@@ -1707,6 +1751,7 @@ static void app_cal_skip_defaults(uint32_t now_ms)
     {
         g_dry_capture.active = false;
     }
+    decision_clear_soap_latch(&g_dec);
     pipeline_invalidate_baseline(&g_pipe, "CAL_SKIP");
 
     (void)pipeline_baseline_set_default(&g_pipe, (uint8_t)PIPELINE_SLOT_DRAIN,
@@ -1881,7 +1926,6 @@ static void app_autocal_task(uint32_t now_ms, const pipeline_out_t *p_out)
             bool allow_wet = true;
             bool stable_hold = false;
             bool full_ready = true;
-            bool soft_water = false;
             uint16_t lvl_mm = 0U;
             bool lvl_ok = false;
 
@@ -1919,32 +1963,16 @@ static void app_autocal_task(uint32_t now_ms, const pipeline_out_t *p_out)
                         || ((uint32_t)(now_ms - g_ac_since_ms)
                             >= APP_AUTOCAL_WATER_MAX_MS)))
                 {
-                    /* 两道证据（无论干态是否实测都要过）：
-                     *   ① EC 比干态高 ec_wet_delta（默认 80 mV）；
-                     *   ② 浊度 AO 比空腔高 ao_water_delta（本装置水 AO 高于空气约 400 mV，
-                     *      与"空气满量程"的常见假设相反，故用正差值）。
-                     * 只有一层水膜的电极通常过不了第 ② 条，避免把水膜当成水体。 */
+                    /* M2h：AO 改为 advisory。水体确认以 EC 为主，AO 低只告警，
+                     * 不再因为塑料片/气泡导致 AO 偏低而 Auto fail。 */
                     allow_wet = (p_out->tds_mv25 >= (g_dec.gate.ec_dry_mv
-                                                     + g_dec.gate.cfg.ec_wet_delta_mv))
-                             && ((float)p_out->ntu_ao_mv >= (g_dec.gate.ao_dry_mv
-                                                             + g_dec.gate.cfg.ao_water_delta_mv));
-
-                    /* 液位只作为“水在腔里”的诊断/区分，不覆盖 AO 清洁门槛。
-                     * AO 低说明水可能脏，不能拿液位强行通过。 */
-                    (void)hc_sr04_get_mm(&lvl_mm, &lvl_ok);
-
-                    /* Auto fail 兜底：液位确认有水 + EC 已明显高于干态，
-                     * 但 AO 因塑料片/气泡偏低时，允许继续标定并打 WARN。
-                     * 这不是“无视脏水”，而是 AO 不可信时的降级路径。 */
-                    if ((!allow_wet) && (lvl_ok) && (lvl_mm >= 20U)
-                        && (p_out->tds_mv25 >= (g_dec.gate.ec_dry_mv
-                                                + g_dec.gate.cfg.ec_wet_delta_mv)))
+                                                     + g_dec.gate.cfg.ec_wet_delta_mv));
+                    if ((allow_wet)
+                        && ((float)p_out->ntu_ao_mv < (g_dec.gate.ao_dry_mv
+                                                       + g_dec.gate.cfg.ao_water_delta_mv)))
                     {
-                        printf("# CAL WARN: AO low (ao=%.0f) but LEVEL+EC confirm water; continue\r\n",
+                        printf("# CAL WARN: AO low (ao=%.0f) treated as advisory; EC confirms water\r\n",
                                (double)p_out->ntu_ao_mv);
-                        allow_wet = true;
-                        soft_water = true;
-                        g_cal_soft_water = true;
                     }
 
                     /* FULL 段必须确认水已满/在流动：EC 至少比 DRAIN/RECOVER 槽高 10 mV，
@@ -2002,17 +2030,6 @@ static void app_autocal_task(uint32_t now_ms, const pipeline_out_t *p_out)
                         {
                             app_autocal_enter(APP_AC_DONE, now_ms, "water_unconfirmed");
                         }
-                    }
-                    else if ((0U == g_cal_stage) && (!soft_water)
-                             && ((float)p_out->ntu_ao_mv
-                                 < (g_dec.gate.ao_dry_mv
-                                    + g_dec.gate.cfg.ao_clean_delta_mv)))
-                    {
-                        /* 只对第一段 DRAIN 做 AO 清洁门槛；同一腔水切到 RECOVER/FULL 后，
-                         * 光学路径/液位会变，AO 可能暂时偏低，不能因此丢掉整个槽。 */
-                        g_ac_fail_retry  = true;
-                        g_ac_need_manual = true;
-                        app_autocal_enter(APP_AC_DONE, now_ms, "base_turbid");
                     }
                     else if (!full_ready)
                     {
@@ -2601,6 +2618,7 @@ static void app_handle_command(char *p_cmd, uint32_t now_ms)
 
         case 'Z':
             app_autocal_cancel("manual Z");
+            decision_clear_soap_latch(&g_dec);
             g_cal_multi_slot = false;
             pipeline_baseline_clear_slots(&g_pipe);
             pipeline_invalidate_baseline(&g_pipe, "CLEARED");
@@ -2995,6 +3013,8 @@ static void app_print_boot_summary(void)
     app_fmt_x10(s2, g_dec.cfg.ntu_rate_th_pct_s);
     printf("# rate preempt: ec>%smV/s ntu>%s%%/s confirm=%u tick (blank 400ms after switch)\r\n",
            s1, s2, (unsigned)g_dec.cfg.rate_confirm_ticks);
+    printf("# soap latch: %lums forced DRAIN after L2\r\n",
+           (unsigned long)g_dec.cfg.soap_latch_ms);
 
     app_fmt_x10(s1, g_dec.gate.cfg.wet_ratio);
     app_fmt_x10(s2, g_dec.gate.cfg.ec_wet_delta_mv);
@@ -3118,7 +3138,7 @@ static void app_tick(uint32_t now_ms)
 
     /* 3b) HC-SR04 液位：非阻塞，每 1 s 打一行事件（不改 17 列 CSV） */
     hc_sr04_task(now_ms);
-    app_level_task(now_ms);
+    app_level_task(now_ms, p_out);
     if ((uint32_t)(now_ms - g_level_log_ms) >= 1000U)
     {
         uint16_t level_mm = 0U;

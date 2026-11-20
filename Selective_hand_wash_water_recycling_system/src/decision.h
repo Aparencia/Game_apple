@@ -85,7 +85,8 @@ typedef struct st_decision_cfg
     /* 变化率抢先（方案 §6.4 四约束） */
     float    ec_rate_th_mv_s;    /* ΔEC 正向变化率阈值，默认 120.0 mV/s */
     float    ec_rate_min_jump_mv;/* 触发所需最小绝对跳变，默认 5.0 mV */
-    float    ntu_rate_th_pct_s;  /* 浊度变化率阈值，默认 150.0 %/s */
+    float    ntu_rate_th_pct_s;  /* 浊度变化率阈值，默认 15.0 %/s（肥皂前沿≈16） */
+    uint32_t soap_latch_ms;      /* 检测到 L2 后强制 DRAIN 的锁存时间，默认 45000 ms */
     uint8_t  rate_confirm_ticks; /* 连续满足多少个 tick 才抢先，默认 2 */
     /* 块内一致（方案 §6.5） */
     uint32_t block_ms;           /* 消抖时间块长度，默认 400 ms */
@@ -137,6 +138,8 @@ typedef struct st_decision
     uint8_t           upgrade_blocks;    /* 连续"可清"块计数（单侧迟滞） */
     uint8_t           downgrade_hits;    /* 连续"不确定"块计数（L0→L1 去抖） */
     bool              blank_active;      /* 上一 tick 是否在屏蔽窗内（边沿检测） */
+    bool              soap_latch_active;  /* M2h：L2 后强制 DRAIN 锁存 */
+    uint32_t          soap_latch_until_ms;
 } decision_t;
 
 /* 初始化（p_cfg 可为 NULL；内部限幅并初始化工况机）。 */
@@ -151,6 +154,9 @@ void decision_note_valve_switch(decision_t *p_dec, uint32_t now_ms);
 
 /* 每 50 ms tick 调用一次：先跑工况机，再（仅 MEASURE 时）分类并重算许可。 */
 void decision_update(decision_t *p_dec, const sensor_pipeline_t *p_pipe, uint32_t now_ms);
+
+/* M2h：清除 SOAP 锁存（重新标定/清基线时调用）。 */
+void decision_clear_soap_latch(decision_t *p_dec);
 
 /* 读取最近一次输出（只读）。 */
 const decision_out_t *decision_get_out(const decision_t *p_dec);
