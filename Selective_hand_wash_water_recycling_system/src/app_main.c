@@ -262,7 +262,7 @@
 #include <sys/stat.h>                /* struct stat / S_IFCHR：printf 重定向需要的空桩 */
 
 /* ---------- 应用参数（全部集中在这里，便于标定） ---------- */
-#define APP_FW_VERSION          "SENSOR-NODE v2.8.0-LEVEL-M2e"  /* M2e: 液位只冻结 trim，不冻结槽切换 */
+#define APP_FW_VERSION          "SENSOR-NODE v2.8.0-LEVEL-M2f"  /* M2f: 阀位优先选槽，FULL 由 EC/液位 */
 #define APP_TICK_MS             50U                  /* 主循环 tick（项目设想 6.2.1） */
 #define APP_CSV_PERIOD_MS       200U                 /* CSV 输出周期：5 行/秒 */
 #define APP_TIP_PERIOD_MS       2000U                /* 人类可读摘要（# TIP）周期：2 s */
@@ -1096,16 +1096,20 @@ static void app_level_task(uint32_t now_ms)
 }
 
 /*
- * B3：最近基线槽选择。
- *   三条槽分别覆盖 DRAIN 静态 / RECOVER 静态 / FULL 流动；
- *   按当前 EC 找最近槽，带 8 mV 保持迟滞，避免两槽之间来回切。
- *   标定期间不选（由标定流程保存槽并最终选择）。
+ * M2f：阀位优先选槽。
+ *   阀 DRAIN   → DRAIN 槽
+ *   阀 RECOVER → RECOVER 槽
+ *   FULL 有效且 EC 达到 FULL 平台 → FULL 槽
+ * 槽切换不再由“最近 EC”决定，避免液位/EC 噪声把槽选错。
+ * EC 只用于 FULL 判定和当前槽数值校验。
  */
 static void app_baseline_task(const pipeline_out_t *p_out, uint32_t now_ms)
 {
+    const valve_out_t *p_valve;
     float ec;
     float best_d = 1.0e9f;
     uint8_t best = 0xFFU;
+    uint8_t desired = 0xFFU;
     uint8_t i;
 
     if ((NULL == p_out) || g_cal_multi_slot || (!g_pipe.initialized))
@@ -1118,71 +1122,73 @@ static void app_baseline_task(const pipeline_out_t *p_out, uint32_t now_ms)
         return;
     }
 
-    for (i = 0U; i < (uint8_t)PIPELINE_BASELINE_SLOTS; i++)
+    /* 1) 阀位决定主槽 */
+    p_valve = valve_get_out(&g_valve);
+    if ((NULL != p_valve) && (p_valve->initialized))
     {
-        float d;
+        desired = (VALVE_POS_RECOVER == p_valve->position)
+                  ? (uint8_t)PIPELINE_SLOT_RECOVER : (uint8_t)PIPELINE_SLOT_DRAIN;
+    }
 
-        if (!pipeline_baseline_slot_valid(&g_pipe, i))
+    /* 2) FULL 槽有效且 EC 到 FULL 平台时，优先 FULL */
+    if (pipeline_baseline_slot_valid(&g_pipe, (uint8_t)PIPELINE_SLOT_FULL)
+        && (ec >= (g_pipe.slots[PIPELINE_SLOT_FULL].ec0_mv25 - 10.0f)))
+    {
+        desired = (uint8_t)PIPELINE_SLOT_FULL;
+    }
+
+    /* 3) 阀位槽无效（例如只采到一槽）→ 最近有效槽兜底 */
+    if ((desired == 0xFFU) || (!pipeline_baseline_slot_valid(&g_pipe, desired)))
+    {
+        for (i = 0U; i < (uint8_t)PIPELINE_BASELINE_SLOTS; i++)
         {
-            continue;
+            float d;
+
+            if (!pipeline_baseline_slot_valid(&g_pipe, i))
+            {
+                continue;
+            }
+            d = ec - g_pipe.slots[i].ec0_mv25;
+            if (d < 0.0f)
+            {
+                d = -d;
+            }
+            if (d < best_d)
+            {
+                best_d = d;
+                best = i;
+            }
         }
-        d = ec - g_pipe.slots[i].ec0_mv25;
-        if (d < 0.0f)
+        if ((best != 0xFFU) && (best_d <= 30.0f))
         {
-            d = -d;
+            desired = best;
         }
-        if (d < best_d)
+        else
         {
-            best_d = d;
-            best = i;
+            desired = 0xFFU;
         }
     }
 
-    if (best == 0xFFU)
+    if (desired == 0xFFU)
     {
-        /* 没有任何槽（例如手动 W 基线）：不要作废当前基线，交给手动模式。 */
-        return;
-    }
-
-    /* 当前槽还足够近时保持，防止在两条槽中间来回切；
-     * 只有当前基线确实来自有效槽时才保持，手工 W 基线不能挡住选槽。 */
-    if (p_out->baseline_valid
-        && (g_pipe.active_slot < (uint8_t)PIPELINE_BASELINE_SLOTS)
-        && pipeline_baseline_slot_valid(&g_pipe, g_pipe.active_slot))
-    {
-        float d_cur = ec - p_out->ec0_mv25;
-
-        if (d_cur < 0.0f)
-        {
-            d_cur = -d_cur;
-        }
-        if (d_cur <= (best_d + 8.0f))
-        {
-            return;
-        }
-    }
-
-    if (best_d > 30.0f)
-    {
-        /* 没有足够近的槽：保留当前基线，交给双通道判 L1（EC 单独高不判 SOAP），
-         * 不要作废基线，否则会反复 NOBASE。 */
+        /* 没有可用槽：保留当前基线，交给双通道判 L1。 */
         return;
     }
 
     if ((!p_out->baseline_valid)
-        || (best != g_pipe.active_slot)
-        || ((p_out->ec0_mv25 > (g_pipe.slots[best].ec0_mv25 + 0.5f))
-            || (p_out->ec0_mv25 < (g_pipe.slots[best].ec0_mv25 - 0.5f))))
+        || (desired != g_pipe.active_slot)
+        || ((p_out->ec0_mv25 > (g_pipe.slots[desired].ec0_mv25 + 0.5f))
+            || (p_out->ec0_mv25 < (g_pipe.slots[desired].ec0_mv25 - 0.5f))))
     {
         char s_ec0[20];
         char s_ec[20];
         static const char *const names[3] = {"DRAIN", "RECOVER", "FULL"};
 
-        if (pipeline_baseline_select_slot(&g_pipe, best))
+        if (pipeline_baseline_select_slot(&g_pipe, desired))
         {
-            app_fmt_x10(s_ec0, sizeof(s_ec0), g_pipe.slots[best].ec0_mv25);
+            app_fmt_x10(s_ec0, sizeof(s_ec0), g_pipe.slots[desired].ec0_mv25);
             app_fmt_x10(s_ec, sizeof(s_ec), ec);
-            printf("# BASE slot=%s ec0=%smV ec=%smV\r\n", names[best], s_ec0, s_ec);
+            printf("# BASE slot=%s ec0=%smV ec=%smV\r\n", names[desired], s_ec0, s_ec);
             decision_note_valve_switch(&g_dec, now_ms);
         }
     }
