@@ -1,11 +1,4 @@
 /*
- * validity.h
- *
- *  Created on: 2026年11月16日
- *      Author: Administrator
- */
-
-/*
  * validity.h —— 工况有效性层（L0 有效性位图 + L1 工况机 regime）
  * ---------------------------------------------------------------------------
  * 定位：夹在"采集流水线（sensor_pipeline）"与"水质判别（decision）"之间。
@@ -177,68 +170,28 @@ typedef struct st_gate
     const char *reason;             /* 静态原因串（日志用，不参与控制） */
 } gate_t;
 
-/*
- * 函数名：gate_init
- * 作用：保存配置（限幅 + 补默认）、清零运行时状态，工况置 FAULT（安全侧）。
- * 参数：p_gate —— 句柄（非 NULL）；p_cfg —— 配置（可为 NULL，NULL 时全用默认）。
- * 返回：无。
- * 时序/边界：上电调用一次；可重复调用（会重置工况与干态指纹之外的运行状态）。
- * 注意：干态指纹属于"标定数据"，gate_init 会清掉它——掉电保存属于 P2，当前需重新标定。
- */
+/* 保存配置（限幅 + 补默认）、清零运行时状态，工况置 FAULT（安全侧）。 参数：p_gate —— 句柄（非 NULL）；p_cfg —— 配置（可为 NULL，NULL 时全用默认）。
+ * 时序/边界：上电调用一次；可重复调用（会重置工况与干态指纹之外的运行状态）。 注意：干态指纹属于"标定数据"，gate_init 会清掉它——掉电保存属于 P2，当前需重新标定。 */
 void gate_init(gate_t *p_gate, const gate_cfg_t *p_cfg);
 
-/*
- * 函数名：gate_set_dry_fingerprint
- * 作用：记录干态指纹（命令 D 采到的空腔均值），它是"浸没判据"的参考零点。
- * 参数：p_gate —— 句柄；ec_dry_mv —— 空腔 TDS mV25 均值；ao_dry_mv —— 空腔浊度 AO 均值。
- * 返回：true=接受；false=参数不可信（越界/NaN，保持原指纹不变）。
- * 时序/边界：只在命令 D 采集完成时调用；运行期只读。
- * 注意：EC_DRY 必须明显小于水中值（默认 ≤200 mV），否则说明采样时探头还在水里。
- */
+/* 记录干态指纹（命令 D 采到的空腔均值），它是"浸没判据"的参考零点。 返回：true=接受；false=参数不可信（越界/NaN，保持原指纹不变）。 时序/边界：只在命令 D 采集完成时调用；运行期只读。
+ * 注意：EC_DRY 必须明显小于水中值（默认 ≤200 mV），否则说明采样时探头还在水里。 */
 bool gate_set_dry_fingerprint(gate_t *p_gate, float ec_dry_mv, float ao_dry_mv);
 
-/*
- * 函数名：gate_set_dry_default
- * 作用：设置"默认干态指纹"（开机自检用，未经实测），来源标记为 DRY_SOURCE_DEFAULT。
- * 参数：p_gate —— 句柄；ec_dry_mv —— 默认空腔 EC（默认 60 mV）；ao_dry_mv —— 默认空腔 AO。
- * 返回：true=接受；false=参数不可信（保持原指纹不变）。
- * 时序/边界：上电 app_main 初始化后调用一次；随后命令 D / 自检实测会覆盖为 MEASURED。
- * 注意：默认值只用于"是否浸没"的绝对门限；没有水中基线时工况仍是 FAULT，不会回收。
- */
+/* 设置"默认干态指纹"（开机自检用，未经实测），来源标记为 DRY_SOURCE_DEFAULT。 时序/边界：上电 app_main 初始化后调用一次；随后命令 D / 自检实测会覆盖为 MEASURED。
+ * 注意：默认值只用于"是否浸没"的绝对门限；没有水中基线时工况仍是 FAULT，不会回收。 */
 bool gate_set_dry_default(gate_t *p_gate, float ec_dry_mv, float ao_dry_mv);
 
 /* 干态指纹来源（NONE / DEFAULT / MEASURED）。 */
 dry_source_t gate_dry_source(const gate_t *p_gate);
 
-/* 读取干态指纹（p_ec_dry_mv / p_ao_dry_mv 可为 NULL）。返回 false=尚未标定。 */
-bool gate_get_dry_fingerprint(const gate_t *p_gate, float *p_ec_dry_mv, float *p_ao_dry_mv);
-
-/* 清除干态指纹（标定作废/现场换探头后使用）。 */
-void gate_clear_dry_fingerprint(gate_t *p_gate);
-
-/*
- * 函数名：gate_note_switch
- * 作用：通知"刚刚发生了一次物理换向"，作为 400 ms 屏蔽窗的起点。
- * 参数：p_gate —— 句柄；now_ms —— 换向时刻。
- * 返回：无。
- * 时序/边界：由 app 在检测到阀位置变化后调用（可在 decision_update 之后同一 tick）。
- * 注意：屏蔽窗只冻结判别，不撤销已生效的回收许可（原因见文件头）。
- */
+/* 通知"刚刚发生了一次物理换向"，作为 400 ms 屏蔽窗的起点。 时序/边界：由 app 在检测到阀位置变化后调用（可在 decision_update 之后同一 tick）。
+ * 注意：屏蔽窗只冻结判别，不撤销已生效的回收许可（原因见文件头）。 */
 void gate_note_switch(gate_t *p_gate, uint32_t now_ms);
 
-/*
- * 函数名：gate_update
- * 作用：每 50 ms tick 计算一次 validity 位图与 regime，驱动工况迁移。
- * 参数：p_gate —— 句柄；p_out —— 本 tick 的流水线输出（只读）；now_ms —— 当前时刻。
- * 返回：无（结果在 p_gate 内）。
- * 时序/边界：必须在 pipeline_sample 之后、decision_update 之前调用；
- *             迁移去抖全部基于 now_ms，无符号差值比较，跨 49.7 天回绕安全。
- * 注意：
- *   ① FAULT 的判定是"立即"的（传感器故障/基线失效不等去抖）；
- *   ② "无基线但已确认没水"是 DRY 而不是 FAULT——否则空腔上电会一直报故障，
- *      而现场需要一眼看出"现在只是没水"（见方案 §13 P0-1 的验收）；
- *   ③ 进入 SETTLE→MEASURE 还要求 STABLE：只等时间不看稳定性，会在气泡里误判。
- */
+/* 每 50 ms tick 计算一次 validity 位图与 regime，驱动工况迁移。
+ * 时序/边界：必须在 pipeline_sample 之后、decision_update 之前调用； 迁移去抖全部基于 now_ms，无符号差值比较，跨 49.7 天回绕安全。
+ * 注意：① FAULT 的判定是"立即"的（传感器故障/基线失效不等去抖）； ② "无基线但已确认没水"是 DRY 而不是 FAULT——否则空腔上电会一直报故障， 而现场需要一眼看出"现在只是没水"（见方案 §13 P0-1 的验收）； ③ 进入 SETTLE→MEASURE 还要求 STABLE：只等时间不看稳定性，会在气泡里误判。 */
 void gate_update(gate_t *p_gate, const pipeline_out_t *p_out, uint32_t now_ms);
 
 /* 工况 → 静态字符串（"FAULT"/"DRY"/"SETTLE"/"MEASURE"/"LOCKOUT"）。 */

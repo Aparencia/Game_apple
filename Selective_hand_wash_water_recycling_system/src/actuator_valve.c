@@ -1,45 +1,18 @@
 /*
- * actuator_valve.c
+ * actuator_valve.c —— 二位三通电磁阀 / 继电器执行器实现。
  *
- *  Created on: 2026年11月13日
- *      Author: Administrator
- */
-
-/*
- * actuator_valve.c —— 二位三通电磁阀 / 继电器执行器实现
- * ---------------------------------------------------------------------------
- * 设计要点（与 15 文档《执行器接入：二位三通电磁阀 + SRD-05VDC-SL-C 继电器模块》一致）：
- *   ① 位置映射：RECOVER=继电器吸合（12V 到阀线圈，换向到回收口）；
- *               DRAIN  =继电器释放（阀断电，弹簧复位到排空口 = fail-safe）。
- *   ② 有效电平可配：高电平触发模块 relay_on_level=HIGH（默认）；低电平触发模块改 LOW。
- *      初始化时按"释放"电平配置 P104 输出，保证复位/配置完成前不会误吸合（硬件再配
- *      10 kΩ 下拉/上拉，覆盖复位高阻期）。
- *   ③ 防抖：两次物理换向间隔不小于 min_dwell_ms（默认 500 ms）。判别层本身已有 200 ms
- *      块内消抖 + 迟滞，这里再加一道执行器侧保护，避免继电器"哒哒哒"。
- *   ④ 连续通电保护：单次吸合超过 max_on_ms（默认 120 s，按阀的连续工作制限制）→ 强制
- *      释放到排空，并冷却 cooldown_ms（默认 10 s）；冷却期内即使上层仍请求回收也保持排空。
- *   ⑤ 自检：每次写 P104 后回读比对；失败计数并锁存 pin_fault，下个 tick 继续重试。
- *      写失败时逻辑位置不更新，绝不"假装已换向"。
- *   ⑥ 计数：switch_count 只在"进入回收位"时 +1（继电器实际吸合次数），供报告写动作次数；
- *      total_on_ms 为累计吸合时长，用于评估阀线圈温升/ED。
+ * 设计要点（位置映射 RECOVER=吸合 / DRAIN=释放=fail-safe、有效电平可配、min_dwell 防抖、
+ * max_on 连续通电保护、写后回读自检、吸合计数）见 actuator_valve.h 文件头。
  *
- * 与 app_main 的分工：
- *   app_main 决定"该回收还是排空"（判别结果 + V1/V0/VA 手动覆盖 + 安全侧），每个 50 ms
- *   tick 调 valve_request + valve_task；本模块不读传感器、不打印、不 delay。
+ * 与 app_main 的分工：app_main 决定"该回收还是排空"，每个 50 ms tick 调
+ * valve_request + valve_task；本模块不读传感器、不打印、不 delay。
  */
 
 #include "actuator_valve.h"
 
 /* ---------- 内部工具 ---------- */
 
-/*
- * 函数名：valve_off_level
- * 作用：由"吸合电平"反推"释放电平"（fail-safe 电平 = 排空位电平）。
- * 参数：p_valve —— 已保存配置的句柄。
- * 返回：继电器释放时 P104 应输出的电平。
- * 时序/边界：纯函数。
- * 注意：高触发模块 → 释放=LOW；低触发模块 → 释放=HIGH。
- */
+/* 由"吸合电平"反推"释放电平"（fail-safe 电平 = 排空位电平）。 时序/边界：纯函数。 注意：高触发模块 → 释放=LOW；低触发模块 → 释放=HIGH。 */
 static bsp_io_level_t valve_off_level(const valve_t *p_valve)
 {
     if (BSP_IO_LEVEL_HIGH == p_valve->cfg.relay_on_level)
@@ -49,14 +22,7 @@ static bsp_io_level_t valve_off_level(const valve_t *p_valve)
     return BSP_IO_LEVEL_HIGH;
 }
 
-/*
- * 函数名：valve_level_for_pos
- * 作用：逻辑位置 → P104 输出电平。
- * 参数：p_valve —— 句柄；pos —— 逻辑位置。
- * 返回：RECOVER 返回吸合电平，其余返回释放电平。
- * 时序/边界：纯函数。
- * 注意：逻辑位置与电平的映射只允许在这里出现，避免别处再算反一次。
- */
+/* 逻辑位置 → P104 输出电平。 时序/边界：纯函数。 注意：逻辑位置与电平的映射只允许在这里出现，避免别处再算反一次。 */
 static bsp_io_level_t valve_level_for_pos(const valve_t *p_valve, valve_pos_t pos)
 {
     if (VALVE_POS_RECOVER == pos)
@@ -66,15 +32,8 @@ static bsp_io_level_t valve_level_for_pos(const valve_t *p_valve, valve_pos_t po
     return valve_off_level(p_valve);
 }
 
-/*
- * 函数名：valve_pin_write
- * 作用：写 P104 并立即回读校验（防止端口宏写错/引脚被别的外设占用时的"静默不动"）。
- * 参数：p_valve —— 句柄；level —— 目标电平。
- * 返回：true=写成功且回读一致；false=写失败或回读不一致。
- * 时序/边界：两个寄存器操作，微秒级；只在 valve_init/valve_task 调用。
- * 注意：回读的是引脚实际电平（RA4M2 的 PORT 读取），继电器模块输入电流只有几 mA，
- *       不会把推挽输出拉反，因此回读是可靠的配置自检手段。
- */
+/* 写 P104 并立即回读校验（防止端口宏写错/引脚被别的外设占用时的"静默不动"）。 时序/边界：两个寄存器操作，微秒级；只在 valve_init/valve_task 调用。
+ * 注意：回读的是引脚实际电平（RA4M2 的 PORT 读取），继电器模块输入电流只有几 mA， 不会把推挽输出拉反，因此回读是可靠的配置自检手段。 */
 static bool valve_pin_write(valve_t *p_valve, bsp_io_level_t level)
 {
     fsp_err_t      err;
@@ -97,15 +56,9 @@ static bool valve_pin_write(valve_t *p_valve, bsp_io_level_t level)
 
 /* ---------- 公开接口 ---------- */
 
-/*
- * 函数名：valve_init
- * 作用：fail-safe 初始化：保存配置，把 P104 配成输出并锁在"释放"电平，再回读校验。
- * 参数：p_valve —— 句柄（非 NULL）；p_cfg —— 配置（非 NULL）。
- * 返回：无（结果见 valve_get_out()->initialized / pin_fault）。
+/* fail-safe 初始化：保存配置，把 P104 配成输出并锁在"释放"电平，再回读校验。 参数：p_valve —— 句柄（非 NULL）；p_cfg —— 配置（非 NULL）。
  * 时序/边界：app_main 的第一条外设操作；约几十 µs；不打印。
- * 注意：FSP 的 PinCfg 把"输出电平(PODR)"和"方向(PDR)"写进同一个 PmnPFS 寄存器，
- *       不会出现"先输出高再拉低"的毛刺；即便如此，硬件 10 kΩ 下拉/上拉仍然必须焊。
- */
+ * 注意：FSP 的 PinCfg 把"输出电平(PODR)"和"方向(PDR)"写进同一个 PmnPFS 寄存器， 不会出现"先输出高再拉低"的毛刺；即便如此，硬件 10 kΩ 下拉/上拉仍然必须焊。 */
 void valve_init(valve_t *p_valve, const valve_cfg_t *p_cfg)
 {
     valve_out_t    init_out = { 0 };
@@ -170,16 +123,9 @@ void valve_init(valve_t *p_valve, const valve_cfg_t *p_cfg)
     p_valve->out.switch_reason = "INIT_DRAIN";
 }
 
-/*
- * 函数名：valve_request
- * 作用：记录上层想要的位置（判别/手动/安全侧），并不立即碰 GPIO。
- * 参数：p_valve —— 句柄（NULL 直接返回）；pos —— 目标位置（非法值按 DRAIN）；
- *       now_ms —— 当前时刻（本版本不用，保留接口以便以后做"最短排空时间"）；
- *       p_reason —— 请求来源静态串（NULL 时保留上一次来源）。
- * 返回：无。
- * 时序/边界：O(1)，可在每个 tick 调用。
- * 注意：来源字符串必须是静态常量（如 "AUTO"/"MANUAL_RECOVER"），模块只存指针不复制。
- */
+/* 记录上层想要的位置（判别/手动/安全侧），并不立即碰 GPIO。
+ * 参数：p_valve —— 句柄（NULL 直接返回）；pos —— 目标位置（非法值按 DRAIN）； now_ms —— 当前时刻（本版本不用，保留接口以便以后做"最短排空时间"）； p_reason —— 请求来源静态串（NULL 时保留上一次来源）。
+ * 时序/边界：O(1)，可在每个 tick 调用。 注意：来源字符串必须是静态常量（如 "AUTO"/"MANUAL_RECOVER"），模块只存指针不复制。 */
 void valve_request(valve_t *p_valve, valve_pos_t pos, uint32_t now_ms, const char *p_reason)
 {
     (void)now_ms;
@@ -201,16 +147,8 @@ void valve_request(valve_t *p_valve, valve_pos_t pos, uint32_t now_ms, const cha
     }
 }
 
-/*
- * 函数名：valve_task
- * 作用：执行器状态机：冷却解除 → 判定目标 → 驻留判断 → 写引脚+回读 → 计数/计时
- *       → 连续吸合超时强制释放。
- * 参数：p_valve —— 句柄；now_ms —— 当前时刻（1 ms 时基，无符号差值比较，回绕安全）。
- * 返回：无。
- * 时序/边界：每 50 ms 调用一次；只做寄存器读写，微秒级，不阻塞。
- * 注意：初始化失败/写失败时逻辑位置保持"排空"，但物理上继电器由硬件下拉/上拉与
- *       12V 船型开关兜底；软件不能替代那两道硬件安全措施。
- */
+/* 执行器状态机：冷却解除 → 判定目标 → 驻留判断 → 写引脚+回读 → 计数/计时 → 连续吸合超时强制释放。 时序/边界：每 50 ms 调用一次；只做寄存器读写，微秒级，不阻塞。
+ * 注意：初始化失败/写失败时逻辑位置保持"排空"，但物理上继电器由硬件下拉/上拉与 12V 船型开关兜底；软件不能替代那两道硬件安全措施。 */
 void valve_task(valve_t *p_valve, uint32_t now_ms)
 {
     valve_pos_t    desired;
@@ -322,14 +260,8 @@ void valve_task(valve_t *p_valve, uint32_t now_ms)
     }
 }
 
-/*
- * 函数名：valve_get_out
- * 作用：返回执行器输出只读指针。
- * 参数：p_valve —— 句柄（可为 NULL）。
- * 返回：输出指针；p_valve 为 NULL 时返回 NULL。
- * 时序/边界：O(1)。
- * 注意：指针生命周期与句柄相同（app_main 静态变量），不要在栈上复制后再长期持有。
- */
+/* 返回执行器输出只读指针。 参数：p_valve —— 句柄（可为 NULL）。 返回：输出指针；p_valve 为 NULL 时返回 NULL。 时序/边界：O(1)。
+ * 注意：指针生命周期与句柄相同（app_main 静态变量），不要在栈上复制后再长期持有。 */
 const valve_out_t *valve_get_out(const valve_t *p_valve)
 {
     if (NULL == p_valve)
@@ -339,14 +271,7 @@ const valve_out_t *valve_get_out(const valve_t *p_valve)
     return &p_valve->out;
 }
 
-/*
- * 函数名：valve_pos_str
- * 作用：逻辑位置 → 静态字符串。
- * 参数：pos —— 位置。
- * 返回："RECOVER" / "DRAIN"。
- * 时序/边界：纯函数。
- * 注意：只用于日志/状态行，不参与控制判断。
- */
+/* 逻辑位置 → 静态字符串。 时序/边界：纯函数。 注意：只用于日志/状态行，不参与控制判断。 */
 const char *valve_pos_str(valve_pos_t pos)
 {
     if (VALVE_POS_RECOVER == pos)

@@ -1,11 +1,4 @@
 /*
- * decision.c
- *
- *  Created on: 2026年10月30日
- *      Author: Administrator
- */
-
-/*
  * decision.c —— 水质判别 + 回收许可（v2：事件闩锁 → 工况门控 + 每 tick 重算的谓词）
  * ---------------------------------------------------------------------------
  * 数据来源：只读 sensor_pipeline 产生的 pipeline_out_t（每个 50 ms tick 一份），
@@ -56,6 +49,36 @@ static const char *const g_reason_too_clean    = "TOO_CLEAN";
 static const char *const g_reason_block_split  = "BLOCK_SPLIT";
 static const char *const g_reason_blank        = "BLANK";
 
+/* ---------- 枚举 → 字符串/状态 静态表 ---------- */
+/*
+ * 下标就是枚举值（decision.h 里三个枚举都从 0 起连续），越界一律回退到旧 switch 的
+ * default 取值，逐字不变：
+ *   等级→状态 UNCERTAIN、等级→原因 UNCERTAIN、状态名 "UNCERT"、等级名 "L1"、动作名 "DRAIN"。
+ * 表集中放在文件顶部：改字符串只改一处，不必在多个 switch 分支里找。
+ */
+#define DEC_TABLE_LEN(a)  (sizeof(a) / sizeof((a)[0]))
+
+static const decision_state_t g_state_by_level[] =
+{
+    DEC_STATE_CLEAR, DEC_STATE_UNCERTAIN, DEC_STATE_SOAP    /* L0 / L1 / L2 */
+};
+static const char *const g_reason_by_level[] =
+{
+    "CLEAN", "UNCERTAIN", "SOAP_HIGH"                        /* L0 / L1 / L2 */
+};
+static const char *const g_state_name[] =
+{
+    "WAIT", "FLUSH", "CLEAR", "UNCERT", "SOAP"
+};
+static const char *const g_level_name[] =
+{
+    "L0", "L1", "L2"
+};
+static const char *const g_action_name[] =
+{
+    "DRAIN", "RECOV"
+};
+
 /* ---------- 默认配置 ---------- */
 /*
  * p_cfg == NULL 时使用；数值与 app_main.c 的默认配置一致。
@@ -88,6 +111,8 @@ static const decision_cfg_t g_default_cfg =
 static decision_state_t  decision_state_from_level(decision_level_t level);
 static const char       *decision_reason_from_level(decision_level_t level);
 static void              decision_reset_block(decision_t *p_dec, uint32_t now_ms);
+static void              decision_clear_counters(decision_t *p_dec, uint32_t now_ms);
+static float             decision_thr(float sigma_mv, float min_mv, float pct, float ec0);
 static void              decision_apply_output(decision_t *p_dec, decision_state_t state,
                                                decision_level_t level, decision_action_t action,
                                                bool permit, const char *reason, uint32_t now_ms);
@@ -101,38 +126,18 @@ static decision_level_t  decision_block_update(decision_t *p_dec, decision_level
 
 /* ---------- 小工具 ---------- */
 
-/* 等级 → 状态（L0→CLEAR、L2→SOAP、L1→UNCERTAIN）。 */
+/* 等级 → 状态（L0→CLEAR、L2→SOAP、L1/越界→UNCERTAIN）。 */
 static decision_state_t decision_state_from_level(decision_level_t level)
 {
-    switch (level)
-    {
-        case DEC_LEVEL_L0:
-            return DEC_STATE_CLEAR;
-
-        case DEC_LEVEL_L2:
-            return DEC_STATE_SOAP;
-
-        case DEC_LEVEL_L1:
-        default:
-            return DEC_STATE_UNCERTAIN;
-    }
+    return ((unsigned)level < DEC_TABLE_LEN(g_state_by_level))
+           ? g_state_by_level[level] : DEC_STATE_UNCERTAIN;
 }
 
 /* 等级 → 原因串（块投票通过时用，避免拿单点样本的原因误导日志）。 */
 static const char *decision_reason_from_level(decision_level_t level)
 {
-    switch (level)
-    {
-        case DEC_LEVEL_L0:
-            return g_reason_clean;
-
-        case DEC_LEVEL_L2:
-            return g_reason_soap_high;
-
-        case DEC_LEVEL_L1:
-        default:
-            return g_reason_uncertain;
-    }
+    return ((unsigned)level < DEC_TABLE_LEN(g_reason_by_level))
+           ? g_reason_by_level[level] : g_reason_uncertain;
 }
 
 /* 清空消抖块（投票环形缓冲 + 长度 + 块起点）。 */
@@ -150,6 +155,19 @@ static void decision_reset_block(decision_t *p_dec, uint32_t now_ms)
 }
 
 /*
+ * 清三个独立计数器 + 消抖块。
+ * 三个计数器各自对应一条去抖/迟滞路径（变化率抢先、升级到 L0、L0→L1），
+ * 任何"情境变了"的时刻都必须一起清，抽成一处避免漏清某一项。
+ */
+static void decision_clear_counters(decision_t *p_dec, uint32_t now_ms)
+{
+    p_dec->rate_hits      = 0U;
+    p_dec->upgrade_blocks = 0U;
+    p_dec->downgrade_hits = 0U;
+    decision_reset_block(p_dec, now_ms);
+}
+
+/*
  * 把新结果写入 out，并维护 changed / state_since_ms。
  * changed 只在 state / level / action / permit 任一变化时置 true。
  * state_since_ms 只在"状态"变化时刷新（日志与显示用）。
@@ -158,24 +176,10 @@ static void decision_apply_output(decision_t *p_dec, decision_state_t state, dec
                                   decision_action_t action, bool permit, const char *reason,
                                   uint32_t now_ms)
 {
-    bool changed = false;
+    bool changed;
 
-    if (p_dec->out.state != state)
-    {
-        changed = true;
-    }
-    if (p_dec->out.level != level)
-    {
-        changed = true;
-    }
-    if (p_dec->out.action != action)
-    {
-        changed = true;
-    }
-    if (p_dec->out.permit != permit)
-    {
-        changed = true;
-    }
+    changed = (p_dec->out.state != state) || (p_dec->out.level != level)
+           || (p_dec->out.action != action) || (p_dec->out.permit != permit);
 
     if (p_dec->out.state != state)
     {
@@ -191,17 +195,34 @@ static void decision_apply_output(decision_t *p_dec, decision_state_t state, dec
     p_dec->out.reason       = (NULL != reason) ? reason : g_reason_idle;
 }
 
+/* 单侧 EC 阈值：max(σ 倍数项, 绝对下限, EC0 百分比下限)。
+ * sigma_mv 是"倍数×σ"已乘好的一项；ec0 传 0 表示本 tick 不做百分比项（基线无效 /
+ * EC0 过小），此时百分比项为 0、不改变 max 结果 —— 与旧的两段 if 逐项等价。 */
+static float decision_thr(float sigma_mv, float min_mv, float pct, float ec0)
+{
+    float th     = sigma_mv;
+    float pct_mv = ec0 * pct / 100.0f;
+
+    if (th < min_mv)
+    {
+        th = min_mv;
+    }
+    if (pct_mv > th)
+    {
+        th = pct_mv;
+    }
+    return th;
+}
+
 /*
  * 按本底噪声 σ_ec 计算本 tick 生效的 d1/d2（EC 自适应阈值）。
- * d1 = max(ec_d1_sigma*σ, ec_d1_min_mv)，d2 同理且强制 d2 > d1。
+ * d1 = max(ec_d1_sigma*σ, ec_d1_min_mv, ec_d1_pct%×EC0)，d2 同理且强制 d2 > d1。
  * 浊度阈值只用固定百分比（无 NTU 标定，红线：不写 NTU）。
  */
 static void decision_update_thresholds(decision_t *p_dec, const pipeline_out_t *p_out)
 {
     float sigma = p_out->ec_sigma_mv;
-    float d1;
-    float d2;
-    float gap;
+    float ec0   = 0.0f;
     float d1_ntu;
     float d2_ntu;
 
@@ -210,53 +231,34 @@ static void decision_update_thresholds(decision_t *p_dec, const pipeline_out_t *
         sigma = 0.0f;   /* 防御：σ 为负只可能是上游异常，按 0 处理 */
     }
 
-    d1 = p_dec->cfg.ec_d1_sigma * sigma;
-    if (d1 < p_dec->cfg.ec_d1_min_mv)
-    {
-        d1 = p_dec->cfg.ec_d1_min_mv;
-    }
-
-    d2 = p_dec->cfg.ec_d2_sigma * sigma;
-    if (d2 < p_dec->cfg.ec_d2_min_mv)
-    {
-        d2 = p_dec->cfg.ec_d2_min_mv;
-    }
-
     /*
      * EC0 百分比下限（v2.2，现场 2026-11-16 数据）：
      *   清水 EC0≈348 mV，阀切换引起的水力漂移 ΔEC 达 ±16 mV（≈5%×EC0），
      *   而固定下限 8 mV 只有 2.3%×EC0 —— 阈值落在漂移带内，清水就会 2 s 周期抖。
      *   改为 d1=max(4σ, 8mV, 6%×EC0)、d2=max(8σ, 20mV, 9%×EC0)：
      *   348 mV → d1≈20.9、d2≈31.3；清水峰值 16 不进 L1，肥皂 +40 仍 >d2。
-     * 基线无效时不做百分比（ec0=0），保持原来的绝对/σ 阈值。
+     * 基线无效时不做百分比（ec0 保持 0），保持原来的绝对/σ 阈值。
      */
     if ((p_out->baseline_valid) && (p_out->ec0_mv25 > 1.0f))
     {
-        float d1_pct_mv = p_out->ec0_mv25 * p_dec->cfg.ec_d1_pct / 100.0f;
-        float d2_pct_mv = p_out->ec0_mv25 * p_dec->cfg.ec_d2_pct / 100.0f;
-
-        if (d1_pct_mv > d1)
-        {
-            d1 = d1_pct_mv;
-        }
-        if (d2_pct_mv > d2)
-        {
-            d2 = d2_pct_mv;
-        }
+        ec0 = p_out->ec0_mv25;
     }
 
-    if (d2 <= d1)
+    p_dec->out.d1_ec_mv = decision_thr(p_dec->cfg.ec_d1_sigma * sigma, p_dec->cfg.ec_d1_min_mv,
+                                       p_dec->cfg.ec_d1_pct, ec0);
+    p_dec->out.d2_ec_mv = decision_thr(p_dec->cfg.ec_d2_sigma * sigma, p_dec->cfg.ec_d2_min_mv,
+                                       p_dec->cfg.ec_d2_pct, ec0);
+
+    if (p_dec->out.d2_ec_mv <= p_dec->out.d1_ec_mv)
     {
-        gap = d1 * p_dec->cfg.ec_hyst_ratio;
+        float gap = p_dec->out.d1_ec_mv * p_dec->cfg.ec_hyst_ratio;
+
         if (gap < 1.0f)
         {
             gap = 1.0f;
         }
-        d2 = d1 + gap;
+        p_dec->out.d2_ec_mv = p_dec->out.d1_ec_mv + gap;
     }
-
-    p_dec->out.d1_ec_mv = d1;
-    p_dec->out.d2_ec_mv = d2;
 
     d1_ntu = p_dec->cfg.ntu_d1_pct;
     d2_ntu = p_dec->cfg.ntu_d2_pct;
@@ -497,7 +499,6 @@ static decision_level_t decision_block_update(decision_t *p_dec, decision_level_
 void decision_init(decision_t *p_dec, const decision_cfg_t *p_cfg)
 {
     decision_cfg_t *p_c;
-    uint8_t i;
 
     if (NULL == p_dec)
     {
@@ -608,23 +609,12 @@ void decision_init(decision_t *p_dec, const decision_cfg_t *p_cfg)
     /* --- 工况机（L0 位图 + L1 regime） --- */
     gate_init(&p_dec->gate, &p_c->gate);
 
-    /* --- 运行时状态清零 --- */
+    /* --- 运行时状态清零（三个计数器 + 消抖块由同一处清，起点=0 ms） --- */
     p_dec->state_since_ms = 0U;
     p_dec->event_since_ms = 0U;
     p_dec->event_active   = false;
-    p_dec->verdict_pos    = 0U;
-    p_dec->verdict_len    = 0U;
-    p_dec->block_start_ms = 0U;
-    p_dec->rate_hits      = 0U;
-    p_dec->upgrade_blocks = 0U;
-    p_dec->downgrade_hits = 0U;
     p_dec->blank_active   = false;
-    p_dec->level_hold     = false;
-    p_dec->level_reason   = NULL;
-    for (i = 0U; i < (uint8_t)DECISION_MAX_BLOCK_SAMPLES; i++)
-    {
-        p_dec->verdict_ring[i] = 0U;
-    }
+    decision_clear_counters(p_dec, 0U);
 
     /* --- 输出初值：安全侧 WAIT/L1/DRAIN；changed=true 让上电第一帧日志可打印 --- */
     p_dec->out.state        = DEC_STATE_WAIT;
@@ -688,16 +678,8 @@ void decision_note_valve_switch(decision_t *p_dec, uint32_t now_ms)
     gate_note_switch(&p_dec->gate, now_ms);
 }
 
-/* M2：液位变化中强制 WAIT/DRAIN，避免用旧状态继续回收。 */
-void decision_set_level_hold(decision_t *p_dec, bool hold, const char *reason)
-{
-    if (NULL == p_dec)
-    {
-        return;
-    }
-    p_dec->level_hold   = hold;
-    p_dec->level_reason = hold ? reason : NULL;
-}
+/* M2：液位变化中强制 WAIT/DRAIN（由 app 层的 level_hold 直接走 app 层门控，
+ *     decision 侧不再保留独立入口）。 */
 
 /*
  * 判别主函数（每 50 ms 一次）。
@@ -754,21 +736,6 @@ void decision_update(decision_t *p_dec, const sensor_pipeline_t *p_pipe, uint32_
     p_dec->out.blanking    = p_dec->gate.blanking;
     p_dec->out.gate_reason = gate_reason_str(&p_dec->gate);
 
-    /* ---------- M2：液位变化门控 ---------- */
-    if (p_dec->level_hold)
-    {
-        p_dec->rate_hits      = 0U;
-        p_dec->upgrade_blocks = 0U;
-        p_dec->downgrade_hits = 0U;
-        p_dec->blank_active   = false;
-        decision_reset_block(p_dec, now_ms);
-        decision_apply_output(p_dec, DEC_STATE_WAIT, DEC_LEVEL_L1, DEC_ACTION_DRAIN,
-                              false,
-                              (NULL != p_dec->level_reason) ? p_dec->level_reason : "LEVEL_MOVE",
-                              now_ms);
-        return;
-    }
-
     /* ---------- ② 非测量工况：禁止分类，强制排空 ---------- */
     /*
      * REGIME_DRY 与 REGIME_SETTLE 下 action 恒为 DRAIN、level 恒为 L1（未知）。
@@ -776,11 +743,8 @@ void decision_update(decision_t *p_dec, const sensor_pipeline_t *p_pipe, uint32_
      */
     if (REGIME_MEASURE != p_dec->gate.regime)
     {
-        p_dec->rate_hits      = 0U;
-        p_dec->upgrade_blocks = 0U;
-        p_dec->downgrade_hits = 0U;
-        p_dec->blank_active   = false;
-        decision_reset_block(p_dec, now_ms);
+        p_dec->blank_active = false;
+        decision_clear_counters(p_dec, now_ms);
 
         decision_apply_output(p_dec, DEC_STATE_WAIT, DEC_LEVEL_L1, DEC_ACTION_DRAIN,
                               false, gate_reason_str(&p_dec->gate), now_ms);
@@ -800,11 +764,8 @@ void decision_update(decision_t *p_dec, const sensor_pipeline_t *p_pipe, uint32_
         if (!p_dec->blank_active)
         {
             /* 屏蔽刚开始：清掉换向前攒的票与速率计数，避免"旧情境的票"决定新动作 */
-            decision_reset_block(p_dec, now_ms);
-            p_dec->rate_hits      = 0U;
-            p_dec->upgrade_blocks = 0U;
-            p_dec->downgrade_hits = 0U;
-            p_dec->blank_active   = true;
+            decision_clear_counters(p_dec, now_ms);
+            p_dec->blank_active = true;
         }
 
         adopted = p_dec->out.level;
@@ -845,10 +806,7 @@ void decision_update(decision_t *p_dec, const sensor_pipeline_t *p_pipe, uint32_
 
         if (p_dec->rate_hits >= p_dec->cfg.rate_confirm_ticks)
         {
-            p_dec->rate_hits      = 0U;
-            p_dec->upgrade_blocks = 0U;
-            p_dec->downgrade_hits = 0U;
-            decision_reset_block(p_dec, now_ms);
+            decision_clear_counters(p_dec, now_ms);
 
             decision_apply_output(p_dec, DEC_STATE_SOAP, DEC_LEVEL_L2, DEC_ACTION_DRAIN,
                                   false, g_reason_rate_jump, now_ms);
@@ -934,56 +892,20 @@ const decision_out_t *decision_get_out(const decision_t *p_dec)
     return &p_dec->out;
 }
 
-/* 状态 → 静态字符串（CSV 取值：WAIT/FLUSH/CLEAR/UNCERT/SOAP）。 */
+/* 状态 → 静态字符串（CSV 取值：WAIT/FLUSH/CLEAR/UNCERT/SOAP；越界→"UNCERT"）。 */
 const char *decision_state_str(decision_state_t state)
 {
-    switch (state)
-    {
-        case DEC_STATE_WAIT:
-            return "WAIT";
-
-        case DEC_STATE_FLUSH:
-            return "FLUSH";
-
-        case DEC_STATE_CLEAR:
-            return "CLEAR";
-
-        case DEC_STATE_SOAP:
-            return "SOAP";
-
-        case DEC_STATE_UNCERTAIN:
-        default:
-            return "UNCERT";
-    }
+    return ((unsigned)state < DEC_TABLE_LEN(g_state_name)) ? g_state_name[state] : "UNCERT";
 }
 
-/* 等级 → "L0"/"L1"/"L2"。 */
+/* 等级 → "L0"/"L1"/"L2"（越界→"L1"，与旧 switch 的 default 一致）。 */
 const char *decision_level_str(decision_level_t level)
 {
-    switch (level)
-    {
-        case DEC_LEVEL_L0:
-            return "L0";
-
-        case DEC_LEVEL_L2:
-            return "L2";
-
-        case DEC_LEVEL_L1:
-        default:
-            return "L1";
-    }
+    return ((unsigned)level < DEC_TABLE_LEN(g_level_name)) ? g_level_name[level] : "L1";
 }
 
-/* 动作 → "RECOV"/"DRAIN"。 */
+/* 动作 → "RECOV"/"DRAIN"（越界→"DRAIN"，与旧 switch 的 default 一致）。 */
 const char *decision_action_str(decision_action_t action)
 {
-    switch (action)
-    {
-        case DEC_ACTION_RECOVER:
-            return "RECOV";
-
-        case DEC_ACTION_DRAIN:
-        default:
-            return "DRAIN";
-    }
+    return ((unsigned)action < DEC_TABLE_LEN(g_action_name)) ? g_action_name[action] : "DRAIN";
 }

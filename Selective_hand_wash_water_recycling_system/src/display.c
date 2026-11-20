@@ -1,11 +1,4 @@
 /*
- * display.c
- *
- *  Created on: 2026年10月30日
- *      Author: Administrator
- */
-
-/*
  * display.c —— 判别/执行结果 → 板载 0.96" OLED 三页状态页（128x64，I2C0）
  * ---------------------------------------------------------------------------
  * v1.3.0（2026-11-13）升级：从"单页、只有清水/污水两个大字"扩展为三页现场指示：
@@ -105,17 +98,9 @@ typedef struct st_disp_page
 
 /* ============================ 内部状态 ============================ */
 
-/* 上一页实际画出的内容（用于差异刷新）。 */
-static char    g_shown_r0[DISP_R0_BUF];
-static char    g_shown_r1[DISP_R1_BUF];
-static char    g_shown_r2[DISP_R2_BUF];
-static char    g_shown_rows[DISP_INFO_ROWS][DISP_ROW_BUF];
-static uint8_t g_shown_big0;
-static uint8_t g_shown_big1;
-static bool    g_shown_inverse;
-static uint8_t g_shown_page;         /* 0=还没画过状态页 */
-static uint8_t g_shown_kind;
-static bool    g_shown_once;         /* 是否已经画过状态页（false=开机页还在屏上） */
+/* 上一屏实际画出的内容（用于差异刷新）；g_shown_once=false 时尚未画过状态页。 */
+static disp_page_t g_shown;
+static bool        g_shown_once;     /* 是否已经画过状态页（false=开机页还在屏上） */
 
 /* 当前页（0..2）与强制整屏重画标志（切页/K2 触发）。 */
 static uint8_t g_page;
@@ -135,14 +120,8 @@ static uint32_t g_event_start_ms;
 
 /* ============================ 小工具 ============================ */
 
-/*
- * 函数名：disp_round_i
- * 作用：浮点四舍五入到 int32（对称舍入，负值也按绝对值进舍）。
- * 参数：v —— 待舍入值（本工程量级远小于 int32 范围，不做溢出保护）。
- * 返回：舍入后的整数。
- * 时序/边界：纯计算，无副作用。
- * 注意：不用 lroundf/roundf（会拉进 libm，本工程禁 libm）。
- */
+/* 浮点四舍五入到 int32（对称舍入，负值也按绝对值进舍）。 参数：v —— 待舍入值（本工程量级远小于 int32 范围，不做溢出保护）。 时序/边界：纯计算，无副作用。
+ * 注意：不用 lroundf/roundf（会拉进 libm，本工程禁 libm）。 */
 static int32_t disp_round_i(float v)
 {
     if (v >= 0.0f)
@@ -152,14 +131,28 @@ static int32_t disp_round_i(float v)
     return (int32_t)(v - 0.5f);
 }
 
-/*
- * 函数名：disp_copy
- * 作用：安全字符串拷贝（带长度上限，保证 '\0' 结尾）。
- * 参数：p_dst/cap —— 目标与容量；p_src —— 源（NULL 视为空串）。
- * 返回：无。
- * 时序/边界：O(n)；截断而不是溢出。
- * 注意：本工程字符串都是静态字面量或固定缓冲，不会出现超长动态串。
- */
+/* 把 v 限幅到 [lo, hi]（调用点保持原边界；lo <= hi 由调用点保证）。 时序/边界：纯计算，无副作用。 */
+static int32_t disp_clamp_i(int32_t v, int32_t lo, int32_t hi)
+{
+    if (v < lo)
+    {
+        return lo;
+    }
+    if (v > hi)
+    {
+        return hi;
+    }
+    return v;
+}
+
+/* 无符号上限幅（下限恒为 0），用于计数/秒数这类不可能为负的量。 */
+static uint32_t disp_clamp_u(uint32_t v, uint32_t hi)
+{
+    return (v > hi) ? hi : v;
+}
+
+/* 安全字符串拷贝（带长度上限，保证 '\0' 结尾）。 参数：p_dst/cap —— 目标与容量；p_src —— 源（NULL 视为空串）。 时序/边界：O(n)；截断而不是溢出。
+ * 注意：本工程字符串都是静态字面量或固定缓冲，不会出现超长动态串。 */
 static void disp_copy(char *p_dst, uint32_t cap, const char *p_src)
 {
     uint32_t i = 0U;
@@ -178,139 +171,52 @@ static void disp_copy(char *p_dst, uint32_t cap, const char *p_src)
     p_dst[i] = '\0';
 }
 
-/*
- * 函数名：disp_fmt_temp
- * 作用：把水温格式化成一位小数（如 "25.3"、"-3.0"），不带单位。
- * 参数：p_buf/cap —— 输出缓冲；temp_c —— 水温（℃）。
- * 返回：无。
- * 时序/边界：缓冲 ≥ 7 字节（"-99.9" + '\0'）。
- * 注意：负温度需要保留符号；本工程水温正常在 5~40 ℃，但 DS18B20 故障/冬天也不能
- *       让符号位丢失（否则 -0.5 ℃ 会显示成 0.5 ℃，温补方向就反了）。
- */
+/* 把水温格式化成一位小数（如 "25.3"、"-3.0"），不带单位。 时序/边界：缓冲 ≥ 7 字节（"-999.9" + '\0'）；cap < 5 时输出空串。
+ * 注意：负温度必须保留符号（-0.5 ℃ 显示成 0.5 ℃ 会让温补方向反掉）；只用整数格式，不碰浮点 printf。
+ *       输出与原手工拼串逐字节相同：无前导零、无 '+'、小数固定一位（cap 足够时）。 */
 static void disp_fmt_temp(char *p_buf, uint32_t cap, float temp_c)
 {
     int32_t  t10;
     uint32_t a;
-    uint32_t whole;
-    uint32_t i = 0U;
 
     if ((NULL == p_buf) || (0U == cap))
     {
         return;
     }
 
-    t10 = disp_round_i(temp_c * 10.0f);
-    if (t10 > 9999)
-    {
-        t10 = 9999;       /* 显示上限 999.9 ℃（实际水温不可能到，纯防格式化溢出） */
-    }
-    if (t10 < -9999)
-    {
-        t10 = -9999;
-    }
-    a     = (uint32_t)((t10 < 0) ? (-t10) : t10);
-    whole = a / 10U;      /* 整数部分（0~999） */
+    t10 = disp_clamp_i(disp_round_i(temp_c * 10.0f), -9999, 9999);   /* 显示上限 999.9 ℃ */
     if (cap < 5U)
     {
         p_buf[0] = '\0';
         return;
     }
 
-    /* 手工拼 "[-]<whole>.<一位小数>"：不用 snprintf，避免 -Wformat-truncation */
-    if (t10 < 0)
-    {
-        p_buf[i] = '-';
-        i++;
-    }
-    if (whole >= 100U)
-    {
-        p_buf[i] = (char)('0' + (whole / 100U));
-        i++;
-        whole %= 100U;
-        p_buf[i] = (char)('0' + (whole / 10U));
-        i++;
-        p_buf[i] = (char)('0' + (whole % 10U));
-        i++;
-    }
-    else if (whole >= 10U)
-    {
-        p_buf[i] = (char)('0' + (whole / 10U));
-        i++;
-        p_buf[i] = (char)('0' + (whole % 10U));
-        i++;
-    }
-    else
-    {
-        p_buf[i] = (char)('0' + whole);
-        i++;
-    }
-    p_buf[i] = '.';
-    i++;
-    p_buf[i] = (char)('0' + (a % 10U));
-    i++;
-    p_buf[i] = '\0';
+    a = (uint32_t)((t10 < 0) ? (-t10) : t10);
+    (void)snprintf(p_buf, (size_t)cap, "%s%lu.%lu", (t10 < 0) ? "-" : "",
+                   (unsigned long)(a / 10U), (unsigned long)(a % 10U));
 }
 
-/*
- * 函数名：disp_fmt_signed_dec
- * 作用：把"×10 缩放"的浮点格式化成带符号一位小数（如 "+5.0"、"-0.5"、"0.0"）。
- * 参数：p_buf/cap —— 输出；value —— 原值（内部×10 取整）。
- * 返回：无。
- * 时序/边界：缓冲 ≥ 8 字节；值域受传感器量程限制，不会溢出。
- * 注意：仅用于显示 dNTU%/变化率这类小量；正值带 '+'，零显示 "0.0"。
- */
+/* 把"×10 缩放"的浮点格式化成带符号一位小数（如 "+5.0"、"-0.5"、" 0.0"）。 时序/边界：缓冲 ≥ 8 字节；值域受传感器量程限制。
+ * 注意：仅用于 dNTU%/变化率这类小量；正值带 '+'，零带前导空格（与 CSV 符号列对齐）。 */
 static void disp_fmt_signed_dec(char *p_buf, uint32_t cap, float value)
 {
     int32_t  x10;
-    char     sign;
     uint32_t a;
-    uint32_t whole;
-    uint32_t frac;
 
     if ((NULL == p_buf) || (cap < 8U))
     {
         return;
     }
 
-    x10 = disp_round_i(value * 10.0f);
-    if (x10 > 99999)
-    {
-        x10 = 99999;
-    }
-    if (x10 < -99999)
-    {
-        x10 = -99999;
-    }
-    if (x10 < 0)
-    {
-        sign = '-';
-        a    = (uint32_t)(-x10);
-    }
-    else if (x10 > 0)
-    {
-        sign = '+';
-        a    = (uint32_t)x10;
-    }
-    else
-    {
-        sign = ' ';
-        a    = 0U;
-    }
-    whole = a / 10U;
-    frac  = a % 10U;
-    (void)snprintf(p_buf, (size_t)cap, "%c%lu.%lu", sign,
-                   (unsigned long)whole, (unsigned long)frac);
+    x10 = disp_clamp_i(disp_round_i(value * 10.0f), -99999, 99999);
+    a   = (uint32_t)((x10 < 0) ? (-x10) : x10);
+    (void)snprintf(p_buf, (size_t)cap, "%c%lu.%lu",
+                   (x10 < 0) ? '-' : ((x10 > 0) ? '+' : ' '),
+                   (unsigned long)(a / 10U), (unsigned long)(a % 10U));
 }
 
-/*
- * 函数名：disp_fmt_header
- * 作用：格式化 P1 页头 "EC0=<4位mV> s<σ.一位> T<温度.一位>"；无基线时用 ---- / --- 占位。
- * 参数：p_buf/cap —— 输出；p_out —— 流水线输出。
- * 返回：无。
- * 时序/边界：缓冲 ≥ 22 字节。
- * 注意：EC0 用整数 mV（四舍五入），与 CSV 的 ec0 字段同源；σ 只显示一位小数，
- *       够现场判断"噪声大不大"，精确值看串口 CSV。
- */
+/* 格式化 P1 页头 "EC0=<4位mV> s<σ.一位> T<温度.一位>"；无基线时用 ---- / --- 占位。 时序/边界：缓冲 ≥ 22 字节。
+ * 注意：EC0 用整数 mV（四舍五入），与 CSV 的 ec0 字段同源；σ 只显示一位小数， 够现场判断"噪声大不大"，精确值看串口 CSV。 */
 static void disp_fmt_header(char *p_buf, uint32_t cap, const pipeline_out_t *p_out)
 {
     char    tbuf[8];
@@ -325,15 +231,7 @@ static void disp_fmt_header(char *p_buf, uint32_t cap, const pipeline_out_t *p_o
 
     if (p_out->baseline_valid)
     {
-        sig10 = disp_round_i(p_out->ec_sigma_mv * 10.0f);
-        if (sig10 < 0)
-        {
-            sig10 = 0;
-        }
-        if (sig10 > 999)
-        {
-            sig10 = 999;   /* 显示上限 99.9 mV，够用；真这么大说明探头/流动池有问题 */
-        }
+        sig10 = disp_clamp_i(disp_round_i(p_out->ec_sigma_mv * 10.0f), 0, 999);   /* 上限 99.9 mV */
         (void)snprintf(p_buf, (size_t)cap, "EC0=%4u s%u.%u T%s",
                        (unsigned)disp_round_i(p_out->ec0_mv25),
                        (unsigned)((uint32_t)sig10 / 10U),
@@ -346,15 +244,9 @@ static void disp_fmt_header(char *p_buf, uint32_t cap, const pipeline_out_t *p_o
     }
 }
 
-/*
- * 函数名：disp_fmt_numbers
- * 作用：格式化 P1 数值串 "dEC%+dmV g%d.%03d N%+d"（例："dEC+12mV g1.008 N+5"）。
- * 参数：p_buf/cap —— 输出；p_out —— 流水线输出。
- * 返回：无。
- * 时序/边界：缓冲 ≥ 22 字节；N 限幅到 ±99（6x8 一行最多 21 字符）。
- * 注意：g 用"千分位整数"打印（g_milli=1008 → "g1.008"），避免浮点 printf；
- *       ΔEC 用四舍五入整数 mV（与 08 文档记录表的量级一致）。
- */
+/* 格式化 P1 数值串 "dEC%+dmV g%d.%03d N%+d"（例："dEC+12mV g1.008 N+5"）。 时序/边界：缓冲 ≥ 22 字节；N 限幅到 ±99（6x8 一行最多 21 字符）。
+ * 注意：g 用"千分位整数"打印（g_milli=1008 → "g1.008"），避免浮点 printf； ΔEC 用四舍五入整数 mV（与 08 文档记录表的量级一致）。
+ *       限幅保证整行 ≤21 字符：最坏 "dEC+999mV g9.999 N+99" = 21 字符。 */
 static void disp_fmt_numbers(char *p_buf, uint32_t cap, const pipeline_out_t *p_out)
 {
     int32_t d_ec;
@@ -366,83 +258,29 @@ static void disp_fmt_numbers(char *p_buf, uint32_t cap, const pipeline_out_t *p_
         return;
     }
 
-    d_ec    = disp_round_i(p_out->d_ec_mv);
-    g_milli = disp_round_i(p_out->g_ec * 1000.0f);
-    n       = disp_round_i(p_out->d_ntu_pct);
-
-    /* 限幅保证整行 ≤21 字符（6x8）：
-     * "dEC%+dmV g%d.%03d N%+d" 最坏 "dEC+999mV g9.999 N+99" = 21 字符。 */
-    if (d_ec > 999)
-    {
-        d_ec = 999;
-    }
-    if (d_ec < -999)
-    {
-        d_ec = -999;
-    }
-    if (g_milli < 0)
-    {
-        g_milli = 0;           /* g 理论上 >0；异常值兜底，防止出现 "g-1.000" */
-    }
-    if (g_milli > 9999)
-    {
-        g_milli = 9999;        /* g 显示上限 9.999（防止一行超长） */
-    }
-    if (n > 99)
-    {
-        n = 99;
-    }
-    if (n < -99)
-    {
-        n = -99;
-    }
+    d_ec    = disp_clamp_i(disp_round_i(p_out->d_ec_mv), -999, 999);
+    g_milli = disp_clamp_i(disp_round_i(p_out->g_ec * 1000.0f), 0, 9999);   /* g 显示上限 9.999 */
+    n       = disp_clamp_i(disp_round_i(p_out->d_ntu_pct), -99, 99);
 
     (void)snprintf(p_buf, (size_t)cap, "dEC%+dmV g%d.%03d N%+d",
                    (int)d_ec, (int)(g_milli / 1000), (int)(g_milli % 1000), (int)n);
 }
 
-/*
- * 函数名：disp_fmt_note
- * 作用：把流水线 note（ADC_TIMEOUT / TDS_RAIL / ...）拼成 "note=xxx" 供故障页显示。
- * 参数：p_buf/cap —— 输出；p_note —— note 字符串（可能为 NULL）。
- * 返回：无。
- * 时序/边界：手动逐字符拼，不用 "%.13s"（避免 -Wformat-truncation 告警）。
- * 注意：note 已由 pipeline 限长 28 字节，这里再按输出缓冲截断。
- */
+/* 把流水线 note（ADC_TIMEOUT / TDS_RAIL / ...）拼成 "note=xxx" 供故障页显示。
+ * 参数：p_buf/cap —— 输出；p_note —— note 字符串（可为 NULL，按空串处理）。 时序/边界：按 cap 截断并保证 '\0' 结尾。
+ * 注意：note 已由 pipeline 限长 28 字节，这里只做输出缓冲截断（不用 "%.Ns"，避免 -Wformat-truncation）。 */
 static void disp_fmt_note(char *p_buf, uint32_t cap, const char *p_note)
 {
-    static const char prefix[] = "note=";
-    uint32_t i = 0U;
-
     if ((NULL == p_buf) || (0U == cap))
     {
         return;
     }
-
-    while ((prefix[i] != '\0') && ((i + 1U) < cap))
-    {
-        p_buf[i] = prefix[i];
-        i++;
-    }
-    while ((NULL != p_note) && ('\0' != *p_note) && ((i + 1U) < cap))
-    {
-        p_buf[i] = *p_note;
-        i++;
-        p_note++;
-    }
-    p_buf[i] = '\0';
+    (void)snprintf(p_buf, (size_t)cap, "note=%s", (NULL != p_note) ? p_note : "");
 }
 
 /* ============================ 判断/分页小工具 ============================ */
 
-/*
- * 函数名：disp_is_fault
- * 作用：判断本 tick 是否处于"传感器故障"（与 decision.c 的安全侧判据完全一致）。
- * 参数：p_out —— 流水线输出。
- * 返回：true=故障（ADC 超时 / 任一路状态非 OK）。
- * 时序/边界：纯函数。
- * 注意：故障优先于一切显示——即使 state 是 CLEAR 也必须显示"故障"。
- */
+/* 判断本 tick 是否处于"传感器故障"（与 decision.c 的安全侧判据完全一致）。 时序/边界：纯函数。 注意：故障优先于一切显示——即使 state 是 CLEAR 也必须显示"故障"。 */
 static bool disp_is_fault(const pipeline_out_t *p_out)
 {
     return p_out->adc_timeout
@@ -450,33 +288,13 @@ static bool disp_is_fault(const pipeline_out_t *p_out)
         || (SENSOR_OK != p_out->ntu_status);
 }
 
-/*
- * 函数名：disp_regime_tag
- * 作用：工况 → 3 字母短码（OLED 行宽有限，P3 用）。
- * 参数：regime —— 工况。
- * 返回：静态字符串 "FAULT"→"FLT" / "DRY" / "SETTLE"→"SET" / "MEASURE"→"MEA" / "LOCKOUT"→"LCK"。
- * 时序/边界：纯函数。
- */
+/* 工况 → 3 字母短码（OLED 行宽有限，P3 用）。 时序/边界：纯函数；越界/未知工况回退 "LCK"（与旧 default 分支一致）。 */
 static const char *disp_regime_tag(regime_t regime)
 {
-    switch (regime)
-    {
-        case REGIME_FAULT:
-            return "FLT";
+    static const char *const k_tags[] = { "FLT", "DRY", "SET", "MEA", "LCK" };
+    uint32_t idx = (uint32_t)regime;
 
-        case REGIME_DRY:
-            return "DRY";
-
-        case REGIME_SETTLE:
-            return "SET";
-
-        case REGIME_MEASURE:
-            return "MEA";
-
-        case REGIME_LOCKOUT:
-        default:
-            return "LCK";
-    }
+    return (idx < (uint32_t)(sizeof(k_tags) / sizeof(k_tags[0]))) ? k_tags[idx] : "LCK";
 }
 
 /* 状态 → 首字母大写、其余小写（OLED 用；L0/L1/L2 等代码不在此函数）。 */
@@ -508,53 +326,39 @@ static const char *disp_pos_title(valve_pos_t pos)
     return (VALVE_POS_RECOVER == pos) ? "Recover" : "Drain";
 }
 
-/* 工况原因 → 首字母大写（OLED 用；避免 "L1 NO_BASE" 全大写）。 */
+/* 工况原因 → 首字母大写（OLED 用；避免 "L1 NO_BASE" 全大写）。
+ * 返回：表内的静态标题；NULL 或 "NO_BASE" → "No base"；表里没有的串原样返回（调用方传静态串）。 时序/边界：纯函数。 */
 static const char *disp_gate_reason_title(const char *p_reason)
 {
+    /* {工况原因, 显示串}：顺序无关，未命中回退原指针。 */
+    static const char *const k_titles[][2] =
+    {
+        { "NO_BASE", "No base" },
+        { "NO_CAL",  "No cal"  },
+        { "SENSOR",  "Sensor"  },
+        { "DRY",     "Dry"     },
+        { "SETTLE",  "Settle"  },
+        { "LOCKOUT", "Lockout" },
+        { "MEASURE", "Measure" }
+    };
+    uint32_t i;
+
     if (NULL == p_reason)
     {
         return "No base";
     }
-    if (0 == strcmp(p_reason, "NO_BASE"))
+    for (i = 0U; i < (uint32_t)(sizeof(k_titles) / sizeof(k_titles[0])); i++)
     {
-        return "No base";
-    }
-    if (0 == strcmp(p_reason, "NO_CAL"))
-    {
-        return "No cal";
-    }
-    if (0 == strcmp(p_reason, "SENSOR"))
-    {
-        return "Sensor";
-    }
-    if (0 == strcmp(p_reason, "DRY"))
-    {
-        return "Dry";
-    }
-    if (0 == strcmp(p_reason, "SETTLE"))
-    {
-        return "Settle";
-    }
-    if (0 == strcmp(p_reason, "LOCKOUT"))
-    {
-        return "Lockout";
-    }
-    if (0 == strcmp(p_reason, "MEASURE"))
-    {
-        return "Measure";
+        if (0 == strcmp(p_reason, k_titles[i][0]))
+        {
+            return k_titles[i][1];
+        }
     }
     return p_reason;
 }
 
-/*
- * 函数名：disp_valve_manual
- * 作用：判断当前阀是否处于"手动覆盖"（V1/V0）状态。
- * 参数：p_valve —— 执行器输出（可为 NULL）。
- * 返回：true=手动；false=自动/无数据/初始化。
- * 时序/边界：纯函数（一次 strcmp）。
- * 注意：request_reason 是静态串（"AUTO"/"MANUAL_RECOVER"/"MANUAL_DRAIN"/"INIT"）；
- *       "INIT" 按自动处理（第一 tick 之前还没请求过）。
- */
+/* 判断当前阀是否处于"手动覆盖"（V1/V0）状态。 参数：p_valve —— 执行器输出（可为 NULL）。 时序/边界：纯函数（一次 strcmp）。
+ * 注意：request_reason 是静态串（"AUTO"/"MANUAL_RECOVER"/"MANUAL_DRAIN"/"INIT"）； "INIT" 按自动处理（第一 tick 之前还没请求过）。 */
 static bool disp_valve_manual(const valve_out_t *p_valve)
 {
     if ((NULL == p_valve) || (NULL == p_valve->request_reason))
@@ -569,14 +373,7 @@ static bool disp_valve_manual(const valve_out_t *p_valve)
     return true;
 }
 
-/*
- * 函数名：disp_manual_tag
- * 作用：手动模式短标签："V1"（强制回收）/ "V0"（强制排空）。
- * 参数：p_valve —— 执行器输出。
- * 返回：静态字符串。
- * 时序/边界：纯函数。
- * 注意：只用于显示；方向以 position/relay 为准。
- */
+/* 手动模式短标签："V1"（强制回收）/ "V0"（强制排空）。 返回：静态字符串。 时序/边界：纯函数。 注意：只用于显示；方向以 position/relay 为准。 */
 static const char *disp_manual_tag(const valve_out_t *p_valve)
 {
     if ((NULL != p_valve) && (NULL != p_valve->request_reason) &&
@@ -589,14 +386,7 @@ static const char *disp_manual_tag(const valve_out_t *p_valve)
 
 /* ============================ 页面内容：P1 水质页 ============================ */
 
-/*
- * 函数名：disp_build_water_page
- * 作用：构建 P1 水质页（沿用 v1.1 的映射与文案，仅多了页码）。
- * 参数：p_out/p_dec —— 输入；p_page —— 输出。
- * 返回：无。
- * 时序/边界：纯计算；每 50 ms tick 调用一次，开销可忽略。
- * 注意：优先级 = 故障 > 无基线 > 判别状态。
- */
+/* 构建 P1 水质页（沿用 v1.1 的映射与文案，仅多了页码）。 时序/边界：纯计算；每 50 ms tick 调用一次，开销可忽略。 注意：优先级 = 故障 > 无基线 > 判别状态。 */
 static void disp_build_water_page(const pipeline_out_t *p_out, const decision_out_t *p_dec,
                                   disp_page_t *p_page)
 {
@@ -734,21 +524,14 @@ static void disp_build_water_page(const pipeline_out_t *p_out, const decision_ou
 
 /* ============================ 页面内容：P2 执行器页 ============================ */
 
-/*
- * 函数名：disp_build_exec_page
- * 作用：构建 P2 执行器页：大字显示阀的实际状态（回收/排空/手动/故障/待机），
- *       第二行继电器实际状态，第三行模式/动作次数/本次通电时长。
+/* 构建 P2 执行器页：大字显示阀的实际状态（回收/排空/手动/故障/待机）， 第二行继电器实际状态，第三行模式/动作次数/本次通电时长。
  * 参数：p_out/p_dec/p_valve —— 输入（p_valve 可为 NULL）；p_page —— 输出。
- * 返回：无。
- * 时序/边界：纯计算；p_valve 为 NULL 时显示 "NO VALVE"（旧固件/异常兼容）。
- * 注意：大字反映"实际执行结果"（position），不是判别结论；二者在手动/故障时可能不同。
- */
+ * 时序/边界：纯计算；p_valve 为 NULL 时显示 "NO VALVE"（旧固件/异常兼容）。 注意：大字反映"实际执行结果"（position），不是判别结论；二者在手动/故障时可能不同。 */
 static void disp_build_exec_page(const pipeline_out_t *p_out, const decision_out_t *p_dec,
                                  const valve_out_t *p_valve, disp_page_t *p_page)
 {
     bool     manual;
     bool     recover;
-    char     temp[24];
 
     p_page->page = 2U;
     p_page->kind = DISP_KIND_BIG;
@@ -862,33 +645,19 @@ static void disp_build_exec_page(const pipeline_out_t *p_out, const decision_out
     /* 第三行（6x8，21 字符）：模式短标签 + 吸合次数 + 本次通电时长
      * （整秒显示；count/秒数都限幅到 4/3 位，保证最坏情况下不超 21 字符） */
     {
-        uint32_t cnt = p_valve->switch_count;
-        uint32_t sec = p_valve->on_time_ms / 1000U;
+        uint32_t cnt = disp_clamp_u(p_valve->switch_count, 9999U);
+        uint32_t sec = disp_clamp_u(p_valve->on_time_ms / 1000U, 999U);
 
-        if (cnt > 9999U)
-        {
-            cnt = 9999U;
-        }
-        if (sec > 999U)
-        {
-            sec = 999U;
-        }
-        disp_copy(temp, (uint32_t)sizeof(temp), manual ? disp_manual_tag(p_valve) : "Auto");
         (void)snprintf(p_page->r2, (size_t)sizeof(p_page->r2), "%s Cnt:%lu On:%lus",
-                       temp, (unsigned long)cnt, (unsigned long)sec);
+                       manual ? disp_manual_tag(p_valve) : "Auto",
+                       (unsigned long)cnt, (unsigned long)sec);
     }
 }
 
 /* ============================ 页面内容：P3 详情页 ============================ */
 
-/*
- * 函数名：disp_build_info_page
- * 作用：构建 P3 详情页（8 行 6x8）：事件/状态/阀/模式/特征/基线/阈值。
- * 参数：now_ms、p_out、p_dec、p_valve —— 输入；p_page —— 输出。
- * 返回：无。
- * 时序/边界：纯计算；事件已持续时间来自 event_active 上升沿（见 display_task）。
- * 注意：事件超时/无事件时显示 EV:OFF；故障/无基线时最后一行改提示行。
- */
+/* 构建 P3 详情页（8 行 6x8）：事件/状态/阀/模式/特征/基线/阈值。 时序/边界：纯计算；事件已持续时间来自 event_active 上升沿（见 display_task）。
+ * 注意：事件超时/无事件时显示 EV:OFF；故障/无基线时最后一行改提示行。 */
 static void disp_build_info_page(uint32_t now_ms, const pipeline_out_t *p_out,
                                  const decision_out_t *p_dec, const valve_out_t *p_valve,
                                  disp_page_t *p_page)
@@ -913,12 +682,8 @@ static void disp_build_info_page(uint32_t now_ms, const pipeline_out_t *p_out,
     /* 行 0：页号 + 工况（v2）+ 手动事件标记（事件只用于日志分段，不控制阀） */
     if (g_event_active)
     {
-        uint32_t ev_s = (uint32_t)(now_ms - g_event_start_ms) / 1000U;
+        uint32_t ev_s = disp_clamp_u((uint32_t)(now_ms - g_event_start_ms) / 1000U, 99U);
 
-        if (ev_s > 99U)
-        {
-            ev_s = 99U;   /* 行宽限制；事件只是日志标记，不需要更长 */
-        }
         (void)snprintf(p_page->rows[0], DISP_ROW_BUF, "P3/3 Reg:%s EV:%lus",
                        disp_regime_tag(p_dec->regime), (unsigned long)ev_s);
     }
@@ -947,12 +712,8 @@ static void disp_build_info_page(uint32_t now_ms, const pipeline_out_t *p_out,
     /* 行 3：模式 + 吸合次数 */
     if (NULL != p_valve)
     {
-        uint32_t cnt = p_valve->switch_count;
+        uint32_t cnt = disp_clamp_u(p_valve->switch_count, 9999U);
 
-        if (cnt > 9999U)
-        {
-            cnt = 9999U;
-        }
         (void)snprintf(p_page->rows[3], DISP_ROW_BUF, "Mode:%s Cnt:%lu",
                        disp_valve_manual(p_valve) ? disp_manual_tag(p_valve) : "Auto",
                        (unsigned long)cnt);
@@ -962,26 +723,15 @@ static void disp_build_info_page(uint32_t now_ms, const pipeline_out_t *p_out,
         disp_copy(p_page->rows[3], DISP_ROW_BUF, "Mode:no data");
     }
 
-    /* 行 4：dEC + g */
+    /* 行 4：dEC + g（g 理论上 >0，异常值兜底，防止出现 "g:-1.000"） */
     d_ec    = disp_round_i(p_out->d_ec_mv);
     g_milli = disp_round_i(p_out->g_ec * 1000.0f);
-    if (g_milli < 0)
-    {
-        g_milli = 0;
-    }
+    if (g_milli < 0) { g_milli = 0; }
     (void)snprintf(p_page->rows[4], DISP_ROW_BUF, "dEC:%+dmV g:%ld.%03ld",
                    (int)d_ec, (long)(g_milli / 1000), (long)(g_milli % 1000));
 
     /* 行 5：dNTU%（带符号一位小数）+ 水温 */
-    ntu_x10 = disp_round_i(p_out->d_ntu_pct * 10.0f);
-    if (ntu_x10 > 999)
-    {
-        ntu_x10 = 999;
-    }
-    if (ntu_x10 < -999)
-    {
-        ntu_x10 = -999;
-    }
+    ntu_x10 = disp_clamp_i(disp_round_i(p_out->d_ntu_pct * 10.0f), -999, 999);
     disp_fmt_signed_dec(nbuf, (uint32_t)sizeof(nbuf), (float)ntu_x10 / 10.0f);
     disp_fmt_temp(tbuf, (uint32_t)sizeof(tbuf), p_out->water_temp_c);
     (void)snprintf(p_page->rows[5], DISP_ROW_BUF, "dNTU:%s%% T:%sC", nbuf, tbuf);
@@ -989,12 +739,9 @@ static void disp_build_info_page(uint32_t now_ms, const pipeline_out_t *p_out,
     /* 行 6：基线 EC0 + 噪声 σ（无基线时占位） */
     if (p_out->baseline_valid)
     {
-        ec0  = disp_round_i(p_out->ec0_mv25);
+        ec0   = disp_round_i(p_out->ec0_mv25);
         sig10 = disp_round_i(p_out->ec_sigma_mv * 10.0f);
-        if (sig10 < 0)
-        {
-            sig10 = 0;
-        }
+        if (sig10 < 0) { sig10 = 0; }
         (void)snprintf(p_page->rows[6], DISP_ROW_BUF, "EC0:%ldmV s:%ld.%ld",
                        (long)ec0, (long)(sig10 / 10), (long)(sig10 % 10));
     }
@@ -1014,32 +761,17 @@ static void disp_build_info_page(uint32_t now_ms, const pipeline_out_t *p_out,
     }
     else
     {
-        d1_ec  = disp_round_i(p_dec->d1_ec_mv);
-        d2_ec  = disp_round_i(p_dec->d2_ec_mv);
-        d1_ntu = disp_round_i(p_dec->d1_ntu_pct);
-        d2_ntu = disp_round_i(p_dec->d2_ntu_pct);
+        d1_ec  = disp_clamp_i(disp_round_i(p_dec->d1_ec_mv), 0, 999);
+        d2_ec  = disp_clamp_i(disp_round_i(p_dec->d2_ec_mv), 0, 999);
+        d1_ntu = disp_clamp_i(disp_round_i(p_dec->d1_ntu_pct), 0, 99);
+        d2_ntu = disp_clamp_i(disp_round_i(p_dec->d2_ntu_pct), 0, 99);
         /* 限幅：最坏 "d1:999/99% d2:999/99%" = 21 字符（6x8 一行上限） */
-        if (d1_ec < 0) { d1_ec = 0; }
-        if (d1_ec > 999) { d1_ec = 999; }
-        if (d2_ec < 0) { d2_ec = 0; }
-        if (d2_ec > 999) { d2_ec = 999; }
-        if (d1_ntu < 0) { d1_ntu = 0; }
-        if (d1_ntu > 99) { d1_ntu = 99; }
-        if (d2_ntu < 0) { d2_ntu = 0; }
-        if (d2_ntu > 99) { d2_ntu = 99; }
         (void)snprintf(p_page->rows[7], DISP_ROW_BUF, "d1:%ld/%ld%% d2:%ld/%ld%%",
                        (long)d1_ec, (long)d1_ntu, (long)d2_ec, (long)d2_ntu);
     }
 }
 
-/*
- * 函数名：disp_build_page
- * 作用：按当前页号构建目标内容（不画屏）。
- * 参数：now_ms/p_out/p_dec/p_valve —— 输入；p_page —— 输出。
- * 返回：无。
- * 时序/边界：纯计算；每 50 ms tick 调用一次。
- * 注意：g_page 是内部页索引 0..2，对应 P1/P2/P3。
- */
+/* 按当前页号构建目标内容（不画屏）。 时序/边界：纯计算；每 50 ms tick 调用一次。 注意：g_page 是内部页索引 0..2，对应 P1/P2/P3。 */
 static void disp_build_page(uint32_t now_ms, const pipeline_out_t *p_out,
                             const decision_out_t *p_dec, const valve_out_t *p_valve,
                             disp_page_t *p_page)
@@ -1065,14 +797,7 @@ static void disp_build_page(uint32_t now_ms, const pipeline_out_t *p_out,
 
 /* ============================ 区域重画 ============================ */
 
-/*
- * 函数名：disp_draw_page_no
- * 作用：在大字带右上角画 "n/3" 页码（6x8，3 字符，x=98 起，不压大字）。
- * 参数：page —— 页号 1..3。
- * 返回：无。
- * 时序/边界：只改写显存；调用前大字带已清黑。
- * 注意：页码只是"当前第几页"的提示，不是安全信息。
- */
+/* 在大字带右上角画 "n/3" 页码（6x8，3 字符，x=98 起，不压大字）。 时序/边界：只改写显存；调用前大字带已清黑。 注意：页码只是"当前第几页"的提示，不是安全信息。 */
 static void disp_draw_page_no(uint8_t page)
 {
     char buf[8];
@@ -1081,27 +806,15 @@ static void disp_draw_page_no(uint8_t page)
     oled_text_6x8(DISP_PAGENO_X, DISP_PAGENO_Y, buf);
 }
 
-/*
- * 函数名：disp_redraw_header
- * 作用：重画页头（先清该 8 行带，再写 6x8 文本，避免旧串尾部残留）。
- * 参数：p_page —— 目标内容。
- * 返回：无。
- * 时序/边界：O(128*8) 显存写，无 I2C。
- */
+/* 重画页头（先清该 8 行带，再写 6x8 文本，避免旧串尾部残留）。 时序/边界：O(128*8) 显存写，无 I2C。 */
 static void disp_redraw_header(const disp_page_t *p_page)
 {
     oled_fill_rect(DISP_HEAD_X, DISP_HEAD_Y, OLED_WIDTH, 8U, false);
     oled_text_6x8(DISP_HEAD_X, DISP_HEAD_Y, p_page->r0);
 }
 
-/*
- * 函数名：disp_redraw_big
- * 作用：重画大字带（y=8..39 整带清黑，再画两个 32x32 汉字 + 右上角页码）。
- * 参数：p_page —— 目标内容。
- * 返回：无。
- * 时序/边界：清带 128*32 像素 + 两个汉字各 128 字节，无 I2C。
- * 注意：为什么要整带清：切页/开机页残留都在这 32 行里；不清会留半个旧字。
- */
+/* 重画大字带（y=8..39 整带清黑，再画两个 32x32 汉字 + 右上角页码）。 时序/边界：清带 128*32 像素 + 两个汉字各 128 字节，无 I2C。
+ * 注意：为什么要整带清：切页/开机页残留都在这 32 行里；不清会留半个旧字。 */
 static void disp_redraw_big(const disp_page_t *p_page)
 {
     oled_fill_rect(0U, DISP_BIG_Y, OLED_WIDTH, DISP_BIG_BAND_H, false);
@@ -1110,40 +823,21 @@ static void disp_redraw_big(const disp_page_t *p_page)
     disp_draw_page_no(p_page->page);
 }
 
-/*
- * 函数名：disp_redraw_line2
- * 作用：重画第二行（8x16；先清 16 行带，再写文本）。
- * 参数：p_page —— 目标内容。
- * 返回：无。
- * 时序/边界：O(128*16) 显存写，无 I2C。
- * 注意：8x16 文本函数不负责清行尾，必须先 fill_rect。
- */
+/* 重画第二行（8x16；先清 16 行带，再写文本）。 时序/边界：O(128*16) 显存写，无 I2C。 注意：8x16 文本函数不负责清行尾，必须先 fill_rect。 */
 static void disp_redraw_line2(const disp_page_t *p_page)
 {
     oled_fill_rect(DISP_LINE2_X, DISP_LINE2_Y, OLED_WIDTH, 16U, false);
     oled_text_8x16(DISP_LINE2_X, DISP_LINE2_Y, p_page->r1);
 }
 
-/*
- * 函数名：disp_redraw_line3
- * 作用：重画第三行（6x8；先清 8 行带，再写文本）。
- * 参数：p_page —— 目标内容。
- * 返回：无。
- * 时序/边界：O(128*8) 显存写，无 I2C。
- */
+/* 重画第三行（6x8；先清 8 行带，再写文本）。 时序/边界：O(128*8) 显存写，无 I2C。 */
 static void disp_redraw_line3(const disp_page_t *p_page)
 {
     oled_fill_rect(DISP_LINE3_X, DISP_LINE3_Y, OLED_WIDTH, 8U, false);
     oled_text_6x8(DISP_LINE3_X, DISP_LINE3_Y, p_page->r2);
 }
 
-/*
- * 函数名：disp_redraw_row
- * 作用：重画详情页的一行（6x8；先清该 8 行带，再写文本）。
- * 参数：row —— 行号 0..7；p_text —— 文本。
- * 返回：无。
- * 时序/边界：O(128*8) 显存写，无 I2C。
- */
+/* 重画详情页的一行（6x8；先清该 8 行带，再写文本）。 时序/边界：O(128*8) 显存写，无 I2C。 */
 static void disp_redraw_row(uint8_t row, const char *p_text)
 {
     oled_fill_rect(0U, (uint8_t)(row * 8U), OLED_WIDTH, 8U, false);
@@ -1152,37 +846,22 @@ static void disp_redraw_row(uint8_t row, const char *p_text)
 
 /* ============================ 对外接口 ============================ */
 
-/*
- * 函数名：display_init
- * 作用：初始化 OLED 并画开机页（证明 I2C/驱动/字库整条链路可用）。
- * 参数：无。
- * 返回：true=可用；false=不可用（上层只打印一次 WARN）。
- * 时序/边界：约 150 ms（oled_init 上电延时 100 ms + 初始化命令 + 清屏 + 开机页）。
- * 注意：开机页会在屏上保持约 DISPLAY_BOOT_HOLD_MS（800 ms），由 display_task 负责
- *       计时切换，这样上电自检时人能看清 "OLED OK"。
- */
+/* 初始化 OLED 并画开机页（证明 I2C/驱动/字库整条链路可用）。 时序/边界：约 150 ms（oled_init 上电延时 100 ms + 初始化命令 + 清屏 + 开机页）。
+ * 注意：开机页会在屏上保持约 DISPLAY_BOOT_HOLD_MS（800 ms），由 display_task 负责 计时切换，这样上电自检时人能看清 "OLED OK"。 */
 bool display_init(void)
 {
-    g_shown_once   = false;
-    g_first_seen   = false;
-    g_first_ms     = 0U;
-    g_last_num_ms  = 0U;
-    g_last_full_ms = 0U;
-    g_fail_count   = 0U;
-    g_page         = DISPLAY_PAGE_WATER;   /* 默认 P1 水质页 */
-    g_force_full   = true;
-    g_shown_page   = 0U;
-    g_shown_kind   = DISP_KIND_BIG;
-    g_event_active = false;
+    g_shown_once        = false;
+    g_first_seen        = false;
+    g_first_ms          = 0U;
+    g_last_num_ms       = 0U;
+    g_last_full_ms      = 0U;
+    g_fail_count        = 0U;
+    g_page              = DISPLAY_PAGE_WATER;   /* 默认 P1 水质页 */
+    g_force_full        = true;
+    g_event_active      = false;
     g_event_prev_active = false;
-    g_event_start_ms = 0U;
-    (void)memset(g_shown_r0, 0, sizeof(g_shown_r0));
-    (void)memset(g_shown_r1, 0, sizeof(g_shown_r1));
-    (void)memset(g_shown_r2, 0, sizeof(g_shown_r2));
-    (void)memset(g_shown_rows, 0, sizeof(g_shown_rows));
-    g_shown_big0    = 0U;
-    g_shown_big1    = 0U;
-    g_shown_inverse = false;
+    g_event_start_ms    = 0U;
+    (void)memset(&g_shown, 0, sizeof(g_shown));   /* 全 0：kind=P1 大字页，且"未画过"由 g_shown_once 表示 */
 
     if (!oled_init())
     {
@@ -1208,14 +887,7 @@ bool display_init(void)
     return true;
 }
 
-/*
- * 函数名：display_page_next
- * 作用：K2 短按调用：循环切到下一页（P1→P2→P3→P1），下一次 display_task 整屏重画。
- * 参数：无。
- * 返回：切换后的页号 1..3；屏幕不可用时返回 0（不改变内部页号）。
- * 时序/边界：O(1)，无 I2C。
- * 注意：显示不是安全路径；切页不影响判别/阀。
- */
+/* K2 短按调用：循环切到下一页（P1→P2→P3→P1），下一次 display_task 整屏重画。 时序/边界：O(1)，无 I2C。 注意：显示不是安全路径；切页不影响判别/阀。 */
 uint8_t display_page_next(void)
 {
     if (!oled_ready())
@@ -1227,26 +899,9 @@ uint8_t display_page_next(void)
     return (uint8_t)(g_page + 1U);
 }
 
-/*
- * 函数名：display_page_get
- * 作用：读取当前页号（1..3）。
- * 参数：无。
- * 返回：当前页号。
- * 时序/边界：O(1)。
- */
-uint8_t display_page_get(void)
-{
-    return (uint8_t)(g_page + 1U);
-}
-
-/*
- * 函数名：display_task
- * 作用：把当前数据画到当前页（差异刷新 + 200 ms 数值节流 + 1 s 心跳 + 切页整屏重画）。
+/* 把当前数据画到当前页（差异刷新 + 200 ms 数值节流 + 1 s 心跳 + 切页整屏重画）。
  * 参数：now_ms —— app 时基；p_out/p_dec —— 流水线与判别输出；p_valve —— 执行器输出（可 NULL）。
- * 返回：true=正常（含本 tick 无需刷新）；false=连续 3 帧失败/屏已丢失。
- * 时序/边界：每 50 ms 调一次；最坏约 25 ms（心跳整屏）；单次失败不阻塞主循环。
- * 注意：本函数不打印——WARN 由 app_main 在第一次收到 false 时打印，避免刷屏。
- */
+ * 时序/边界：每 50 ms 调一次；最坏约 25 ms（心跳整屏）；单次失败不阻塞主循环。 注意：本函数不打印——WARN 由 app_main 在第一次收到 false 时打印，避免刷屏。 */
 bool display_task(uint32_t now_ms, const pipeline_out_t *p_out, const decision_out_t *p_dec,
                   const valve_out_t *p_valve)
 {
@@ -1289,8 +944,8 @@ bool display_task(uint32_t now_ms, const pipeline_out_t *p_out, const decision_o
     /* ① 算目标内容，并与上一屏比较，决定重画哪些区域 */
     disp_build_page(now_ms, p_out, p_dec, p_valve, &page);
 
-    need_full = (!g_shown_once) || g_force_full || (page.page != g_shown_page)
-             || (page.kind != g_shown_kind)
+    need_full = (!g_shown_once) || g_force_full || (page.page != g_shown.page)
+             || (page.kind != g_shown.kind)
              || ((now_ms - g_last_full_ms) >= DISPLAY_HEARTBEAT_MS);
     need_num  = ((now_ms - g_last_num_ms) >= DISPLAY_NUM_PERIOD_MS);
 
@@ -1316,78 +971,56 @@ bool display_task(uint32_t now_ms, const pipeline_out_t *p_out, const decision_o
         g_last_num_ms  = now_ms;
         g_force_full   = false;
 
-        /* 整屏已画：缓存全部同步 */
-        disp_copy(g_shown_r0, (uint32_t)sizeof(g_shown_r0), page.r0);
-        disp_copy(g_shown_r1, (uint32_t)sizeof(g_shown_r1), page.r1);
-        disp_copy(g_shown_r2, (uint32_t)sizeof(g_shown_r2), page.r2);
-        for (row = 0U; row < DISP_INFO_ROWS; row++)
-        {
-            disp_copy(g_shown_rows[row], DISP_ROW_BUF, page.rows[row]);
-        }
-        g_shown_big0    = page.big0;
-        g_shown_big1    = page.big1;
-        g_shown_inverse = page.inverse;
-        g_shown_page    = page.page;
-        g_shown_kind    = page.kind;
+        /* 整屏已画：缓存与目标内容整体同步（逐字段比较在下面两个分支） */
+        g_shown = page;
     }
     else if (DISP_KIND_BIG == page.kind)
     {
         /* 大字/状态串变化：现场最关心的信息，立即重画（不等 200 ms 节流） */
-        big_changed = (page.big0 != g_shown_big0) || (page.big1 != g_shown_big1)
-                   || (page.inverse != g_shown_inverse);
+        big_changed = (page.big0 != g_shown.big0) || (page.big1 != g_shown.big1)
+                   || (page.inverse != g_shown.inverse);
         if (big_changed)
         {
             disp_redraw_big(&page);
+            g_shown.big0    = page.big0;
+            g_shown.big1    = page.big1;
+            g_shown.inverse = page.inverse;
         }
-        if (0 != strcmp(page.r1, g_shown_r1))
+        if (0 != strcmp(page.r1, g_shown.r1))
         {
             disp_redraw_line2(&page);
-            disp_copy(g_shown_r1, (uint32_t)sizeof(g_shown_r1), page.r1);
+            disp_copy(g_shown.r1, (uint32_t)sizeof(g_shown.r1), page.r1);
         }
         /* 页头（EC0/σ/温度）与第三行（dEC/g/N）是数值行：最快 200 ms 刷一次，
          * 与文档口径一致（v1.3.0 审查 P1-1：此前少了 need_num 门控，每 tick 都刷）。 */
         if (need_num)
         {
-            if (0 != strcmp(page.r0, g_shown_r0))
+            if (0 != strcmp(page.r0, g_shown.r0))
             {
                 disp_redraw_header(&page);
-                disp_copy(g_shown_r0, (uint32_t)sizeof(g_shown_r0), page.r0);
+                disp_copy(g_shown.r0, (uint32_t)sizeof(g_shown.r0), page.r0);
             }
-            if (0 != strcmp(page.r2, g_shown_r2))
+            if (0 != strcmp(page.r2, g_shown.r2))
             {
                 disp_redraw_line3(&page);
-                disp_copy(g_shown_r2, (uint32_t)sizeof(g_shown_r2), page.r2);
+                disp_copy(g_shown.r2, (uint32_t)sizeof(g_shown.r2), page.r2);
             }
             g_last_num_ms = now_ms;
-        }
-        if (big_changed)
-        {
-            g_shown_big0    = page.big0;
-            g_shown_big1    = page.big1;
-            g_shown_inverse = page.inverse;
         }
     }
     else
     {
         /* 详情页：前 3 行（事件/状态/阀）立即刷新；数值行 4~7 节流到 200 ms */
-        for (row = 0U; row < 3U; row++)
+        for (row = 0U; row < (uint8_t)(need_num ? DISP_INFO_ROWS : 3U); row++)
         {
-            if (0 != strcmp(page.rows[row], g_shown_rows[row]))
+            if (0 != strcmp(page.rows[row], g_shown.rows[row]))
             {
                 disp_redraw_row(row, page.rows[row]);
-                disp_copy(g_shown_rows[row], DISP_ROW_BUF, page.rows[row]);
+                disp_copy(g_shown.rows[row], DISP_ROW_BUF, page.rows[row]);
             }
         }
         if (need_num)
         {
-            for (row = 3U; row < DISP_INFO_ROWS; row++)
-            {
-                if (0 != strcmp(page.rows[row], g_shown_rows[row]))
-                {
-                    disp_redraw_row(row, page.rows[row]);
-                    disp_copy(g_shown_rows[row], DISP_ROW_BUF, page.rows[row]);
-                }
-            }
             g_last_num_ms = now_ms;
         }
     }
@@ -1405,17 +1038,4 @@ bool display_task(uint32_t now_ms, const pipeline_out_t *p_out, const decision_o
 
     g_fail_count = 0U;
     return true;
-}
-
-/*
- * 函数名：display_ok
- * 作用：查询显示是否可用。
- * 参数：无。
- * 返回：true=oled 已初始化且未判丢失。
- * 时序/边界：O(1)。
- * 注意：与 oled_ready() 同义，保留此接口是为了让 app_main 不直接依赖 oled.h。
- */
-bool display_ok(void)
-{
-    return oled_ready();
 }

@@ -1,11 +1,4 @@
 /*
- * app_main.h
- *
- *  Created on: 2026年10月30日
- *      Author: Administrator
- */
-
-/*
  * app_main.h —— 应用入口（由 hal_entry 调用，不返回）
  */
 #ifndef APP_MAIN_H

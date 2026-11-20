@@ -1,10 +1,3 @@
-/*
- * sensor_ds18b20.c
- *
- *  Created on: 2026年10月30日
- *      Author: Administrator
- */
-
 
 
 
@@ -126,45 +119,23 @@
          .PmnPFS_b)
 
 /* ---------------------------- 底层：延时 ---------------------------- */
-/**
- * @brief 微秒级忙等延时（1-Wire 时序基础）
- *
- * 作用：调用 FSP 的软件延时（基于循环计数，不依赖中断/定时器）。
- * 参数：us —— 微秒数（1-Wire 里最大 480 µs）。
- * 返回：无。
- * 时序：阻塞，但总时长微秒级；在关中断状态下也能正常工作（不依赖 SysTick）。
- * 注意：延时精度受 CPU 主频与编译器优化影响，DS18B20 的时序窗口留了余量
- *       （例如写 1 只要求 1~15 µs，本驱动取 3 µs），不要把它用于严格计时。
- */
+/* 调用 FSP 的软件延时（基于循环计数，不依赖中断/定时器）。 时序/边界：阻塞，但总时长微秒级；在关中断状态下也能正常工作（不依赖 SysTick）。
+ * 注意：延时精度受 CPU 主频与编译器优化影响，DS18B20 的时序窗口留了余量 （例如写 1 只要求 1~15 µs，本驱动取 3 µs），不要把它用于严格计时。 */
 static void ds_delay_us(uint32_t us)
 {
     R_BSP_SoftwareDelay(us, BSP_DELAY_UNITS_MICROSECONDS);
 }
 
-/**
- * @brief 毫秒级忙等延时（上电自检等待转换用）
- *
- * 参数：ms —— 毫秒数（默认 800 ms）。
- * 返回：无。
- * 时序：阻塞；只在上电 ds18b20_boot_test() 里使用一次，主循环里不走这里。
- * 注意：这是软件延时，期间中断照常响应（没有关中断）。
- */
+/* 毫秒级忙等延时（上电自检等待转换用） 时序/边界：阻塞；只在上电 ds18b20_boot_test() 里使用一次，主循环里不走这里。 注意：这是软件延时，期间中断照常响应（没有关中断）。 */
 static void ds_delay_ms(uint32_t ms)
 {
     R_BSP_SoftwareDelay(ms, BSP_DELAY_UNITS_MILLISECONDS);
 }
 
 /* ---------------------------- 底层：引脚合法性 ---------------------------- */
-/**
- * @brief 检查引脚编码是否是有效的 PFS 索引
- *
- * 作用：R_PFS 映射 PORT[0..14] × PIN[0..15]；越界会写到别的外设寄存器，
- *       造成难以排查的硬件异常，所以任何按 pin 推导 PFS 前都先过这一关。
- * 参数：pin —— bsp_io_port_pin_t 编码值。
- * 返回：true=合法；false=越界（调用方直接按"器件不可用"处理）。
- * 时序：纯比较。
- * 注意：默认引脚 P500 = 0x0500 一定合法；换脚时优先用 BSP_IO_PORT_xx_PIN_yy 宏。
- */
+/* R_PFS 映射 PORT[0..14] × PIN[0..15]；越界会写到别的外设寄存器， 造成难以排查的硬件异常，所以任何按 pin 推导 PFS 前都先过这一关。
+ * 参数：pin —— bsp_io_port_pin_t 编码值。 返回：true=合法；false=越界（调用方直接按"器件不可用"处理）。 时序/边界：纯比较。
+ * 注意：默认引脚 P500 = 0x0500 一定合法；换脚时优先用 BSP_IO_PORT_xx_PIN_yy 宏。 */
 static bool ds_pin_is_valid(bsp_io_port_pin_t pin)
 {
     uint32_t port = ((uint32_t) pin >> 8U) & 0xFFU;
@@ -174,17 +145,8 @@ static bool ds_pin_is_valid(bsp_io_port_pin_t pin)
 }
 
 /* ---------------------------- 底层：关中断 + PFS 写保护 ---------------------------- */
-/**
- * @brief 进入 1-Wire 事务临界区
- *
- * 作用：打开 PFS 写保护 + 关中断，整段事务期间保持（保证时序不被中断拉长）。
- * 参数：p_primask —— 输出：进入前的 PRIMASK（退出时用于决定是否恢复开中断）。
- * 返回：无。
- * 时序：立即生效；关中断时长 ≈ 单次事务 1~6 ms。
- * 注意：① 必须在任何 PFS 直接写之前调用 R_BSP_PinAccessEnable()，
- *          否则写 PFS 无效（RA 的 PFS 受保护）；
- *       ② 与 ds_critical_end() 必须成对使用；中间不要调用可能阻塞很久的函数。
- */
+/* 打开 PFS 写保护 + 关中断，整段事务期间保持（保证时序不被中断拉长）。 时序/边界：立即生效；关中断时长 ≈ 单次事务 1~6 ms。
+ * 注意：① 必须在任何 PFS 直接写之前调用 R_BSP_PinAccessEnable()， 否则写 PFS 无效（RA 的 PFS 受保护）； ② 与 ds_critical_end() 必须成对使用；中间不要调用可能阻塞很久的函数。 */
 static void ds_critical_begin(uint32_t *p_primask)
 {
     R_BSP_PinAccessEnable();
@@ -192,16 +154,8 @@ static void ds_critical_begin(uint32_t *p_primask)
     __disable_irq();
 }
 
-/**
- * @brief 退出 1-Wire 事务临界区
- *
- * 作用：按进入前的 PRIMASK 恢复中断状态，并关闭 PFS 写保护。
- * 参数：primask —— ds_critical_begin() 保存的值（0=原本开中断）。
- * 返回：无。
- * 时序：立即生效。
- * 注意：只在 primask==0 时才 __enable_irq()，这样即使调用者自己在关中断上下文
- *       里调用，也不会被提前打开中断（支持嵌套）。
- */
+/* 按进入前的 PRIMASK 恢复中断状态，并关闭 PFS 写保护。 时序/边界：立即生效。
+ * 注意：只在 primask==0 时才 __enable_irq()，这样即使调用者自己在关中断上下文 里调用，也不会被提前打开中断（支持嵌套）。 */
 static void ds_critical_end(uint32_t primask)
 {
     if (0U == primask)
@@ -212,62 +166,30 @@ static void ds_critical_end(uint32_t primask)
 }
 
 /* ---------------------------- 底层：总线电平操作 ---------------------------- */
-/**
- * @brief 拉低 DQ 线（主机输出 0）
- *
- * 作用：把数据线变成"输出 + 输出 0"，用于复位脉冲/写 0/发起读时隙。
- * 参数：pin —— 数据引脚。
- * 返回：无。
- * 时序：寄存器写，纳秒~几十纳秒级。
- * 注意：先写 PODR=0 再切 PDR=1：如果顺序反过来，切输出的瞬间可能输出
- *       锁存里的旧值（高电平），给器件一个错误的上升沿——tds_mini 实测踩过。
- */
+/* 把数据线变成"输出 + 输出 0"，用于复位脉冲/写 0/发起读时隙。 参数：pin —— 数据引脚。 时序/边界：寄存器写，纳秒~几十纳秒级。
+ * 注意：先写 PODR=0 再切 PDR=1：如果顺序反过来，切输出的瞬间可能输出 锁存里的旧值（高电平），给器件一个错误的上升沿——tds_mini 实测踩过。 */
 static void ds_line_low(bsp_io_port_pin_t pin)
 {
     DS18B20_PFS(pin).PODR = 0U;   /* 先把输出锁存写 0 */
     DS18B20_PFS(pin).PDR  = 1U;   /* 再切输出：此时线上是稳定的低电平 */
 }
 
-/**
- * @brief 释放 DQ 线（主机切回输入，靠上拉电阻拉高）
- *
- * 作用：1-Wire 的"释放总线"：切回输入后由 4.7 kΩ 上拉把线拉高，器件才能应答。
- * 参数：pin —— 数据引脚。
- * 返回：无。
- * 时序：寄存器写。
- * 注意：释放后线不是"立刻高"，而是被上拉 RC 慢慢拉高——所以每次释放后
- *       都要等规定的采样时间（70 µs / 8 µs 等），不能马上读。
- */
+/* 1-Wire 的"释放总线"：切回输入后由 4.7 kΩ 上拉把线拉高，器件才能应答。 参数：pin —— 数据引脚。 时序/边界：寄存器写。
+ * 注意：释放后线不是"立刻高"，而是被上拉 RC 慢慢拉高——所以每次释放后 都要等规定的采样时间（70 µs / 8 µs 等），不能马上读。 */
 static void ds_line_release(bsp_io_port_pin_t pin)
 {
     DS18B20_PFS(pin).PDR = 0U;    /* 0=输入（高阻），由上拉电阻拉高 */
 }
 
-/**
- * @brief 读 DQ 线当前电平
- *
- * 作用：读 PFS 的 PIDR（端口输入数据位），判断线上是高还是低。
- * 参数：pin —— 数据引脚。
- * 返回：true=高电平，false=低电平。
- * 时序：寄存器读。
- * 注意：读之前必须已按协议留足采样延时（复位后 70 µs、读时隙 8 µs）。
- */
+/* 读 PFS 的 PIDR（端口输入数据位），判断线上是高还是低。 参数：pin —— 数据引脚。 时序/边界：寄存器读。 注意：读之前必须已按协议留足采样延时（复位后 70 µs、读时隙 8 µs）。 */
 static bool ds_line_read(bsp_io_port_pin_t pin)
 {
     return (1U == (uint32_t) DS18B20_PFS(pin).PIDR);
 }
 
 /* ---------------------------- 底层：1-Wire 基本时序 ---------------------------- */
-/**
- * @brief 复位脉冲 + 存在检测
- *
- * 作用：主机拉低 480 µs 后释放，70 µs 时采样：器件存在会把总线拉低。
- * 参数：pin —— 数据引脚。
- * 返回：true=检测到器件应答；false=总线上没有器件（或线被拉死）。
- * 时序：阻塞约 970 µs（480 + 70 + 420）。
- * 注意：必须等满整个复位时隙（再补 420 µs）再发命令，否则器件状态机没准备好。
- *       要在关中断临界区内调用（由外层 ping/request/read 负责）。
- */
+/* 主机拉低 480 µs 后释放，70 µs 时采样：器件存在会把总线拉低。 参数：pin —— 数据引脚。 时序/边界：阻塞约 970 µs（480 + 70 + 420）。
+ * 注意：必须等满整个复位时隙（再补 420 µs）再发命令，否则器件状态机没准备好。 要在关中断临界区内调用（由外层 ping/request/read 负责）。 */
 static bool ds_reset(bsp_io_port_pin_t pin)
 {
     bool presence;
@@ -282,16 +204,9 @@ static bool ds_reset(bsp_io_port_pin_t pin)
     return presence;
 }
 
-/**
- * @brief 写 1 位
- *
- * 作用：按 DS18B20 时序写 0 或 1（低电平宽度区分）。
- * 参数：pin —— 数据引脚；one —— true 写 1，false 写 0。
- * 返回：无。
- * 时序：写 1 约 63 µs（3 低 + 60 高）；写 0 约 65 µs（60 低 + 5 高）。
- * 注意：写 1 的低电平必须 ≥1 µs（本驱动 3 µs）且 <15 µs；写 0 必须 ≥60 µs。
- *       两次写时隙之间靠"释放后的等待"自然隔开，不要连续拉低。
- */
+/* 按 DS18B20 时序写 0 或 1（低电平宽度区分）。 参数：pin —— 数据引脚；one —— true 写 1，false 写 0。
+ * 时序/边界：写 1 约 63 µs（3 低 + 60 高）；写 0 约 65 µs（60 低 + 5 高）。
+ * 注意：写 1 的低电平必须 ≥1 µs（本驱动 3 µs）且 <15 µs；写 0 必须 ≥60 µs。 两次写时隙之间靠"释放后的等待"自然隔开，不要连续拉低。 */
 static void ds_write_bit(bsp_io_port_pin_t pin, bool one)
 {
     if (one)
@@ -310,15 +225,8 @@ static void ds_write_bit(bsp_io_port_pin_t pin, bool one)
     }
 }
 
-/**
- * @brief 写 1 字节（LSB 优先）
- *
- * 作用：按 1-Wire 规范从最低位开始逐位写出。
- * 参数：pin —— 数据引脚；value —— 待写字节。
- * 返回：无。
- * 时序：8 个位时隙 ≈ 0.5 ms。
- * 注意：DS18B20 是 LSB first；写 ROM/功能命令都走这里。
- */
+/* 按 1-Wire 规范从最低位开始逐位写出。 参数：pin —— 数据引脚；value —— 待写字节。 时序/边界：8 个位时隙 ≈ 0.5 ms。
+ * 注意：DS18B20 是 LSB first；写 ROM/功能命令都走这里。 */
 static void ds_write_byte(bsp_io_port_pin_t pin, uint8_t value)
 {
     for (uint32_t i = 0U; i < 8U; i++)
@@ -328,17 +236,8 @@ static void ds_write_byte(bsp_io_port_pin_t pin, uint8_t value)
     }
 }
 
-/**
- * @brief 读 1 位
- *
- * 作用：主机发起读时隙，8 µs 后采样器件输出的位。
- * 参数：pin —— 数据引脚。
- * 返回：true=1，false=0。
- * 时序：拉低 3 µs → 释放 → 8 µs 采样 → 再等 52 µs（时隙 63 µs）。
- * 注意：① 读时隙必须由主机发起（拉低），否则器件不会输出；
- *       ② 8 µs 采样点要落在器件有效窗口内（器件在拉低后 15 µs 内给出数据，
- *          但规格要求主机尽早采样，8 µs 是 tds_mini 实测稳定值）。
- */
+/* 主机发起读时隙，8 µs 后采样器件输出的位。 参数：pin —— 数据引脚。 时序/边界：拉低 3 µs → 释放 → 8 µs 采样 → 再等 52 µs（时隙 63 µs）。
+ * 注意：① 读时隙必须由主机发起（拉低），否则器件不会输出； ② 8 µs 采样点要落在器件有效窗口内（器件在拉低后 15 µs 内给出数据， 但规格要求主机尽早采样，8 µs 是 tds_mini 实测稳定值）。 */
 static bool ds_read_bit(bsp_io_port_pin_t pin)
 {
     bool bit;
@@ -353,15 +252,7 @@ static bool ds_read_bit(bsp_io_port_pin_t pin)
     return bit;
 }
 
-/**
- * @brief 读 1 字节（LSB 优先）
- *
- * 作用：逐位读出并拼成字节，用于读暂存器 9 字节。
- * 参数：pin —— 数据引脚。
- * 返回：读到的字节。
- * 时序：8 个位时隙 ≈ 0.5 ms。
- * 注意：低字节先出（LSB first），与写入规则一致。
- */
+/* 逐位读出并拼成字节，用于读暂存器 9 字节。 参数：pin —— 数据引脚。 时序/边界：8 个位时隙 ≈ 0.5 ms。 注意：低字节先出（LSB first），与写入规则一致。 */
 static uint8_t ds_read_byte(bsp_io_port_pin_t pin)
 {
     uint8_t value = 0U;
@@ -379,16 +270,8 @@ static uint8_t ds_read_byte(bsp_io_port_pin_t pin)
 }
 
 /* ---------------------------- 底层：CRC8 ---------------------------- */
-/**
- * @brief Dallas/Maxim CRC8 校验
- *
- * 作用：对暂存器前 8 字节算 CRC，与第 9 字节比较，判断 1-Wire 传输是否出错。
- * 参数：p_data —— 数据首地址；len —— 字节数。
- * 返回：CRC8 值（与 DS18B20 数据手册算法一致）。
- * 时序：len×8 次移位异或，微秒级。
- * 注意：多项式 x^8 + x^5 + x^4 + 1 = 0x31（MSB-first）；本实现是 LSB-first，
- *       所以用反射值 0x8C。tds_mini 已验证该实现与器件一致。
- */
+/* 对暂存器前 8 字节算 CRC，与第 9 字节比较，判断 1-Wire 传输是否出错。 时序/边界：len×8 次移位异或，微秒级。
+ * 注意：多项式 x^8 + x^5 + x^4 + 1 = 0x31（MSB-first）；本实现是 LSB-first， 所以用反射值 0x8C。tds_mini 已验证该实现与器件一致。 */
 static uint8_t ds_crc8(const uint8_t *p_data, uint8_t len)
 {
     uint8_t crc = 0U;
@@ -414,17 +297,9 @@ static uint8_t ds_crc8(const uint8_t *p_data, uint8_t len)
 }
 
 /* ---------------------------- 公共底层接口 ---------------------------- */
-/**
- * @brief 只做一次"复位 + 存在检测"
- *
- * 作用：判断总线上是否有 DS18B20（掉线/热插拔后重新发现器件用）。
- * 参数：pin —— 数据引脚。
- * 返回：true=器件应答；false=没有器件/引脚非法。
- * 时序：阻塞约 1 ms（复位时隙）。
- * 注意：本函数会自己进临界区（关中断 + PFS 写保护），调用者不要再嵌套关中断。
- *       仅"有应答"不代表读数有效（见 read_temperature 的三层检查）。
- */
-bool ds18b20_ping(bsp_io_port_pin_t pin)
+/* 判断总线上是否有 DS18B20（掉线/热插拔后重新发现器件用）。 参数：pin —— 数据引脚。 时序/边界：阻塞约 1 ms（复位时隙）。
+ * 注意：本函数会自己进临界区（关中断 + PFS 写保护），调用者不要再嵌套关中断。 仅"有应答"不代表读数有效（见 read_temperature 的三层检查）。 */
+static bool ds18b20_ping(bsp_io_port_pin_t pin)
 {
     uint32_t primask;
     bool     present;
@@ -441,18 +316,9 @@ bool ds18b20_ping(bsp_io_port_pin_t pin)
     return present;
 }
 
-/**
- * @brief 发起一次温度转换（Convert T）
- *
- * 作用：复位 → Skip ROM → Convert T，让器件开始一次 12 位温度转换。
- * 参数：pin —— 数据引脚。
- * 返回：true=器件应答且命令已发出；false=没有器件/引脚非法。
- * 时序：阻塞约 1.5 ms（复位 + 2 字节写）。
- * 注意：① 命令发出后要等 ≥750 ms 再读（12 位转换时间），本驱动由
- *          非阻塞状态机等 800 ms，不在本函数里等；
- *       ② 转换期间总线可以空闲（器件自己测），主机可去干别的。
- */
-bool ds18b20_request_convert(bsp_io_port_pin_t pin)
+/* 复位 → Skip ROM → Convert T，让器件开始一次 12 位温度转换。 参数：pin —— 数据引脚。 时序/边界：阻塞约 1.5 ms（复位 + 2 字节写）。
+ * 注意：① 命令发出后要等 ≥750 ms 再读（12 位转换时间），本驱动由 非阻塞状态机等 800 ms，不在本函数里等； ② 转换期间总线可以空闲（器件自己测），主机可去干别的。 */
+static bool ds18b20_request_convert(bsp_io_port_pin_t pin)
 {
     uint32_t primask;
     bool     ok;
@@ -476,19 +342,10 @@ bool ds18b20_request_convert(bsp_io_port_pin_t pin)
     return ok;
 }
 
-/**
- * @brief 读暂存器并换算温度（含三层有效性检查）
- *
- * 作用：复位 → Skip ROM → Read Scratchpad → 读 9 字节 → 校验 → 换算成 ℃。
- * 参数：pin        —— 数据引脚；
- *       p_temp_c   —— 输出温度（℃，成功时才写）。
- * 返回：true=读到有效温度；false=无器件/CRC 错/全 0/全 FF/超范围/85 ℃。
- * 时序：阻塞约 5~6 ms（复位 + 2 字节写 + 9 字节读），全程关中断。
- * 注意：① 三层检查缺一不可，原因见文件头"实验 2 真实踩坑"；
- *       ② 失败时不修改 *p_temp_c，调用方据此保留上一次有效值；
- *       ③ 85.0 ℃ 是上电默认值/转换未完成标志，本工程水温不可能出现。
- */
-bool ds18b20_read_temperature(bsp_io_port_pin_t pin, float *p_temp_c)
+/* 复位 → Skip ROM → Read Scratchpad → 读 9 字节 → 校验 → 换算成 ℃。 参数：pin        —— 数据引脚； p_temp_c   —— 输出温度（℃，成功时才写）。
+ * 返回：true=读到有效温度；false=无器件/CRC 错/全 0/全 FF/超范围/85 ℃。 时序/边界：阻塞约 5~6 ms（复位 + 2 字节写 + 9 字节读），全程关中断。
+ * 注意：① 三层检查缺一不可，原因见文件头"实验 2 真实踩坑"； ② 失败时不修改 *p_temp_c，调用方据此保留上一次有效值； ③ 85.0 ℃ 是上电默认值/转换未完成标志，本工程水温不可能出现。 */
+static bool ds18b20_read_temperature(bsp_io_port_pin_t pin, float *p_temp_c)
 {
     uint8_t  sp[DS_SCRATCHPAD_LEN];
     uint32_t primask;
@@ -548,17 +405,8 @@ bool ds18b20_read_temperature(bsp_io_port_pin_t pin, float *p_temp_c)
 }
 
 /* ---------------------------- 内部：兜底温度策略 ---------------------------- */
-/**
- * @brief 传感器不可用时的温度回退
- *
- * 作用：按"手输值优先，否则默认 25.0 ℃"设置 temp_c / src。
- * 参数：p_dev —— 句柄（非 NULL）。
- * 返回：无。
- * 时序：纯赋值。
- * 注意：绝不沿用"上一次实测值"作为兜底：传感器已经不可信了，继续用旧读数
- *       会让温补看起来还在工作（隐蔽失效），不如明确标 FIX/MAN 让上层知道
- *       "温补精度下降"。sensor_temp_c 保留最近一次有效值，仅供诊断查看。
- */
+/* 按"手输值优先，否则默认 25.0 ℃"设置 temp_c / src。 参数：p_dev —— 句柄（非 NULL）。 时序/边界：纯赋值。
+ * 注意：绝不沿用"上一次实测值"作为兜底：传感器已经不可信了，继续用旧读数 会让温补看起来还在工作（隐蔽失效），不如明确标 FIX/MAN 让上层知道 "温补精度下降"。sensor_temp_c 保留最近一次有效值，仅供诊断查看。 */
 static void ds18b20_apply_fallback(ds18b20_t *p_dev)
 {
     if (p_dev->manual_valid)
@@ -574,19 +422,10 @@ static void ds18b20_apply_fallback(ds18b20_t *p_dev)
 }
 
 /* ---------------------------- 公共接口：初始化 / 自检 / 任务 ---------------------------- */
-/**
- * @brief 初始化 DS18B20 驱动
- *
- * 作用：保存配置（带合法性检查）、清零运行状态、把数据脚配成"输入 + 上拉"。
- * 参数：p_dev —— 句柄（app_main 分配，必须非 NULL 才生效）；
- *       p_cfg —— 配置；NULL 表示全部用默认值（P500、2 s/800 ms/5 s/3 次/25 ℃）。
- * 返回：无。
- * 时序：几条寄存器写（R_IOPORT_PinCfg），不阻塞、不访问总线。
- * 注意：① 每个配置项都有范围检查，非法值静默回落默认值（防止上层写错参数
- *          导致任务空转或周期为 0）；
- *       ② 初始化不检测器件（检测在 boot_test / task 里做），避免上电被打断；
- *       ③ 引脚内部上拉只是"备用"，外部 4.7 kΩ 必须焊/接好。
- */
+/* 保存配置（带合法性检查）、清零运行状态、把数据脚配成"输入 + 上拉"。
+ * 参数：p_dev —— 句柄（app_main 分配，必须非 NULL 才生效）； p_cfg —— 配置；NULL 表示全部用默认值（P500、2 s/800 ms/5 s/3 次/25 ℃）。
+ * 时序/边界：几条寄存器写（R_IOPORT_PinCfg），不阻塞、不访问总线。
+ * 注意：① 每个配置项都有范围检查，非法值静默回落默认值（防止上层写错参数 导致任务空转或周期为 0）； ② 初始化不检测器件（检测在 boot_test / task 里做），避免上电被打断； ③ 引脚内部上拉只是"备用"，外部 4.7 kΩ 必须焊/接好。 */
 void ds18b20_init(ds18b20_t *p_dev, const ds18b20_cfg_t *p_cfg)
 {
     if (NULL == p_dev)
@@ -654,21 +493,9 @@ void ds18b20_init(ds18b20_t *p_dev, const ds18b20_cfg_t *p_cfg)
                            (uint32_t) IOPORT_CFG_PULLUP_ENABLE);
 }
 
-/**
- * @brief 上电自检（阻塞 ≈800 ms，只在上电初始化时调用一次）
- *
- * 作用：检测器件 → 发起一次转换 → 等待 → 试读一个有效温度；
- *       只有"有应答 + 读到有效温度"才算可用，否则自动进入 disabled 状态。
- * 参数：p_dev —— 句柄。
- * 返回：true=器件可用（present=true，src=SENSOR）；false=不可用（disabled=true，
- *       温度已回退到默认/手输值）。
- * 时序：ping 约 1 ms；若无器件立即返回（不白等 800 ms）；若有器件则转换等待
- *       conv_wait_ms（默认 800 ms），总阻塞 ≈800 ms。
- * 注意：① 为什么必须"试读一次"而不只看复位应答：DQ 被拉低时复位应答可能为真，
- *          但暂存器全 0（实验 2 实际踩过）——必须读到有效温度才算可用；
- *       ② 失败后 disabled=true：主循环不会反复重试假 0.00 ℃，等命令 C/手输 T；
- *       ③ 本函数是唯一阻塞的驱动函数，只在上电时调用一次，不影响 50 ms 主循环。
- */
+/* 检测器件 → 发起一次转换 → 等待 → 试读一个有效温度； 只有"有应答 + 读到有效温度"才算可用，否则自动进入 disabled 状态。
+ * 时序/边界：ping 约 1 ms；若无器件立即返回（不白等 800 ms）；若有器件则转换等待 conv_wait_ms（默认 800 ms），总阻塞 ≈800 ms。
+ * 注意：① 为什么必须"试读一次"而不只看复位应答：DQ 被拉低时复位应答可能为真， 但暂存器全 0（实验 2 实际踩过）——必须读到有效温度才算可用； ② 失败后 disabled=true：主循环不会反复重试假 0.00 ℃，等命令 C/手输 T； ③ 本函数是唯一阻塞的驱动函数，只在上电时调用一次，不影响 50 ms 主循环。 */
 bool ds18b20_boot_test(ds18b20_t *p_dev)
 {
     uint32_t now_ms;
@@ -722,22 +549,9 @@ bool ds18b20_boot_test(ds18b20_t *p_dev)
     return false;
 }
 
-/**
- * @brief DS18B20 周期任务（非阻塞状态机）
- *
- * 作用：每 50 ms 由主循环调用一次，推进"发起转换 → 等待 → 读数 → 失败计数/
- *       回退/停用/重试发现"的完整状态机；命令 C 通过 force_recheck 强制重检。
- * 参数：p_dev         —— 句柄；
- *       now_ms        —— 当前时间（timebase_ms() 的值，由调用者传入，便于统一时基）；
- *       force_recheck —— true=无条件重新检测一次（串口命令 C）。
- * 返回：无。
- * 时序：不阻塞（最长的 1-Wire 事务约 6 ms，属于可接受的短临界区）。
- * 注意：① 状态优先级：force_recheck > 停用/不在线 > 正常转换流程；
- *       ② 停用后不自动重试（防假温度污染数据）；但"从未检测到"的情况下
- *          每 redetect_period_ms 重试一次（可能是没插紧/热插拔）；
- *       ③ 短时读失败保留最近有效值（src 仍为 DS），连续 fail_limit 次才停用；
- *       ④ now_ms 必须来自 timebase_ms()，且与调用周期一一对应（本工程 50 ms）。
- */
+/* 每 50 ms 由主循环调用一次，推进"发起转换 → 等待 → 读数 → 失败计数/ 回退/停用/重试发现"的完整状态机；命令 C 通过 force_recheck 强制重检。
+ * 时序/边界：不阻塞（最长的 1-Wire 事务约 6 ms，属于可接受的短临界区）。
+ * 注意：① 状态优先级：force_recheck > 停用/不在线 > 正常转换流程； ② 停用后不自动重试（防假温度污染数据）；但"从未检测到"的情况下 每 redetect_period_ms 重试一次（可能是没插紧/热插拔）； ③ 短时读失败保留最近有效值（src 仍为 DS），连续 fail_limit 次才停用； ④ now_ms 必须来自 timebase_ms()，且与调用周期一一对应（本工程 50 ms）。 */
 void ds18b20_task(ds18b20_t *p_dev, uint32_t now_ms, bool force_recheck)
 {
     if (NULL == p_dev)
@@ -840,19 +654,9 @@ void ds18b20_task(ds18b20_t *p_dev, uint32_t now_ms, bool force_recheck)
     }
 }
 
-/**
- * @brief 设置手输温度（串口 T 命令兜底）
- *
- * 作用：保存手输温度并立即生效（src=MAN）；同时清除停用标志、触发重检。
- * 参数：p_dev  —— 句柄；
- *       temp_c —— 手输温度（℃，NaN 会回落默认值，超范围会限幅）。
- * 返回：无。
- * 时序：纯赋值 + timebase 读一次。
- * 注意：① 手输值只在 DS18B20 不可用时才会被采用；传感器恢复后会自动切回 DS；
- *       ② 用户输入 T 往往是因为"刚修好线/刚插好"，所以顺手清 disabled 并把
- *          last_detect_ms 往回拨一个重试周期，下一 tick 立刻 ping 一次；
- *       ③ 输入范围在驱动里限幅到 [-20,80]，app 层再按协议限 0~60 ℃。
- */
+/* 保存手输温度并立即生效（src=MAN）；同时清除停用标志、触发重检。 参数：p_dev  —— 句柄； temp_c —— 手输温度（℃，NaN 会回落默认值，超范围会限幅）。
+ * 时序/边界：纯赋值 + timebase 读一次。
+ * 注意：① 手输值只在 DS18B20 不可用时才会被采用；传感器恢复后会自动切回 DS； ② 用户输入 T 往往是因为"刚修好线/刚插好"，所以顺手清 disabled 并把 last_detect_ms 往回拨一个重试周期，下一 tick 立刻 ping 一次； ③ 输入范围在驱动里限幅到 [-20,80]，app 层再按协议限 0~60 ℃。 */
 void ds18b20_set_manual_temp(ds18b20_t *p_dev, float temp_c)
 {
     float t;
@@ -882,14 +686,8 @@ void ds18b20_set_manual_temp(ds18b20_t *p_dev, float temp_c)
 }
 
 /* ---------------------------- 公共接口：只读 getter ---------------------------- */
-/**
- * @brief 读取当前采用的温度
- *
- * 参数：p_dev —— 句柄（可为 NULL）。
- * 返回：当前采用温度 ℃（实测/手输/兜底）；p_dev 为 NULL 时返回默认 25.0 ℃。
- * 时序：纯读。
- * 注意：调用者不需要关心来源；需要区分来源时用 ds18b20_get_src()。
- */
+/* 读取当前采用的温度 参数：p_dev —— 句柄（可为 NULL）。 返回：当前采用温度 ℃（实测/手输/兜底）；p_dev 为 NULL 时返回默认 25.0 ℃。 时序/边界：纯读。
+ * 注意：调用者不需要关心来源；需要区分来源时用 ds18b20_get_src()。 */
 float ds18b20_get_temp_c(const ds18b20_t *p_dev)
 {
     if (NULL == p_dev)
@@ -900,14 +698,8 @@ float ds18b20_get_temp_c(const ds18b20_t *p_dev)
     return p_dev->temp_c;
 }
 
-/**
- * @brief 读取当前温度来源
- *
- * 参数：p_dev —— 句柄（可为 NULL）。
- * 返回：DS18B20_SRC_FIX / MANUAL / SENSOR；NULL 时 FIX。
- * 时序：纯读。
- * 注意：CSV 的 src 列（DS/MAN/FIX）与温补精度说明都依赖这个值。
- */
+/* 读取当前温度来源 参数：p_dev —— 句柄（可为 NULL）。 返回：DS18B20_SRC_FIX / MANUAL / SENSOR；NULL 时 FIX。 时序/边界：纯读。
+ * 注意：CSV 的 src 列（DS/MAN/FIX）与温补精度说明都依赖这个值。 */
 ds18b20_src_t ds18b20_get_src(const ds18b20_t *p_dev)
 {
     if (NULL == p_dev)
@@ -918,15 +710,8 @@ ds18b20_src_t ds18b20_get_src(const ds18b20_t *p_dev)
     return p_dev->src;
 }
 
-/**
- * @brief 查询传感器当前是否可用
- *
- * 作用：判断"最近一次成功读数是否真来自 DS18B20"（供 app 决定是否提示温补降级）。
- * 参数：p_dev —— 句柄（可为 NULL）。
- * 返回：true=在线、未停用、且最近一次温度来源是传感器；否则 false。
- * 时序：纯读。
- * 注意：刚重新检测到器件但还没读到有效温度时返回 false（src 仍是兜底来源）。
- */
+/* 判断"最近一次成功读数是否真来自 DS18B20"（供 app 决定是否提示温补降级）。 参数：p_dev —— 句柄（可为 NULL）。 时序/边界：纯读。
+ * 注意：刚重新检测到器件但还没读到有效温度时返回 false（src 仍是兜底来源）。 */
 bool ds18b20_sensor_ok(const ds18b20_t *p_dev)
 {
     if (NULL == p_dev)
@@ -939,14 +724,7 @@ bool ds18b20_sensor_ok(const ds18b20_t *p_dev)
            (DS18B20_SRC_SENSOR == p_dev->src);
 }
 
-/**
- * @brief 温度来源 → 静态字符串
- *
- * 作用：CSV/日志打印用（DS / MAN / FIX）。
- * 参数：src —— 温度来源枚举。
- * 返回：静态字符串常量（绝不返回 NULL；未知值返回 "FIX"）。
- * 时序：纯计算（switch）。
- * 注意：返回的指针不要 free、不要写入。
+/* CSV/日志打印用（DS / MAN / FIX）。 返回：静态字符串常量（绝不返回 NULL；未知值返回 "FIX"）。 时序/边界：纯计算（switch）。 注意：返回的指针不要 free、不要写入。
  */
 const char *ds18b20_src_str(ds18b20_src_t src)
 {

@@ -1,11 +1,4 @@
 /*
- * sensor_ds18b20.h
- *
- *  Created on: 2026年10月30日
- *      Author: Administrator
- */
-
-/*
  * sensor_ds18b20.h —— DS18B20 单总线水温传感器（P500 / U1-17，4.7k 上拉到 3.3 V）
  * ---------------------------------------------------------------------------
  * 用途：TDS 温度补偿必须用"水侧水温"。片上 TSN 测的是芯片温度，不能替代
@@ -98,13 +91,7 @@ ds18b20_src_t ds18b20_get_src(const ds18b20_t *p_dev);
 bool          ds18b20_sensor_ok(const ds18b20_t *p_dev);
 const char   *ds18b20_src_str(ds18b20_src_t src);
 
-/* 底层接口（自检/排障/单元测试用；一般不用直接调）。 */
-bool ds18b20_ping(bsp_io_port_pin_t pin);
-bool ds18b20_request_convert(bsp_io_port_pin_t pin);
-bool ds18b20_read_temperature(bsp_io_port_pin_t pin, float *p_temp_c);
-
 #ifdef __cplusplus
 }
 #endif
 #endif /* SENSOR_DS18B20_H */
-

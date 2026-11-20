@@ -1,11 +1,4 @@
 /*
- * sensor_tds.h
- *
- *  Created on: 2026年10月30日
- *      Author: Administrator
- */
-
-/*
  * sensor_tds.h —— 模拟 TDS（电导率）传感器：ADC 码 → 电压 → 温度补偿 → 参考 TDS
  * ---------------------------------------------------------------------------
  * 模块电气事实（实验 2 实测 + 厂商资料，见 docs_sensor/00 与硬件方案 §4.1）：
@@ -72,4 +65,3 @@ float tds_ppm_from_mv25(float mv25);
 }
 #endif
 #endif /* SENSOR_TDS_H */
-

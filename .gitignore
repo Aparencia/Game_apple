@@ -21,3 +21,6 @@ _tmp/
 # OS
 Thumbs.db
 Desktop.ini
+
+# local source snapshot (see Backup/core_src_*/README)
+Backup/

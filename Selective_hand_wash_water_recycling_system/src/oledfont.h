@@ -395,4 +395,3 @@ static const unsigned char oled_hz32_bitmaps[17][128] =
 };
 
 #endif /* OLEDFONT_H */
-

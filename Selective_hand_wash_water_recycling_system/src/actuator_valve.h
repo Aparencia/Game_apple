@@ -1,11 +1,4 @@
 /*
- * actuator_valve.h
- *
- *  Created on: 2026年11月13日
- *      Author: Administrator
- */
-
-/*
  * actuator_valve.h —— 二位三通电磁阀执行器（P104 → SRD-05VDC-SL-C 单路继电器模块 → 12V 阀）
  * ---------------------------------------------------------------------------
  * 本模块把"逻辑位置"翻译成"继电器吸合/释放"，只做三件事：
@@ -86,59 +79,26 @@ typedef struct st_valve
     uint32_t    blocked_until_ms;  /* 冷却结束时刻（max_on_blocked 时有效） */
 } valve_t;
 
-/*
- * 函数名：valve_init
- * 作用：保存配置并做 fail-safe 初始化：把 P104 配成输出、初值="继电器释放"电平；
- *       随后回读校验。enabled=false 时同样配置该电平（保持"上电即排空"的硬件约定），
- *       但后续 valve_task 不再换向。
- * 参数：p_valve —— 句柄（非 NULL）；p_cfg —— 配置（非 NULL）。
- * 返回：无（结果看 valve_get_out()->initialized / pin_fault）。
- * 时序/边界：必须是 app_main 的第一条外设操作（早于 LED/UART/ADC），约几十 µs。
- * 注意：配置写是"PODR 与方向同一寄存器写"，不会先出高再拉低，上电无毛刺。
- */
+/* 保存配置并做 fail-safe 初始化：把 P104 配成输出、初值="继电器释放"电平； 随后回读校验。enabled=false 时同样配置该电平（保持"上电即排空"的硬件约定）， 但后续 valve_task 不再换向。
+ * 参数：p_valve —— 句柄（非 NULL）；p_cfg —— 配置（非 NULL）。 时序/边界：必须是 app_main 的第一条外设操作（早于 LED/UART/ADC），约几十 µs。
+ * 注意：配置写是"PODR 与方向同一寄存器写"，不会先出高再拉低，上电无毛刺。 */
 void valve_init(valve_t *p_valve, const valve_cfg_t *p_cfg);
 
-/*
- * 函数名：valve_request
- * 作用：上层声明本 tick 想要的逻辑位置（判别结果或手动覆盖）。
- * 参数：p_valve —— 句柄；pos —— 目标位置（越界按 DRAIN 处理）；
- *       now_ms —— 当前时刻（本函数不用，保留给未来扩展）；p_reason —— 来源静态串（可为 NULL）。
- * 返回：无。
- * 时序/边界：只写 requested，不碰 GPIO；真正换向由 valve_task 在满足驻留条件后执行。
- * 注意：安全侧调用方应在拿不到判别结果时请求 DRAIN。
- */
+/* 上层声明本 tick 想要的逻辑位置（判别结果或手动覆盖）。
+ * 参数：p_valve —— 句柄；pos —— 目标位置（越界按 DRAIN 处理）； now_ms —— 当前时刻（本函数不用，保留给未来扩展）；p_reason —— 来源静态串（可为 NULL）。
+ * 时序/边界：只写 requested，不碰 GPIO；真正换向由 valve_task 在满足驻留条件后执行。 注意：安全侧调用方应在拿不到判别结果时请求 DRAIN。 */
 void valve_request(valve_t *p_valve, valve_pos_t pos, uint32_t now_ms, const char *p_reason);
 
-/*
- * 函数名：valve_task
- * 作用：执行器状态机（每 50 ms tick 调一次）：驻留判断 → 写 P104 → 回读校验 →
- *       吸合计数/通电计时 → 连续吸合超时强制释放 → 冷却解除。
- * 参数：p_valve —— 句柄；now_ms —— 当前时刻（1 ms 时基，回绕安全）。
- * 返回：无。
+/* 执行器状态机（每 50 ms tick 调一次）：驻留判断 → 写 P104 → 回读校验 → 吸合计数/通电计时 → 连续吸合超时强制释放 → 冷却解除。
  * 时序/边界：单次调用只做几个寄存器读写，微秒级；绝不 printf/delay。
- * 注意：写失败时 position 不更新、下个 tick 重试，pin_fault 锁存；初始化失败时直接返回，
- *       逻辑位置保持排空（硬件下拉/上拉保证继电器释放）。
- */
+ * 注意：写失败时 position 不更新、下个 tick 重试，pin_fault 锁存；初始化失败时直接返回， 逻辑位置保持排空（硬件下拉/上拉保证继电器释放）。 */
 void valve_task(valve_t *p_valve, uint32_t now_ms);
 
-/*
- * 函数名：valve_get_out
- * 作用：读取执行器输出（只读指针，生命周期与句柄相同）。
- * 参数：p_valve —— 句柄（可为 NULL）。
- * 返回：输出指针；p_valve 为 NULL 时返回 NULL。
- * 时序/边界：O(1)；可供 app 打印事件行/状态页。
- * 注意：不要在中断里长时间持有该指针做复杂计算（本工程只在主循环用）。
- */
+/* 读取执行器输出（只读指针，生命周期与句柄相同）。 参数：p_valve —— 句柄（可为 NULL）。 返回：输出指针；p_valve 为 NULL 时返回 NULL。
+ * 时序/边界：O(1)；可供 app 打印事件行/状态页。 注意：不要在中断里长时间持有该指针做复杂计算（本工程只在主循环用）。 */
 const valve_out_t *valve_get_out(const valve_t *p_valve);
 
-/*
- * 函数名：valve_pos_str
- * 作用：逻辑位置 → 静态字符串（"DRAIN"/"RECOVER"），供日志/状态行。
- * 参数：pos —— 位置。
- * 返回：静态字符串（未知按 "DRAIN"）。
- * 时序/边界：纯函数。
- * 注意：只用于显示；控制逻辑一律用枚举比较。
- */
+/* 逻辑位置 → 静态字符串（"DRAIN"/"RECOVER"），供日志/状态行。 返回：静态字符串（未知按 "DRAIN"）。 时序/边界：纯函数。 注意：只用于显示；控制逻辑一律用枚举比较。 */
 const char *valve_pos_str(valve_pos_t pos);
 
 #ifdef __cplusplus

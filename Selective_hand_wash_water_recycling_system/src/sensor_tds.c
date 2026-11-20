@@ -1,10 +1,3 @@
-/*
- * sensor_tds.c
- *
- *  Created on: 2026年10月30日
- *      Author: Administrator
- */
-
 
 
 
@@ -71,17 +64,9 @@
  * 初值 cal_k = 1.0：即使调用者忘记 tds_init()，换算也是"未标定"的合理默认。 */
 static tds_cfg_t s_cfg = { 1.0f };
 
-/**
- * @brief 初始化 TDS 驱动（保存配置）
- *
- * 作用：把标定系数拷贝进模块内部，供后续 tds_convert / tds_ppm_from_mv25 使用。
- * 参数：p_cfg —— 配置指针；NULL 表示全部用默认值（cal_k = 1.0）。
- * 返回：无。
- * 时序：纯赋值，不访问硬件、不阻塞；可在 app_main 初始化阶段反复调用。
- * 注意：① cal_k 只接受 (0, 10] 的正数：0 会让 ppm 恒为 0（看起来像纯净水，
- *          对安全侧判据是危险的方向）；负数/NaN 无物理意义，一律回落 1.0。
- *       ② 本驱动不直接操作 ADC；ADC 的打开/扫描由 sensor_pipeline 负责。
- */
+/* 把标定系数拷贝进模块内部，供后续 tds_convert / tds_ppm_from_mv25 使用。 参数：p_cfg —— 配置指针；NULL 表示全部用默认值（cal_k = 1.0）。
+ * 时序/边界：纯赋值，不访问硬件、不阻塞；可在 app_main 初始化阶段反复调用。
+ * 注意：① cal_k 只接受 (0, 10] 的正数：0 会让 ppm 恒为 0（看起来像纯净水， 对安全侧判据是危险的方向）；负数/NaN 无物理意义，一律回落 1.0。 ② 本驱动不直接操作 ADC；ADC 的打开/扫描由 sensor_pipeline 负责。 */
 void tds_init(const tds_cfg_t *p_cfg)
 {
     float k = 1.0f;   /* 默认：无标准液，不标定 */
@@ -97,24 +82,10 @@ void tds_init(const tds_cfg_t *p_cfg)
     s_cfg.cal_k = k;
 }
 
-/**
- * @brief 核心转换：ADC 码 + 水温 → 电压 / 温补电压 / 参考 ppm / 可信度标记
- *
- * 作用：一次完成 ADC→mV、rail/saturated 判定、温度清洗、温补、参考 ppm 换算。
- * 参数：raw_adc      —— 中值后的 ADC 码（12 位）；
- *       water_temp_c —— 当前水温（℃，可以来自 DS18B20 / 手输 / 兜底）；
- *       p_out        —— 输出结构体（必须非 NULL）。
- * 返回：SENSOR_OK            换算完成，数据可用；
- *       SENSOR_ERR_PARAM     p_out 为空；
- *       SENSOR_ERR_RANGE     ADC 贴轨（rail），读数不可信，上层应判传感器故障。
- *       （saturated 不改变返回码，只在 p_out->saturated 里提示响应可能压缩。）
- * 时序：纯计算，微秒级；每 50 ms tick 调用一次。
- * 注意：① p_out 的所有字段都会写满，即使返回 RANGE 也保留原始换算值，
- *          方便上层打印"坏在哪"（如 CSV 的 note=TDS_RAIL）；
- *       ② 温度非法（NaN/超出 [-5,60]）会被清洗到参考温度/边界，
- *          但**不会**把状态置为错误——温度来源的可信度由上层（pipeline）负责
- *          标记 water_temp_from_sensor=false，本驱动只管数值安全。
- */
+/* 一次完成 ADC→mV、rail/saturated 判定、温度清洗、温补、参考 ppm 换算。
+ * 参数：raw_adc      —— 中值后的 ADC 码（12 位）； water_temp_c —— 当前水温（℃，可以来自 DS18B20 / 手输 / 兜底）； p_out        —— 输出结构体（必须非 NULL）。
+ * 时序/边界：纯计算，微秒级；每 50 ms tick 调用一次。
+ * 注意：① p_out 的所有字段都会写满，即使返回 RANGE 也保留原始换算值， 方便上层打印"坏在哪"（如 CSV 的 note=TDS_RAIL）； ② 温度非法（NaN/超出 [-5,60]）会被清洗到参考温度/边界， 但**不会**把状态置为错误——温度来源的可信度由上层（pipeline）负责 标记 water_temp_from_sensor=false，本驱动只管数值安全。 */
 sensor_status_t tds_convert(uint16_t raw_adc, float water_temp_c, tds_reading_t *p_out)
 {
     if (NULL == p_out)
@@ -176,18 +147,8 @@ sensor_status_t tds_convert(uint16_t raw_adc, float water_temp_c, tds_reading_t 
     return SENSOR_OK;
 }
 
-/**
- * @brief 只做 25 ℃ 电压 → 参考 ppm（供标定/复算用）
- *
- * 作用：把 mV25 代入 DFRobot 经验多项式，得到参考 TDS；内部包含 cal_k 与限幅。
- * 参数：mv25 —— 温度补偿到 25 ℃ 的电压（mV）。
- * 返回：参考 ppm（0~TDS_PPM_LIMIT；非法输入返回 0）。
- * 时序：纯计算，几次乘加。
- * 注意：① 该多项式只对特定模块、特定量程成立；没有标准液时它只是
- *          "过程参考"，不能当绝对浓度，更不能作为达标依据；
- *       ② 输入 ≤0 或 NaN 直接返回 0（负电压在物理上无意义）；
- *       ③ 限幅 0~2000 只是防止日志/CSV 出现离谱数值，不代表量程能力。
- */
+/* 把 mV25 代入 DFRobot 经验多项式，得到参考 TDS；内部包含 cal_k 与限幅。 时序/边界：纯计算，几次乘加。
+ * 注意：① 该多项式只对特定模块、特定量程成立；没有标准液时它只是 "过程参考"，不能当绝对浓度，更不能作为达标依据； ② 输入 ≤0 或 NaN 直接返回 0（负电压在物理上无意义）； ③ 限幅 0~2000 只是防止日志/CSV 出现离谱数值，不代表量程能力。 */
 float tds_ppm_from_mv25(float mv25)
 {
     if (!(mv25 > 0.0f))
@@ -211,10 +172,7 @@ float tds_ppm_from_mv25(float mv25)
     {
         ppm = 0.0f;   /* 低电压端多项式可能算出负值/NaN，按 0 处理 */
     }
-    if (ppm > TDS_PPM_LIMIT)
-    {
-        ppm = TDS_PPM_LIMIT;   /* 只防打印异常，不表示量程上限 */
-    }
 
-    return ppm;
+    /* 只防打印异常，不表示量程上限 */
+    return (ppm > TDS_PPM_LIMIT) ? TDS_PPM_LIMIT : ppm;
 }

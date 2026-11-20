@@ -1,10 +1,3 @@
-/*
- * sensor_pipeline.c
- *
- *  Created on: 2026年10月30日
- *      Author: Administrator
- */
-
 
 
 
@@ -100,15 +93,9 @@ static float g_ntu_rate_d[PIPELINE_RATE_POINTS];
 
 /* ---------- 内部工具函数 ---------- */
 
-/*
- * 函数名：pipeline_note_set
- * 作用  ：把静态字符串安全拷进 out.note[]（定长 28 字节），并保证以 '\0' 结尾。
- * 参数  ：p_dst  目标缓冲（out.note）；cap 缓冲容量（字节）；p_text 源字符串。
- * 返回  ：无。
- * 边界  ：p_dst 或 p_text 为 NULL、cap=0 时直接返回（防御性检查）；超长截断。
- * 注意  ：note 由本模块独占写，上层只读。这里不用 strncpy，避免"源恰好填满时
- *         不终止"的隐患，也不依赖字符串库的具体实现。
- */
+/* 把静态字符串安全拷进 out.note[]（定长 28 字节），并保证以 '\0' 结尾。 参数：p_dst  目标缓冲（out.note）；cap 缓冲容量（字节）；p_text 源字符串。
+ * 返回：无。 边界  ：p_dst 或 p_text 为 NULL、cap=0 时直接返回（防御性检查）；超长截断。
+ * 注意：note 由本模块独占写，上层只读。这里不用 strncpy，避免"源恰好填满时 不终止"的隐患，也不依赖字符串库的具体实现。 */
 static void pipeline_note_set(char *p_dst, uint32_t cap, const char *p_text)
 {
     uint32_t i = 0U;
@@ -126,17 +113,8 @@ static void pipeline_note_set(char *p_dst, uint32_t cap, const char *p_text)
     p_dst[i] = '\0';
 }
 
-/*
- * 函数名：pipeline_note_update
- * 作用  ：按固定优先级刷新 out.note：
- *         ADC_TIMEOUT > TDS_RAIL > TDS_SAT > NTU_RAIL > NO_BASE > OK。
- * 参数  ：p_pipe 流水线句柄（p_pipe->out 已被本 tick 的采集流程更新）。
- * 返回  ：无。
- * 边界  ：只写 out.note，不改变其它字段；优先级保证"越危险/越底层的故障"越靠前。
- * 注意  ：判别层可以只看 note + adc_timeout + baseline_valid，不必重复拼优先级；
- *         这里把"传感器故障"放在"无基线"之前，是因为故障时基线也不可信，先报故障
- *         更利于排障。
- */
+/* 按固定优先级刷新 out.note： ADC_TIMEOUT > TDS_RAIL > TDS_SAT > NTU_RAIL > NO_BASE > OK。
+ * 注意：判别层可以只看 note + adc_timeout + baseline_valid，不必重复拼优先级； 这里把"传感器故障"放在"无基线"之前，是因为故障时基线也不可信，先报故障 更利于排障。 */
 static void pipeline_note_update(sensor_pipeline_t *p_pipe)
 {
     const char *p_note;
@@ -183,29 +161,16 @@ static void pipeline_note_update(sensor_pipeline_t *p_pipe)
     pipeline_note_set(p_pipe->out.note, (uint32_t) sizeof(p_pipe->out.note), p_note);
 }
 
-/*
- * 函数名：pipeline_clamp_cfg
- * 作用  ：对 app 传入的流水线配置做工程限幅，杜绝 0/负数/NaN 造成除零、死等、
- *         长时间采不出基线等运行期问题。
- * 参数  ：p_cfg 已在 pipeline_init 里拷贝好的配置（就地修改）。
- * 返回  ：无。
- * 边界  ：指针由调用者保证非 NULL；只改本模块自己持有的副本，不回写 app 的配置。
- * 注意  ：限幅规则：adc_median_n 1~9、adc_timeout_ms ≥1、ema_alpha 0.02~1、
- *         baseline_n 1~600、σ 下限 ≥0；vref/full_scale/分压电阻/cal_k 为 0 或
- *         非法时回退默认值（这些值直接参与除法，必须防 0）。
- */
+/* 对 app 传入的流水线配置做工程限幅，杜绝 0/负数/NaN 造成除零、死等、 长时间采不出基线等运行期问题。 返回：无。 边界  ：指针由调用者保证非 NULL；只改本模块自己持有的副本，不回写 app 的配置。
+ * 注意：限幅规则：adc_median_n 1~9、adc_timeout_ms ≥1、ema_alpha 0.02~1、 baseline_n 1~600、σ 下限 ≥0；vref/full_scale/分压电阻/cal_k 为 0 或 非法时回退默认值（这些值直接参与除法，必须防 0）。 */
 static void pipeline_clamp_cfg(pipeline_cfg_t *p_cfg)
 {
     /* 中值次数：超过 9 会超出 PIPELINE_MAX_MEDIAN_N 的采样数组，必须限住；
-     * 0 次则没有样本可取，取 1（退化为单点）。 */
-    if (p_cfg->adc_median_n < 1)
-    {
-        p_cfg->adc_median_n = 1U;
-    }
-    if (p_cfg->adc_median_n > (uint16_t) PIPELINE_MAX_MEDIAN_N)
-    {
-        p_cfg->adc_median_n = PIPELINE_MAX_MEDIAN_N;
-    }
+     * 0 次则没有样本可取，取 1（退化为单点）。
+     * uint16 的取值全程能被 float 精确表示，这里借用 sensor_clampf 的上下限语义，
+     * 与原来手写的"两行 if"逐值等价（该处没有 NaN 兜底、也没有 0 回落）。 */
+    p_cfg->adc_median_n = (uint16_t) sensor_clampf((float) p_cfg->adc_median_n, 1.0f,
+                                                   (float) PIPELINE_MAX_MEDIAN_N);
 
     /* 超时 0 ms 会立刻判超时（每次采样都失败），按 1 ms 处理 */
     if (p_cfg->adc_timeout_ms < PIPELINE_MIN_TIMEOUT_MS)
@@ -264,15 +229,10 @@ static void pipeline_clamp_cfg(pipeline_cfg_t *p_cfg)
     }
 
     /* 基线点数：至少 1 点（否则永远采不满）；上限 600（30 s）防误配把系统卡在
-     * "一直采基线"的状态，也限制 float 平方和累加的误差积累。 */
-    if (p_cfg->baseline_n < 1)
-    {
-        p_cfg->baseline_n = 1U;
-    }
-    if (p_cfg->baseline_n > (uint16_t) PIPELINE_MAX_BASELINE_N)
-    {
-        p_cfg->baseline_n = (uint16_t) PIPELINE_MAX_BASELINE_N;
-    }
+     * "一直采基线"的状态，也限制 float 平方和累加的误差积累。
+     * 同 adc_median_n：uint16 全程精确，sensor_clampf 与手写上下限逐值等价。 */
+    p_cfg->baseline_n = (uint16_t) sensor_clampf((float) p_cfg->baseline_n, 1.0f,
+                                                 (float) PIPELINE_MAX_BASELINE_N);
 
     /* σ 下限：负值无意义（会让自适应阈值比噪声还小），NaN 也回退 0 */
     if (!(p_cfg->sigma_floor_ec_mv >= 0.0f))
@@ -299,18 +259,8 @@ static void pipeline_clamp_cfg(pipeline_cfg_t *p_cfg)
     }
 }
 
-/*
- * 函数名：pipeline_mark_data_invalid
- * 作用  ：把"本 tick 没有可信数据"统一记到 out 上：adc_timeout、两路状态、原始量清零、
- *         note 置 ADC_TIMEOUT；滤波值/基线量保持上一次的有效值不动。
- * 参数  ：p_pipe 流水线句柄。
- * 返回  ：无。
- * 边界  ：只在 ADC 超时/驱动返回非 OK 且非 ERR_RANGE 时调用；baseline_updated 保持
- *         调用前已被置 false 的状态（结算标志不会被故障 tick 误置）。
- * 注意  ：这里把"原始量清零"而不是保留旧值，是为了让 CSV 一眼看出这一行无效；
- *         特征/滤波量保留旧值并被 adc_timeout 标记为不可信，判别层优先判故障，
- *         不会误用。
- */
+/* 把"本 tick 没有可信数据"统一记到 out 上：adc_timeout、两路状态、原始量清零、 note 置 ADC_TIMEOUT；滤波值/基线量保持上一次的有效值不动。
+ * 注意：这里把"原始量清零"而不是保留旧值，是为了让 CSV 一眼看出这一行无效； 特征/滤波量保留旧值并被 adc_timeout 标记为不可信，判别层优先判故障， 不会误用。 */
 static void pipeline_mark_data_invalid(sensor_pipeline_t *p_pipe)
 {
     pipeline_out_t *p_out = &p_pipe->out;
@@ -332,24 +282,10 @@ static void pipeline_mark_data_invalid(sensor_pipeline_t *p_pipe)
     pipeline_note_update(p_pipe);
 }
 
-/*
- * 函数名：pipeline_adc_read_pair
- * 作用  ：执行 adc_median_n 轮"清标志 → 启动扫描 → 等完成 → 读两通道"，然后对两个
- *         通道各取中值。
- * 参数  ：p_pipe      流水线句柄（用 cfg.p_adc_ctrl / 通道号 / 超时）；
- *         p_tds_raw   TDS 通道中值输出（非 NULL）；
- *         p_ntu_raw   浊度通道中值输出（非 NULL）。
- * 返回  ：true=本次采样成功；false=ADC 控制结构为空/启动失败/等待超时/读取失败
- *         （此时两个输出都被置 0，由调用者标记本 tick 无效）。
- * 时序  ：ADC0 配置为"单次扫描组"（AN11+AN12）：一次 R_ADC_ScanStart 会把组内两个
- *         通道都转换一遍，所以循环 N 次即可同时得到两个通道各 N 个独立样本；
- *         每个样本都在"等回调完成"之后才 R_ADC_Read，读到的一定是本次转换结果。
- * 边界  ：单轮等待上限 adc_timeout_ms（默认 5 ms）。另外设置自旋次数上限兜底：
- *         若 SysTick 未启动/时基异常，timebase_ms() 恒为 0，仅靠毫秒判断会死等。
- * 注意  ：清标志必须放在 R_ADC_ScanStart 之前，否则可能把"上一轮扫描的完成标志"
- *         当成本轮完成（第一次进入时也会残留初值）；启动失败也按失败上报，
- *         由上层按 ADC 故障处理（安全侧）。
- */
+/* 执行 adc_median_n 轮"清标志 → 启动扫描 → 等完成 → 读两通道"，然后对两个 通道各取中值。
+ * 参数：p_pipe      流水线句柄（用 cfg.p_adc_ctrl / 通道号 / 超时）； p_tds_raw   TDS 通道中值输出（非 NULL）； p_ntu_raw   浊度通道中值输出（非 NULL）。
+ * 时序/边界：ADC0 配置为"单次扫描组"（AN11+AN12）：一次 R_ADC_ScanStart 会把组内两个 通道都转换一遍，所以循环 N 次即可同时得到两个通道各 N 个独立样本； 每个样本都在"等回调完成"之后才 R_ADC_Read，读到的一定是本次转换结果。 边界  ：单轮等待上限 adc_timeout_ms（默认 5 ms）。另外设置自旋次数上限兜底： 若 SysTick 未启动/时基异常，timebase_ms() 恒为 0，仅靠毫秒判断会死等。
+ * 注意：清标志必须放在 R_ADC_ScanStart 之前，否则可能把"上一轮扫描的完成标志" 当成本轮完成（第一次进入时也会残留初值）；启动失败也按失败上报， 由上层按 ADC 故障处理（安全侧）。 */
 static bool pipeline_adc_read_pair(sensor_pipeline_t *p_pipe, uint16_t *p_tds_raw, uint16_t *p_ntu_raw)
 {
     uint16_t tds_samples[PIPELINE_MAX_MEDIAN_N];   /* 固定大小、编译期常量，非变长数组 */
@@ -429,16 +365,8 @@ static bool pipeline_adc_read_pair(sensor_pipeline_t *p_pipe, uint16_t *p_tds_ra
     return true;
 }
 
-/*
- * 函数名：pipeline_rate_reset
- * 作用  ：清空变化率环形窗口与两条速率的 EMA（初始化/重新采基线时调用）。
- * 参数  ：p_pipe 流水线句柄。
- * 返回  ：无。
- * 边界  ：同时清结构体里的 EC 历史与文件内静态的浊度历史；只在"基线换了"或
- *         "初始化"时调用，不影响正常 tick。
- * 注意  ：重新采基线后旧的 Δ 历史没有意义（旧基线与新基线的 Δ 基准不同），
- *         必须作废，否则会拿旧基线的斜率去触发新基线的变化率抢先。
- */
+/* 清空变化率环形窗口与两条速率的 EMA（初始化/重新采基线时调用）。 返回：无。 边界  ：同时清结构体里的 EC 历史与文件内静态的浊度历史；只在"基线换了"或 "初始化"时调用，不影响正常 tick。
+ * 注意：重新采基线后旧的 Δ 历史没有意义（旧基线与新基线的 Δ 基准不同）， 必须作废，否则会拿旧基线的斜率去触发新基线的变化率抢先。 */
 static void pipeline_rate_reset(sensor_pipeline_t *p_pipe)
 {
     uint8_t i;
@@ -455,19 +383,9 @@ static void pipeline_rate_reset(sensor_pipeline_t *p_pipe)
     p_pipe->rate_ntu_ema = 0.0f;
 }
 
-/*
- * 函数名：pipeline_rate_slope
- * 作用  ：对环形窗口内的 (t, Δ) 点做最小二乘直线拟合，求斜率（mV/s）。
- * 参数  ：p_values Δ 历史数组；p_times 时间历史数组；len 有效点数；
- *         oldest 最旧点索引；now_ms 当前时刻（最新点的时间）；
- *         p_slope 斜率输出（非 NULL）。
- * 返回  ：true=本 tick 有可信斜率；false=点数不足 2 / 时间跨度 <150 ms / 分母为 0，
- *         此时调用者保持上一次的速率值（或 0）。
- * 边界  ：时间用"相对最新时刻的负秒"表示：一是无符号毫秒回绕安全（now-t 是模运算），
- *         二是避免把 32 位绝对毫秒转成大浮点数后与毫秒差相减的精度损失。
- * 注意  ：用最小二乘而不是首尾两点差分：8 个点都参与平均，斜率噪声明显更小；
- *         两遍 O(8) 循环，不需要额外数组或动态内存。
- */
+/* 对环形窗口内的 (t, Δ) 点做最小二乘直线拟合，求斜率（mV/s）。
+ * 参数：p_values Δ 历史数组；p_times 时间历史数组；len 有效点数； oldest 最旧点索引；now_ms 当前时刻（最新点的时间）； p_slope 斜率输出（非 NULL）。
+ * 注意：用最小二乘而不是首尾两点差分：8 个点都参与平均，斜率噪声明显更小； 两遍 O(8) 循环，不需要额外数组或动态内存。 */
 static bool pipeline_rate_slope(const float *p_values, const uint32_t *p_times,
                                 uint8_t len, uint8_t oldest, uint32_t now_ms, float *p_slope)
 {
@@ -527,17 +445,8 @@ static bool pipeline_rate_slope(const float *p_values, const uint32_t *p_times,
     return true;
 }
 
-/*
- * 函数名：pipeline_rate_update
- * 作用  ：把本 tick 的 ΔEC / ΔNTU 压入 8 点环形窗口，分别算两条变化率并做 EMA 平滑，
- *         结果写入 out.ec_rate_mv_s / out.ntu_rate_mv_s。
- * 参数  ：p_pipe 流水线句柄；now_ms 本 tick 的时刻。
- * 返回  ：无。
- * 边界  ：窗口未满 8 点或跨度 <150 ms 时，out 里的速率保持上一次值（首次为 0）。
- * 注意  ：EC 历史存结构体 rate_d（接口契约给的唯一 Δ 数组），浊度历史存文件内
- *         静态数组（见文件头"实现备注"），两者与 rate_t 共用同一环形索引；
- *         rate_pos 指向"下一个写入位"，最旧点由 (pos - len) 取模得到。
- */
+/* 把本 tick 的 ΔEC / ΔNTU 压入 8 点环形窗口，分别算两条变化率并做 EMA 平滑， 结果写入 out.ec_rate_mv_s / out.ntu_rate_mv_s。
+ * 注意：EC 历史存结构体 rate_d（接口契约给的唯一 Δ 数组），浊度历史存文件内 静态数组（见文件头"实现备注"），两者与 rate_t 共用同一环形索引； rate_pos 指向"下一个写入位"，最旧点由 (pos - len) 取模得到。 */
 static void pipeline_rate_update(sensor_pipeline_t *p_pipe, uint32_t now_ms)
 {
     uint8_t pos;
@@ -573,19 +482,8 @@ static void pipeline_rate_update(sensor_pipeline_t *p_pipe, uint32_t now_ms)
     p_pipe->out.ntu_rate_mv_s = p_pipe->rate_ntu_ema;
 }
 
-/*
- * 函数名：pipeline_baseline_finish
- * 作用  ：基线采满 baseline_n 点后结算：均值 EC0 / NTU0、n-1 样本标准差 σ（带下限）、
- *         有效性判定、EMA 重置，并置 baseline_updated（只在这一 tick 为 true）。
- * 参数  ：p_pipe 流水线句柄（base_*_sum / baseline_count 已累计满）。
- * 返回  ：无。
- * 边界  ：n<2 时无法估计标准差，σ 直接取配置下限（防阈值退化为 0）；均值 <0 等
- *         异常值按无效基线处理；只有 EC0 有效时才把 EMA 重置到基线值。
- * 注意  ：σ 用"中值后、EMA 前"的每 tick 样本统计——比 EMA 后的噪声略大，判据偏保守；
- *         基线有效条件只看 EC0（主判据）：EC0 < 50 mV 视为模块未供电/探头悬空/接地，
- *         此时整个基线与特征都不可用。有效基线才重置 EMA，无效时保持当前滤波状态，
- *         避免把悬空伪值当成滤波起点。
- */
+/* 基线采满 baseline_n 点后结算：均值 EC0 / NTU0、n-1 样本标准差 σ（带下限）、 有效性判定、EMA 重置，并置 baseline_updated（只在这一 tick 为 true）。
+ * 注意：σ 用"中值后、EMA 前"的每 tick 样本统计——比 EMA 后的噪声略大，判据偏保守； 基线有效条件只看 EC0（主判据）：EC0 < 50 mV 视为模块未供电/探头悬空/接地， 此时整个基线与特征都不可用。有效基线才重置 EMA，无效时保持当前滤波状态， 避免把悬空伪值当成滤波起点。 */
 static void pipeline_baseline_finish(sensor_pipeline_t *p_pipe)
 {
     pipeline_out_t *p_out = &p_pipe->out;
@@ -674,18 +572,8 @@ static void pipeline_baseline_finish(sensor_pipeline_t *p_pipe)
     }
 }
 
-/*
- * 函数名：pipeline_features_update
- * 作用  ：由 EMA 后的 mv25 / AO 与本底 EC0 / NTU0 计算全部相对特征与变化率占位。
- * 参数  ：p_pipe 流水线句柄。
- * 返回  ：无。
- * 边界  ：基线无效时所有相对特征与速率清 0（上层只看 baseline_valid/note，不会误用）；
- *         EC0 有效但 NTU0 为 0（浊度模块未接）时百分比置 0 防除零。
- * 注意  ：ΔEC 用 mv25(EMA)-EC0；g 用同一个 EMA 值（与 d_ec 自洽：g-1 ≈ d_ec_pct/100）；
- *         方向归一化：默认 ntu_clear_high=true（清水 AO 电压高、越脏越低）时
- *         ΔNTU = NTU0-AO，反相批次保持"清水电压低"则 ΔNTU = AO-NTU0，
- *         这样 >0 恒表示"比基线更脏"，判别层不用关心模块批次方向。
- */
+/* 由 EMA 后的 mv25 / AO 与本底 EC0 / NTU0 计算全部相对特征与变化率占位。
+ * 注意：ΔEC 用 mv25(EMA)-EC0；g 用同一个 EMA 值（与 d_ec 自洽：g-1 ≈ d_ec_pct/100）； 方向归一化：默认 ntu_clear_high=true（清水 AO 电压高、越脏越低）时 ΔNTU = NTU0-AO，反相批次保持"清水电压低"则 ΔNTU = AO-NTU0， 这样 >0 恒表示"比基线更脏"，判别层不用关心模块批次方向。 */
 static void pipeline_features_update(sensor_pipeline_t *p_pipe)
 {
     pipeline_out_t *p_out = &p_pipe->out;
@@ -740,19 +628,11 @@ static void pipeline_features_update(sensor_pipeline_t *p_pipe)
 
 /* ---------- 公共接口 ---------- */
 
-/*
- * 函数名：pipeline_init
- * 作用  ：初始化流水线句柄：清零状态、拷贝并限幅配置、初始化下游 TDS / TS-300B 驱动、
- *         建立"无基线"的初始输出（此时 note=NO_BASE，判别层按安全侧处理）。
- * 参数  ：p_pipe 由 app_main 分配的流水线句柄（非 NULL）；
- *         p_cfg  配置（非 NULL；内部拷贝一份，之后 app 再改自己的副本不影响本模块）。
- * 返回  ：无（void）。p_pipe / p_cfg 为 NULL 时直接返回。
- * 时序  ：必须在 R_ADC_Open + R_ADC_ScanCfg 之后、第一次 pipeline_sample 之前调用；
- *         DS18B20 温度可以稍后再接上（水温默认 25 ℃，由 pipeline_set_water_temp 更新）。
- * 注意  ：句柄整体清零是为了杜绝"结构体里的脏值被当成早期输出"；随后显式给
- *         状态/水温/note 赋初值。ADC 回调里必须调用 pipeline_on_adc_complete()，
- *         否则首次 pipeline_sample 会等超时。
- */
+/* 初始化流水线句柄：清零状态、拷贝并限幅配置、初始化下游 TDS / TS-300B 驱动、 建立"无基线"的初始输出（此时 note=NO_BASE，判别层按安全侧处理）。
+ * 参数：p_pipe 由 app_main 分配的流水线句柄（非 NULL）； p_cfg  配置（非 NULL；内部拷贝一份，之后 app 再改自己的副本不影响本模块）。
+ * 返回：无（void）。p_pipe / p_cfg 为 NULL 时直接返回。
+ * 时序/边界：必须在 R_ADC_Open + R_ADC_ScanCfg 之后、第一次 pipeline_sample 之前调用； DS18B20 温度可以稍后再接上（水温默认 25 ℃，由 pipeline_set_water_temp 更新）。
+ * 注意：句柄整体清零是为了杜绝"结构体里的脏值被当成早期输出"；随后显式给 状态/水温/note 赋初值。ADC 回调里必须调用 pipeline_on_adc_complete()， 否则首次 pipeline_sample 会等超时。 */
 void pipeline_init(sensor_pipeline_t *p_pipe, const pipeline_cfg_t *p_cfg)
 {
     uint8_t i;
@@ -816,34 +696,17 @@ void pipeline_init(sensor_pipeline_t *p_pipe, const pipeline_cfg_t *p_cfg)
     p_pipe->initialized = true;
 }
 
-/*
- * 函数名：pipeline_on_adc_complete
- * 作用  ：ADC 扫描完成通知：只置位文件内的完成标志。
- * 参数  ：无。
- * 返回  ：无。
- * 时序  ：由 app_main 的 adc_callback（ADC_EVENT_SCAN_COMPLETE）在中断上下文调用；
- *         主循环 pipeline_adc_read_pair 在启动扫描前清标志、随后轮询。
- * 注意  ：ISR 里只做一次 volatile 赋值：不调用 FSP 读函数、不打印、不加锁，
- *         保证中断尽快返回；真正的 R_ADC_Read 由主循环在标志置位后完成。
- */
+/* ADC 扫描完成通知：只置位文件内的完成标志。
+ * 时序/边界：由 app_main 的 adc_callback（ADC_EVENT_SCAN_COMPLETE）在中断上下文调用； 主循环 pipeline_adc_read_pair 在启动扫描前清标志、随后轮询。
+ * 注意：ISR 里只做一次 volatile 赋值：不调用 FSP 读函数、不打印、不加锁， 保证中断尽快返回；真正的 R_ADC_Read 由主循环在标志置位后完成。 */
 void pipeline_on_adc_complete(void)
 {
     g_adc_scan_done = true;
 }
 
-/*
- * 函数名：pipeline_baseline_begin
- * 作用  ：开始（或重新开始）一次基线采集：清计数与累加和、立即作废旧基线、清变化率历史。
- * 参数  ：p_pipe 流水线句柄；now_ms 当前时刻。
- * 返回  ：无。
- * 时序  ：上电 pipeline_init 之后、以及串口命令 B（探头须浸在本底水中）时调用；
- *         之后每个 tick 的 pipeline_sample 累计 1 个样本，采满 baseline_n 点自动结算。
- * 注意  ：now_ms 当前不参与计算（结构体里没有存"采集开始时刻"的字段），保留该参数
- *         是为了与接口契约一致、并为将来打印"# BASELINE start"日志留位置；日志时间戳
- *         由 app_main 用自己的 now_ms 打印。
- *         旧基线在重新采集期间立即作废（baseline_valid=false）：宁可 1 s 排空，也不用
- *         "半新半旧"的基线做判别；采满后新基线一次性启用。
- */
+/* 开始（或重新开始）一次基线采集：清计数与累加和、立即作废旧基线、清变化率历史。
+ * 时序/边界：上电 pipeline_init 之后、以及串口命令 B（探头须浸在本底水中）时调用； 之后每个 tick 的 pipeline_sample 累计 1 个样本，采满 baseline_n 点自动结算。
+ * 注意：now_ms 当前不参与计算（结构体里没有存"采集开始时刻"的字段），保留该参数 是为了与接口契约一致、并为将来打印"# BASELINE start"日志留位置；日志时间戳 由 app_main 用自己的 now_ms 打印。 旧基线在重新采集期间立即作废（baseline_valid=false）：宁可 1 s 排空，也不用 "半新半旧"的基线做判别；采满后新基线一次性启用。 */
 void pipeline_baseline_begin(sensor_pipeline_t *p_pipe, uint32_t now_ms)
 {
     (void) now_ms;
@@ -882,14 +745,8 @@ void pipeline_baseline_begin(sensor_pipeline_t *p_pipe, uint32_t now_ms)
     pipeline_note_set(p_pipe->out.note, (uint32_t) sizeof(p_pipe->out.note), "NO_BASE");
 }
 
-/*
- * 函数名：pipeline_baseline_capturing
- * 作用  ：查询是否正在采集基线（app 用来打印进度/避免重复触发）。
- * 参数  ：p_pipe 流水线句柄。
- * 返回  ：true=正在采集；false=未采集或句柄为 NULL。
- * 边界  ：只读，不修改状态；可在任意上下文调用。
- * 注意  ：采集完成后本函数返回 false，结果看 out.baseline_updated / baseline_valid。
- */
+/* 查询是否正在采集基线（app 用来打印进度/避免重复触发）。 返回：true=正在采集；false=未采集或句柄为 NULL。 边界  ：只读，不修改状态；可在任意上下文调用。
+ * 注意：采集完成后本函数返回 false，结果看 out.baseline_updated / baseline_valid。 */
 bool pipeline_baseline_capturing(const sensor_pipeline_t *p_pipe)
 {
     if (NULL == p_pipe)
@@ -899,17 +756,9 @@ bool pipeline_baseline_capturing(const sensor_pipeline_t *p_pipe)
     return p_pipe->baseline_capturing;
 }
 
-/*
- * 函数名：pipeline_invalidate_baseline
- * 作用：作废当前基线（保留 ec0 供诊断，但 baseline_valid=false、相对特征清零）。
- * 参数：p_pipe —— 流水线句柄；p_note —— 作废原因静态串（NULL 时用 "CLEARED"）。
- * 返回：无。
- * 时序/边界：命令 Z、以及 W 采集完成后"EC0 < 3×干态"等校验失败时调用；
- *             下一 tick 起 decision 的工况会离开 MEASURE（安全侧）。
- * 注意：与 pipeline_baseline_begin 的区别——后者重新开始采集，本函数只作废；
- *       作废原因写进 note（BASE_LOW / BASE_HIGH / BASE_NOISY / CLEARED），
- *       现场一眼能区分"没标定"与"标定了但条件不对"。
- */
+/* 作废当前基线（保留 ec0 供诊断，但 baseline_valid=false、相对特征清零）。 参数：p_pipe —— 流水线句柄；p_note —— 作废原因静态串（NULL 时用 "CLEARED"）。
+ * 时序/边界：命令 Z、以及 W 采集完成后"EC0 < 3×干态"等校验失败时调用； 下一 tick 起 decision 的工况会离开 MEASURE（安全侧）。
+ * 注意：与 pipeline_baseline_begin 的区别——后者重新开始采集，本函数只作废； 作废原因写进 note（BASE_LOW / BASE_HIGH / BASE_NOISY / CLEARED）， 现场一眼能区分"没标定"与"标定了但条件不对"。 */
 void pipeline_invalidate_baseline(sensor_pipeline_t *p_pipe, const char *p_note)
 {
     pipeline_out_t *p_out;
@@ -1034,15 +883,9 @@ void pipeline_baseline_trim_active(sensor_pipeline_t *p_pipe, float target_ec_mv
         return;
     }
 
-    delta = target_ec_mv - p_pipe->out.ec0_mv25;
-    if (delta > max_step_mv)
-    {
-        delta = max_step_mv;
-    }
-    else if (delta < -max_step_mv)
-    {
-        delta = -max_step_mv;
-    }
+    /* 单 tick 限幅到 ±max_step：两参都是有限值（上面已挡掉 NaN/非正），
+     * 与原来手写的 ">max / <-max" 两行 if 逐值等价。 */
+    delta = sensor_clampf(target_ec_mv - p_pipe->out.ec0_mv25, -max_step_mv, max_step_mv);
 
     p_pipe->out.ec0_mv25 += delta;
     p_pipe->slots[p_pipe->active_slot].ec0_mv25 = p_pipe->out.ec0_mv25;
@@ -1058,16 +901,7 @@ void pipeline_baseline_clear_slots(sensor_pipeline_t *p_pipe)
     p_pipe->active_slot = 0U;
 }
 
-/*
- * 函数名：pipeline_set_water_temp
- * 作用  ：保存本 tick 使用的水温与来源，供下一次 pipeline_sample 做 TDS 温补。
- * 参数  ：p_pipe 流水线句柄；temp_c 水温（℃）；from_sensor=true 表示来自 DS18B20
- *         实测，false 表示手输/兜底（CSV 的 src 列据此区分）。
- * 返回  ：无。
- * 边界  ：温度先挡掉 NaN，再限幅到 [-20, 80] ℃（与 DS18B20 量程一致）：
- *         异常值不会污染 mV25；限幅后仍会写进 out，方便 CSV 追溯。
- * 注意  ：本函数只"保存"，不立刻重算特征；下一个 tick 生效（tick 50 ms，延迟可忽略）。
- */
+/* 保存本 tick 使用的水温与来源，供下一次 pipeline_sample 做 TDS 温补。 注意：本函数只"保存"，不立刻重算特征；下一个 tick 生效（tick 50 ms，延迟可忽略）。 */
 void pipeline_set_water_temp(sensor_pipeline_t *p_pipe, float temp_c, bool from_sensor)
 {
     float t = temp_c;
@@ -1092,20 +926,9 @@ void pipeline_set_water_temp(sensor_pipeline_t *p_pipe, float temp_c, bool from_
     p_pipe->out.water_temp_from_sensor = from_sensor;
 }
 
-/*
- * 函数名：pipeline_sample
- * 作用  ：执行一个 tick 的完整流水线（采样 → 换算 → EMA → 基线累计/结算 → 相对特征 →
- *         变化率 → note），结果写入句柄内的 out。
- * 参数  ：p_pipe 流水线句柄；now_ms 本 tick 的时刻（变化率窗口与"无符号回绕安全"用）。
- * 返回  ：true=本 tick ADC 采集成功（特征已更新）；false=ADC 超时/启动失败/驱动异常
- *         （out.adc_timeout=true、status 置 SENSOR_ERR_TIMEOUT、note=ADC_TIMEOUT）。
- * 时序  ：由 app_main 主循环每 50 ms 调用一次；内部会阻塞等待 ADC 完成（毫秒级上限），
- *         不能从中断调用。
- * 边界  ：p_pipe 为 NULL 或未 pipeline_init 时返回 false 且不写 out（调用前必须初始化）；
- *         基线采集期间每个样本只收"两路都 SENSOR_OK"的 tick，故障样本不推进进度。
- * 注意  ：超时 tick 不更新 EMA/基线/变化率，只清原始量并打故障标记；判别层看到
- *         adc_timeout 就应走安全侧（L1 排空），不得使用保留的旧特征做判断。
- */
+/* 执行一个 tick 的完整流水线（采样 → 换算 → EMA → 基线累计/结算 → 相对特征 → 变化率 → note），结果写入句柄内的 out。
+ * 时序/边界：由 app_main 主循环每 50 ms 调用一次；内部会阻塞等待 ADC 完成（毫秒级上限）， 不能从中断调用。 边界  ：p_pipe 为 NULL 或未 pipeline_init 时返回 false 且不写 out（调用前必须初始化）； 基线采集期间每个样本只收"两路都 SENSOR_OK"的 tick，故障样本不推进进度。
+ * 注意：超时 tick 不更新 EMA/基线/变化率，只清原始量并打故障标记；判别层看到 adc_timeout 就应走安全侧（L1 排空），不得使用保留的旧特征做判断。 */
 bool pipeline_sample(sensor_pipeline_t *p_pipe, uint32_t now_ms)
 {
     pipeline_out_t   *p_out;
@@ -1223,15 +1046,9 @@ bool pipeline_sample(sensor_pipeline_t *p_pipe, uint32_t now_ms)
     return true;
 }
 
-/*
- * 函数名：pipeline_get_out
- * 作用  ：返回最近一次输出的只读指针（app 打印 CSV / decision 读特征都走这里）。
- * 参数  ：p_pipe 流水线句柄。
- * 返回  ：&p_pipe->out；p_pipe 为 NULL 时返回 NULL。
- * 边界  ：只读指针，调用者不得修改；指针在句柄生命周期内有效（内部不动态分配）。
- * 注意  ：必须在 pipeline_init 之后调用（初始化前 out 内容未定义）；
- *         数据是"最近一个 tick"的快照，跨 tick 使用请自行拷贝需要保留的字段。
- */
+/* 返回最近一次输出的只读指针（app 打印 CSV / decision 读特征都走这里）。
+ * 返回：&p_pipe->out；p_pipe 为 NULL 时返回 NULL。 边界  ：只读指针，调用者不得修改；指针在句柄生命周期内有效（内部不动态分配）。
+ * 注意：必须在 pipeline_init 之后调用（初始化前 out 内容未定义）； 数据是"最近一个 tick"的快照，跨 tick 使用请自行拷贝需要保留的字段。 */
 const pipeline_out_t *pipeline_get_out(const sensor_pipeline_t *p_pipe)
 {
     if (NULL == p_pipe)

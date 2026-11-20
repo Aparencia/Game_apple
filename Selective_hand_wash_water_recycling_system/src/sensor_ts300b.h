@@ -1,11 +1,4 @@
 /*
- * sensor_ts300b.h
- *
- *  Created on: 2026年10月30日
- *      Author: Administrator
- */
-
-/*
  * sensor_ts300b.h —— TS-300B 模拟浊度模块（与 DFRobot SEN0189 同类）
  * ---------------------------------------------------------------------------
  * 模块电气事实（硬件方案 §4.3）：
@@ -61,4 +54,3 @@ sensor_status_t ts300b_convert(uint16_t raw_adc, ts300b_reading_t *p_out);
 }
 #endif
 #endif /* SENSOR_TS300B_H */
-

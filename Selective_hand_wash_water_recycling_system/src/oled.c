@@ -1,10 +1,3 @@
-/*
- * oled.c
- *
- *  Created on: 2026年10月30日
- *      Author: Administrator
- */
-
 
 
 
@@ -109,14 +102,8 @@ static uint8_t g_oled_data_buf[OLED_DATA_BUF_SIZE];
 
 /* ============================ I2C 底层 ============================ */
 
-/*
- * 函数名：i2c_master_callback
- * 作用：FSP IIC Master 完成/异常回调（RASC 里 Callback 必须配成这个名字）。
- * 参数：p_args —— 事件参数；event=TX_COMPLETE 表示本帧发送完成，ABORTED 表示异常中止。
- * 返回：无。
- * 时序/边界：中断上下文调用；只记录事件并置完成标志，绝不在中断里打印/延时。
- * 注意：本回调是"整帧"级别的；oled_flush 用 g_oled_tx_done 轮询等待。
- */
+/* FSP IIC Master 完成/异常回调（RASC 里 Callback 必须配成这个名字）。 时序/边界：中断上下文调用；只记录事件并置完成标志，绝不在中断里打印/延时。
+ * 注意：本回调是"整帧"级别的；oled_flush 用 g_oled_tx_done 轮询等待。 */
 void i2c_master_callback(i2c_master_callback_args_t *p_args)
 {
     if (NULL != p_args)
@@ -130,15 +117,8 @@ void i2c_master_callback(i2c_master_callback_args_t *p_args)
     g_oled_tx_done = true;
 }
 
-/*
- * 函数名：oled_i2c_write
- * 作用：发起一次 I2C 写并等待整帧完成（有硬超时，不死等）。
- * 参数：p_buf/len —— 待发送字节（首字节是控制字 0x00 或 0x40）。
- * 返回：true=TX_COMPLETE；false=驱动报错/超时/被中止。
- * 时序/边界：单帧 133 字节 @400 kHz 约 3 ms；等待上限 30 ms。
- * 注意：失败后不清 g_oled_ready（上层按连续失败帧数判丢失），也不重试——
- *       重试会拉长主循环阻塞时间，交给下一帧自然重试（脏页位保留）。
- */
+/* 发起一次 I2C 写并等待整帧完成（有硬超时，不死等）。 时序/边界：单帧 133 字节 @400 kHz 约 3 ms；等待上限 30 ms。
+ * 注意：失败后不清 g_oled_ready（上层按连续失败帧数判丢失），也不重试—— 重试会拉长主循环阻塞时间，交给下一帧自然重试（脏页位保留）。 */
 static bool oled_i2c_write(const uint8_t *p_buf, uint32_t len)
 {
     fsp_err_t err;
@@ -180,14 +160,8 @@ static bool oled_i2c_write(const uint8_t *p_buf, uint32_t len)
     return (I2C_MASTER_EVENT_TX_COMPLETE == g_oled_tx_event);
 }
 
-/*
- * 函数名：oled_write_cmd
- * 作用：发一条 SSD1306 命令（控制字 0x00 + 1 字节命令）。
- * 参数：cmd —— 命令字节。
- * 返回：true=发送成功。
- * 时序/边界：约 0.1 ms/条；初始化序列共 25 条约 3 ms。
- * 注意：只用于初始化与页地址设置；显存数据用 oled_write_page。
- */
+/* 发一条 SSD1306 命令（控制字 0x00 + 1 字节命令）。 时序/边界：约 0.1 ms/条；初始化序列共 25 条约 3 ms。
+ * 注意：只用于初始化与页地址设置；显存数据用 oled_write_page。 */
 static bool oled_write_cmd(uint8_t cmd)
 {
     uint8_t buf[2];
@@ -197,14 +171,7 @@ static bool oled_write_cmd(uint8_t cmd)
     return oled_i2c_write(buf, 2U);
 }
 
-/*
- * 函数名：oled_flush_page
- * 作用：把显存第 page 页写到屏幕。
- * 参数：page —— 0~7。
- * 返回：true=成功（清该页脏位）；false=失败（保留脏位，等下一帧重试）。
- * 时序/边界：两次传输（4 字节命令 + 129 字节数据），约 3 ms。
- * 注意：页地址命令必须连续设置 B0/p、低列 0x00、高列 0x10，否则列指针会错位。
- */
+/* 把显存第 page 页写到屏幕。 时序/边界：两次传输（4 字节命令 + 129 字节数据），约 3 ms。 注意：页地址命令必须连续设置 B0/p、低列 0x00、高列 0x10，否则列指针会错位。 */
 static bool oled_flush_page(uint8_t page)
 {
     if (page >= OLED_PAGE_COUNT)
@@ -230,21 +197,12 @@ static bool oled_flush_page(uint8_t page)
 
 /* ============================ 对外初始化 ============================ */
 
-/*
- * 函数名：oled_init
- * 作用：打开 I2C0、上电延时、初始化 SSD1306、清屏并点亮。
- * 参数：无。
- * 返回：true=成功；false=失败（上层只打印 WARN，继续用串口）。
- * 时序/边界：约 130 ms（100 ms 上电延时 + 初始化命令 + 清屏 8 页）；
- *             必须在 UART 初始化之后调用，保证失败信息打得出。
- * 注意：上电延时 100 ms 是必要的——OLED 的电荷泵/复位需要稳定时间，
- *       太早发初始化命令会出现"花屏/半亮"的经典现象。
- */
+/* 打开 I2C0、上电延时、初始化 SSD1306、清屏并点亮。 时序/边界：约 130 ms（100 ms 上电延时 + 初始化命令 + 清屏 8 页）； 必须在 UART 初始化之后调用，保证失败信息打得出。
+ * 注意：上电延时 100 ms 是必要的——OLED 的电荷泵/复位需要稳定时间， 太早发初始化命令会出现"花屏/半亮"的经典现象。 */
 bool oled_init(void)
 {
     fsp_err_t err;
     uint32_t  i;
-    bool      ok = true;
 
     g_oled_ready      = false;
     g_oled_lost       = false;
@@ -276,14 +234,8 @@ bool oled_init(void)
     {
         if (!oled_write_cmd(g_oled_init_cmds[i]))
         {
-            ok = false;
-            break;
+            return false;
         }
-    }
-
-    if (!ok)
-    {
-        return false;
     }
 
     /* 5) 清屏：显存清零 + 8 页全标脏 → 全屏刷黑，避免上电显存随机内容。 */
@@ -303,11 +255,6 @@ bool oled_ready(void)
     return g_oled_ready;
 }
 
-bool oled_lost(void)
-{
-    return g_oled_lost;
-}
-
 /* ============================ 显存绘图 ============================ */
 
 /* 把 (x, y) 所在页标脏。 */
@@ -322,49 +269,71 @@ void oled_clear(void)
     g_oled_dirty = (uint8_t)((1U << OLED_PAGE_COUNT) - 1U);   /* 8 页全脏 */
 }
 
-void oled_draw_pixel(uint8_t x, uint8_t y, bool on)
+/* 显存填充矩形：逐页把落在本页的行折成位掩码，再按字节整段置位/清零（无逐点调用）。
+ * 参数：x/y/w/h —— 逻辑坐标与尺寸（越界部分裁掉）；on —— true 点亮 / false 熄灭。
+ * 时序/边界：O(页数 * 宽) 次字节操作，无 I2C。 注意：只改显存 + 脏页位；裁剪后为空的矩形不置脏页位。 */
+void oled_fill_rect(uint8_t x, uint8_t y, uint8_t w, uint8_t h, bool on)
 {
+    uint8_t first_page;
+    uint8_t last_page;
     uint8_t page;
     uint8_t mask;
+    uint8_t xx;
 
-    if ((x >= OLED_WIDTH) || (y >= OLED_HEIGHT))
+    if ((0U == w) || (0U == h) || (x >= OLED_WIDTH) || (y >= OLED_HEIGHT))
     {
         return;
     }
-
-    page = (uint8_t)(y >> 3);
-    mask = (uint8_t)(1U << (y & 7U));
-    if (on)
+    if (((uint16_t)x + (uint16_t)w) > (uint16_t)OLED_WIDTH)
     {
-        g_oled_gram[page][x] |= mask;
+        w = (uint8_t)(OLED_WIDTH - x);
     }
-    else
+    if (((uint16_t)y + (uint16_t)h) > (uint16_t)OLED_HEIGHT)
     {
-        g_oled_gram[page][x] &= (uint8_t)(~mask);
+        h = (uint8_t)(OLED_HEIGHT - y);
     }
-    oled_mark_page(y);
-}
 
-void oled_fill_rect(uint8_t x, uint8_t y, uint8_t w, uint8_t h, bool on)
-{
-    uint8_t xx;
-    uint8_t yy;
-
-    for (yy = y; (yy < OLED_HEIGHT) && ((uint16_t)yy < ((uint16_t)y + h)); yy++)
+    first_page = (uint8_t)(y >> 3);
+    last_page  = (uint8_t)((y + h - 1U) >> 3);
+    for (page = first_page; page <= last_page; page++)
     {
-        for (xx = x; (xx < OLED_WIDTH) && ((uint16_t)xx < ((uint16_t)x + w)); xx++)
+        /* 本页覆盖的行位图：首页削掉上方行，末页削掉下方行，中间页整页点亮。 */
+        mask = 0xFFU;
+        if (page == first_page)
         {
-            oled_draw_pixel(xx, yy, on);
+            mask = (uint8_t)(0xFFU << (y & 7U));
         }
+        if (page == last_page)
+        {
+            mask = (uint8_t)(mask & (uint8_t)(0xFFU >> (7U - ((y + h - 1U) & 7U))));
+        }
+        for (xx = x; xx < (uint8_t)(x + w); xx++)
+        {
+            if (on)
+            {
+                g_oled_gram[page][xx] |= mask;
+            }
+            else
+            {
+                g_oled_gram[page][xx] &= (uint8_t)(~mask);
+            }
+        }
+        oled_mark_page((uint8_t)(page * 8U));
     }
 }
 
-void oled_text_6x8(uint8_t x, uint8_t y, const char *p_text)
+/* 文本渲染公共实现：w = 字宽（6 或 8），pages = 占用页数（1 或 2）。
+ * 参数：x/y —— 起点（y 必须 8 像素对齐）；p_text —— '\0' 结尾（NULL 视为空串）。
+ * 时序/边界：页越界直接返回；x 放不下就截断（不折行）；非可打印 ASCII 按空格画。
+ * 注意：6x8 与 8x16 只差字宽/页数/字模表，故共用一条路径；每字符只置涉及的脏页位。 */
+static void oled_text_run(uint8_t x, uint8_t y, uint8_t w, uint8_t pages, const char *p_text)
 {
     uint8_t page;
     uint8_t cx;
     uint8_t code;
+    uint8_t p;
     uint8_t col;
+    const uint8_t *p_table;
 
     if (NULL == p_text)
     {
@@ -373,7 +342,7 @@ void oled_text_6x8(uint8_t x, uint8_t y, const char *p_text)
 
     /* 只支持 8 像素对齐：不做跨页移位，保证实现简单、时序可控（文档已约定）。 */
     page = (uint8_t)(y >> 3);
-    if (page >= OLED_PAGE_COUNT)
+    if (((uint16_t)page + (uint16_t)pages) > (uint16_t)OLED_PAGE_COUNT)
     {
         return;
     }
@@ -389,66 +358,36 @@ void oled_text_6x8(uint8_t x, uint8_t y, const char *p_text)
             code = (uint8_t)' ';   /* 非可打印 ASCII 按空格处理，避免读越界 */
         }
 
-        if ((uint16_t)cx + 6U > OLED_WIDTH)
+        if (((uint16_t)cx + (uint16_t)w) > (uint16_t)OLED_WIDTH)
         {
             break;                 /* 行尾放不下：截断，不折行 */
         }
 
-        for (col = 0U; col < 6U; col++)
+        /* 字模布局：每页 w 字节（8x16 前 8 字节 = 上半，后 8 字节 = 下半，见 oledfont.h）。 */
+        p_table = (1 == (int)pages) ? &oled_asc6x8[code - OLED_FONT_FIRST_ASCII][0]
+                                    : &oled_asc8x16[code - OLED_FONT_FIRST_ASCII][0];
+        for (p = 0U; p < pages; p++)
         {
-            g_oled_gram[page][cx + col] = oled_asc6x8[code - OLED_FONT_FIRST_ASCII][col];
+            const uint8_t *p_glyph = p_table + ((uint16_t)p * (uint16_t)w);
+
+            for (col = 0U; col < w; col++)
+            {
+                g_oled_gram[page + p][cx + col] = p_glyph[col];
+            }
+            oled_mark_page((uint8_t)(y + (uint8_t)(p * 8U)));
         }
-        oled_mark_page(y);
-        cx = (uint8_t)(cx + 6U);
+        cx = (uint8_t)(cx + w);
     }
+}
+
+void oled_text_6x8(uint8_t x, uint8_t y, const char *p_text)
+{
+    oled_text_run(x, y, 6U, 1U, p_text);
 }
 
 void oled_text_8x16(uint8_t x, uint8_t y, const char *p_text)
 {
-    uint8_t page;
-    uint8_t cx;
-    uint8_t code;
-    uint8_t col;
-    const uint8_t *p_glyph;
-
-    if (NULL == p_text)
-    {
-        return;
-    }
-
-    page = (uint8_t)(y >> 3);
-    if ((page + 1U) >= OLED_PAGE_COUNT)
-    {
-        return;
-    }
-
-    cx = x;
-    while ('\0' != *p_text)
-    {
-        code = (uint8_t)*p_text;
-        p_text++;
-
-        if ((code < OLED_FONT_FIRST_ASCII) || (code >= (OLED_FONT_FIRST_ASCII + OLED_FONT_ASCII_COUNT)))
-        {
-            code = (uint8_t)' ';
-        }
-
-        if ((uint16_t)cx + 8U > OLED_WIDTH)
-        {
-            break;
-        }
-
-        /* 8x16 字模格式：前 8 字节 = 上半 8 列，后 8 字节 = 下半 8 列（见 oledfont.h）。 */
-        p_glyph = oled_asc8x16[code - OLED_FONT_FIRST_ASCII];
-        for (col = 0U; col < 8U; col++)
-        {
-            g_oled_gram[page][cx + col]     = p_glyph[col];
-            g_oled_gram[page + 1U][cx + col] = p_glyph[col + 8U];
-        }
-        oled_mark_page(y);
-        oled_mark_page((uint8_t)(y + 8U));
-        cx = (uint8_t)(cx + 8U);
-    }
+    oled_text_run(x, y, 8U, 2U, p_text);
 }
 
 void oled_hz32(uint8_t x, uint8_t y, oled_hz32_id_t id, bool inverse)
@@ -493,7 +432,6 @@ void oled_hz32(uint8_t x, uint8_t y, oled_hz32_id_t id, bool inverse)
 bool oled_flush(void)
 {
     uint8_t page;
-    bool    ok = true;
 
     if (!g_oled_ready || g_oled_lost)
     {
@@ -509,22 +447,17 @@ bool oled_flush(void)
 
         if (!oled_flush_page(page))
         {
-            ok = false;
-            break;   /* 先停：I2C 异常时连续重试只会拖长主循环阻塞 */
+            /* 先停：I2C 异常时连续重试只会拖长主循环阻塞；脏页位保留，下一帧自然重试。 */
+            g_oled_fail_count++;
+            if (g_oled_fail_count >= OLED_MAX_FAIL)
+            {
+                /* 连续失败达到阈值：判"屏幕丢失"，以后刷新直接返回 false，不再占用主循环。 */
+                g_oled_lost  = true;
+                g_oled_ready = false;
+            }
+            return false;
         }
         g_oled_dirty &= (uint8_t)(~(uint8_t)(1U << page));
-    }
-
-    if (!ok)
-    {
-        g_oled_fail_count++;
-        if (g_oled_fail_count >= OLED_MAX_FAIL)
-        {
-            /* 连续失败达到阈值：判"屏幕丢失"，以后刷新直接返回 false，不再占用主循环。 */
-            g_oled_lost  = true;
-            g_oled_ready = false;
-        }
-        return false;
     }
 
     g_oled_fail_count = 0U;

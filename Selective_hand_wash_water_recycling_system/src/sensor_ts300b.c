@@ -1,10 +1,3 @@
-/*
- * sensor_ts300b.c
- *
- *  Created on: 2026年10月30日
- *      Author: Administrator
- */
-
 
 
 
@@ -80,19 +73,9 @@
  * 即使调用者忘记 ts300b_init()，换算结果也是"默认硬件接法"下的合理值。 */
 static ts300b_cfg_t s_cfg = { 1000.0f, 2000.0f, true };
 
-/**
- * @brief 初始化浊度驱动（保存配置）
- *
- * 作用：保存分压电阻与方向配置，供后续 ts300b_convert 使用。
- * 参数：p_cfg —— 配置指针；NULL 表示全部用默认值（1k/2k、clear_high=true）。
- * 返回：无。
- * 时序：纯赋值，不访问硬件、不阻塞。
- * 注意：① 分压电阻必须为正：R2 = 0 会让还原公式除零，R1 ≤ 0 说明配置写错；
- *          非法值（含 NaN）一律回落到默认 1k/2k。
- *       ② 本驱动不直接操作 ADC；ADC 的打开/扫描由 sensor_pipeline 负责。
- *       ③ clear_high 只被保存、不在本文件使用（方向归一化在 pipeline），
- *          这样"同一份硬件配置"只写一遍，避免两处默认值不一致。
- */
+/* 保存分压电阻与方向配置，供后续 ts300b_convert 使用。 参数：p_cfg —— 配置指针；NULL 表示全部用默认值（1k/2k、clear_high=true）。
+ * 时序/边界：纯赋值，不访问硬件、不阻塞。
+ * 注意：① 分压电阻必须为正：R2 = 0 会让还原公式除零，R1 ≤ 0 说明配置写错； 非法值（含 NaN）一律回落到默认 1k/2k。 ② 本驱动不直接操作 ADC；ADC 的打开/扫描由 sensor_pipeline 负责。 ③ clear_high 只被保存、不在本文件使用（方向归一化在 pipeline）， 这样"同一份硬件配置"只写一遍，避免两处默认值不一致。 */
 void ts300b_init(const ts300b_cfg_t *p_cfg)
 {
     /* 先填默认值，再用调用者的合法值覆盖：p_cfg 为 NULL 时等价于"全默认" */
@@ -114,21 +97,9 @@ void ts300b_init(const ts300b_cfg_t *p_cfg)
     }
 }
 
-/**
- * @brief 核心转换：ADC 码 → 分压节点电压 / 还原 AO 电压 / 合理性状态
- *
- * 作用：一次完成"ADC→节点 mV→AO mV"还原，并检查 rail / low 两种坏线情况。
- * 参数：raw_adc —— 中值后的 ADC 码（12 位，0~4095）；
- *       p_out   —— 输出结构体（必须非 NULL）。
- * 返回：SENSOR_OK          换算完成、数据可用；
- *       SENSOR_ERR_PARAM   p_out 为空；
- *       SENSOR_ERR_RANGE   贴轨或疑似断线（low），读数不可信。
- * 时序：纯计算，几次浮点乘除，微秒级。
- * 注意：① 即使返回 RANGE，p_out 里的 raw_adc/node_mv/ao_mv 也已经填好，
- *          方便上层打印"坏在哪"（如 CSV 的 note=NTU_RAIL）；
- *       ② 本驱动不做方向归一化、不计算相对浊度、不比较阈值——那些都在
- *          sensor_pipeline 里，避免驱动层和判别层的参数各写一份。
- */
+/* 一次完成"ADC→节点 mV→AO mV"还原，并检查 rail / low 两种坏线情况。
+ * 参数：raw_adc —— 中值后的 ADC 码（12 位，0~4095）； p_out   —— 输出结构体（必须非 NULL）。 时序/边界：纯计算，几次浮点乘除，微秒级。
+ * 注意：① 即使返回 RANGE，p_out 里的 raw_adc/node_mv/ao_mv 也已经填好， 方便上层打印"坏在哪"（如 CSV 的 note=NTU_RAIL）； ② 本驱动不做方向归一化、不计算相对浊度、不比较阈值——那些都在 sensor_pipeline 里，避免驱动层和判别层的参数各写一份。 */
 sensor_status_t ts300b_convert(uint16_t raw_adc, ts300b_reading_t *p_out)
 {
     if (NULL == p_out)
@@ -162,13 +133,7 @@ sensor_status_t ts300b_convert(uint16_t raw_adc, ts300b_reading_t *p_out)
      *      常见原因是分压比接错（例如漏了 2 kΩ 对地电阻导致 AO 直通）、
      *      R1 开路使节点被拉高、或 5 V 串进了 ADC 引脚（最危险，必须立即断电检查）。
      * 两种情况都返回 SENSOR_ERR_RANGE，上层按安全侧"传感器故障 → 排空"处理。 */
-    if (raw_adc <= TS300B_LOW_ADC)
-    {
-        p_out->status = SENSOR_ERR_RANGE;
-        return p_out->status;
-    }
-
-    if (raw_adc >= TS300B_RAIL_ADC)
+    if ((raw_adc <= TS300B_LOW_ADC) || (raw_adc >= TS300B_RAIL_ADC))
     {
         p_out->status = SENSOR_ERR_RANGE;
         return p_out->status;

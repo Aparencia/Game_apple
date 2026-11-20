@@ -1,18 +1,10 @@
 /*
- * sensor_common.h
- *
- *  Created on: 2026年10月30日
- *      Author: Administrator
- */
-
-/*
  * sensor_common.h —— 传感器应用公共定义与工具
  * ---------------------------------------------------------------------------
  * 本文件只放"与具体传感器无关"的公共内容：
  *   ① 统一状态码 sensor_status_t
- *   ② 统计结果 sensor_stats_t
- *   ③ 1 ms 系统时基（SysTick 中断实现，全工程唯一时间源）
- *   ④ 数学/滤波小工具（中值、排序、EMA、限幅、平方根、统计）
+ *   ② 1 ms 系统时基（SysTick 中断实现，全工程唯一时间源）
+ *   ③ 数学/滤波小工具（中值、排序、EMA、限幅、平方根）
  *
  * 设计约束：
  *   - 不依赖 libm（sqrt 由 Newton 迭代自行实现），避免链接选项差异；
@@ -40,16 +32,6 @@ typedef enum e_sensor_status
     SENSOR_ERR_DATA    = -5   /* 数据不可信（CRC 错/全 0/全 FF） */
 } sensor_status_t;
 
-/* ============================ 统计结果 ============================ */
-typedef struct st_sensor_stats
-{
-    float    mean;   /* 均值 */
-    float    std;    /* 样本标准差（n-1；n<2 时为 0） */
-    float    min;    /* 最小值 */
-    float    max;    /* 最大值 */
-    uint16_t n;      /* 样本数 */
-} sensor_stats_t;
-
 /* ============================ 系统时基 ============================ */
 /* 初始化 1 ms SysTick；返回 true=成功。全工程只应调用一次。 */
 bool     timebase_init(void);
@@ -58,9 +40,6 @@ bool     timebase_init(void);
 uint32_t timebase_ms(void);
 
 /* ============================ 数学/滤波工具 ============================ */
-/* 原地升序排序（插入排序；n 很小，O(n^2) 足够且无递归/无内存分配）。 */
-void     sensor_sort_u16(uint16_t *p_values, uint16_t n);
-
 /* 原地排序后取中位数（会修改传入数组）。n=0 返回 0。 */
 uint16_t sensor_median_u16(uint16_t *p_values, uint16_t n);
 
@@ -95,9 +74,6 @@ static inline bool sensor_is_nan_f32(float value)
 /* 平方根（Newton 迭代；value<=0 返回 0）。相对误差 < 1e-5，够传感器统计用。 */
 float    sensor_sqrtf(float value);
 
-/* 对 float 数组做统计（mean/std/min/max）；n=0 返回全 0。 */
-sensor_stats_t sensor_stats_f32(const float *p_values, uint16_t n);
-
 /* 状态码转静态字符串（打印日志用，绝不返回 NULL）。 */
 const char *sensor_status_str(sensor_status_t status);
 
@@ -105,4 +81,3 @@ const char *sensor_status_str(sensor_status_t status);
 }
 #endif
 #endif /* SENSOR_COMMON_H */
-

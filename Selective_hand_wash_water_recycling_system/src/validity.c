@@ -1,11 +1,4 @@
 /*
- * validity.c
- *
- *  Created on: 2026年11月16日
- *      Author: Administrator
- */
-
-/*
  * validity.c —— 工况有效性层实现（位图 + regime 状态机）
  * ---------------------------------------------------------------------------
  * 本文件是纯逻辑：不碰 ADC / 1-Wire / UART / 阀，不打印、不 delay、不动态分配。
@@ -34,13 +27,15 @@
 #include <stddef.h>
 #include <string.h>
 
+/* 静态表的元素个数（编译期常量；表驱动查表的越界判断用）。 */
+#define VAL_TABLE_LEN(a)  (sizeof(a) / sizeof((a)[0]))
+
 /* ---------- 静态原因字符串 ---------- */
+/* 只有"不能一对一到工况"的原因留具名常量；DRY/SETTLE/MEASURE 直接写在
+ * gate_update_reason 的查表里（表就是它们唯一的使用处）。 */
 static const char *const g_gate_reason_sensor   = "SENSOR";    /* 传感器故障 */
 static const char *const g_gate_reason_no_cal   = "NO_CAL";    /* 基线与干态指纹都没有 */
 static const char *const g_gate_reason_no_base  = "NO_BASE";   /* 缺水中基线 */
-static const char *const g_gate_reason_dry      = "DRY";       /* 未浸没 */
-static const char *const g_gate_reason_settle   = "SETTLE";    /* 稳定期 */
-static const char *const g_gate_reason_measure  = "MEASURE";   /* 可判别 */
 static const char *const g_gate_reason_lockout  = "LOCKOUT";   /* 故障恢复观察期 */
 
 /* ---------- 默认配置 ---------- */
@@ -72,10 +67,7 @@ static const gate_cfg_t g_gate_default_cfg =
 };
 
 /* ---------- 文件内工具 ---------- */
-/*
- * 函数名：gate_clampf
- * 作用：把配置浮点值限幅；非法值（0/负/NaN）回落到默认值。
- */
+/* 把配置浮点值限幅；非法值（0/负/NaN）回落到默认值。 */
 static float gate_clampf(float value, float lo, float hi, float fallback)
 {
     if (sensor_is_nan_f32(value))
@@ -93,11 +85,7 @@ static float gate_clampf(float value, float lo, float hi, float fallback)
     return value;
 }
 
-/*
- * 函数名：gate_clampu32
- * 作用：把配置无符号值限幅；0 回落到默认值（0 在本模块没有"关闭"语义，
- *       屏蔽/去抖置 0 会让状态机失去消抖能力，属于危险配置）。
- */
+/* 把配置无符号值限幅；0 回落到默认值（0 在本模块没有"关闭"语义， 屏蔽/去抖置 0 会让状态机失去消抖能力，属于危险配置）。 */
 static uint32_t gate_clampu32(uint32_t value, uint32_t lo, uint32_t hi, uint32_t fallback)
 {
     if (0U == value)
@@ -115,11 +103,7 @@ static uint32_t gate_clampu32(uint32_t value, uint32_t lo, uint32_t hi, uint32_t
     return value;
 }
 
-/*
- * 函数名：gate_enter
- * 作用：迁移到新工况；只在工况真的变化时刷新时间戳与待定计时。
- * 参数：p_gate —— 句柄；regime —— 目标工况；now_ms —— 当前时刻。
- */
+/* 迁移到新工况；只在工况真的变化时刷新时间戳与待定计时。 */
 static void gate_enter(gate_t *p_gate, regime_t regime, uint32_t now_ms)
 {
     if (p_gate->regime != regime)
@@ -134,21 +118,14 @@ static void gate_enter(gate_t *p_gate, regime_t regime, uint32_t now_ms)
     }
 }
 
-/*
- * 函数名：gate_elapsed
- * 作用：无符号差值计时（跨 49.7 天回绕安全）。
- */
+/* 无符号差值计时（跨 49.7 天回绕安全）。 */
 static bool gate_elapsed(uint32_t now_ms, uint32_t since_ms, uint32_t span_ms)
 {
     return ((uint32_t)(now_ms - since_ms) >= span_ms);
 }
 
-/*
- * 函数名：gate_bits_render
- * 作用：把位图逐位渲染成 "SNS|BAS|IMM|STA|BLK|FLW" 的短串。
- * 参数：bits —— 位图；p_buf —— 目标缓冲；cap —— 容量（字节）。
- * 返回：无（容量不足时按位截断，始终 '\0' 结尾）。
- */
+/* 把位图逐位渲染成 "SNS|BAS|IMM|STA|BLK|FLW" 的短串。 参数：bits —— 位图；p_buf —— 目标缓冲；cap —— 容量（字节）。
+ * 返回：无（容量不足时按位截断，始终 '\0' 结尾）。 */
 static void gate_bits_render(uint16_t bits, char *p_buf, uint32_t cap)
 {
     static const struct
@@ -197,48 +174,39 @@ static void gate_bits_render(uint16_t bits, char *p_buf, uint32_t cap)
 }
 
 /*
- * 函数名：gate_update_reason
- * 作用：按"工况 + 故障来源"给出静态原因串。
- * 注意：原因只用于日志/OLED，不参与控制判断。
+ * 按"工况 + 故障来源"给出静态原因串（只用于日志/OLED，不参与控制判断）。
+ * REGIME_FAULT 的原因取决于"哪个前提不成立"（传感器坏 / 无基线且无干态 / 缺水中基线），
+ * 必须保留三分支特化，所以它不查表；其余四个工况一对一查表。
  */
+static const char *const g_reason_by_regime[] =
+{
+    NULL, "DRY", "SETTLE", "MEASURE", "LOCKOUT"   /* 下标=regime_t；FAULT 位永不取用 */
+};
+
 static const char *gate_update_reason(const gate_t *p_gate)
 {
-    switch (p_gate->regime)
+    if (REGIME_FAULT == p_gate->regime)
     {
-        case REGIME_FAULT:
-            if (!p_gate->sensor_ok)
-            {
-                return g_gate_reason_sensor;
-            }
-            if ((!p_gate->baseline_ok) && (!p_gate->dry_valid))
-            {
-                return g_gate_reason_no_cal;   /* 既没水中基线也没干态指纹：没法判 */
-            }
-            return g_gate_reason_no_base;
-
-        case REGIME_DRY:
-            return g_gate_reason_dry;
-
-        case REGIME_SETTLE:
-            return g_gate_reason_settle;
-
-        case REGIME_MEASURE:
-            return g_gate_reason_measure;
-
-        case REGIME_LOCKOUT:
-        default:
-            return g_gate_reason_lockout;
+        if (!p_gate->sensor_ok)
+        {
+            return g_gate_reason_sensor;
+        }
+        if ((!p_gate->baseline_ok) && (!p_gate->dry_valid))
+        {
+            return g_gate_reason_no_cal;   /* 既没水中基线也没干态指纹：没法判 */
+        }
+        return g_gate_reason_no_base;
     }
+
+    /* 越界回退 LOCKOUT：与旧 switch 的 default 分支一致 */
+    return ((unsigned)p_gate->regime < VAL_TABLE_LEN(g_reason_by_regime))
+           ? g_reason_by_regime[p_gate->regime]
+           : g_gate_reason_lockout;
 }
 
 /* ---------- 对外接口 ---------- */
 
-/*
- * 函数名：gate_init
- * 作用：保存/限幅配置，清零运行状态，工况置 FAULT（安全侧），干态指纹清空。
- * 参数：p_gate —— 句柄（可为 NULL，NULL 直接返回）；p_cfg —— 配置（NULL 用默认）。
- * 返回：无。
- */
+/* 保存/限幅配置，清零运行状态，工况置 FAULT（安全侧），干态指纹清空。 参数：p_gate —— 句柄（可为 NULL，NULL 直接返回）；p_cfg —— 配置（NULL 用默认）。 */
 void gate_init(gate_t *p_gate, const gate_cfg_t *p_cfg)
 {
     gate_cfg_t *p_c;
@@ -337,12 +305,8 @@ void gate_init(gate_t *p_gate, const gate_cfg_t *p_cfg)
     p_gate->reason           = g_gate_reason_no_cal;
 }
 
-/*
- * 函数名：gate_store_dry
- * 作用：校验并写入干态指纹（内部共用；来源由调用方指定）。
- * 注意：EC_DRY 上限由 cfg.ec_dry_max_mv 控制（默认 200 mV）：超过它说明采集时
- *       探头多半还泡在水里，此时接受会把"湿态"当成"干态"，浸没判据就永远成立。
- */
+/* 校验并写入干态指纹（内部共用；来源由调用方指定）。
+ * 注意：EC_DRY 上限由 cfg.ec_dry_max_mv 控制（默认 200 mV）：超过它说明采集时 探头多半还泡在水里，此时接受会把"湿态"当成"干态"，浸没判据就永远成立。 */
 static bool gate_store_dry(gate_t *p_gate, float ec_dry_mv, float ao_dry_mv, dry_source_t source)
 {
     if (NULL == p_gate)
@@ -369,12 +333,7 @@ static bool gate_store_dry(gate_t *p_gate, float ec_dry_mv, float ao_dry_mv, dry
     return true;
 }
 
-/*
- * 函数名：gate_set_dry_fingerprint
- * 作用：记录实测干态指纹（命令 D 或开机自检采集完成时调用），来源标记 MEASURED。
- * 参数：p_gate —— 句柄；ec_dry_mv —— 空腔 EC 均值；ao_dry_mv —— 空腔 AO 均值。
- * 返回：true=接受；false=不可信（越界/NaN），原指纹保持不变。
- */
+/* 记录实测干态指纹（命令 D 或开机自检采集完成时调用），来源标记 MEASURED。 返回：true=接受；false=不可信（越界/NaN），原指纹保持不变。 */
 bool gate_set_dry_fingerprint(gate_t *p_gate, float ec_dry_mv, float ao_dry_mv)
 {
     return gate_store_dry(p_gate, ec_dry_mv, ao_dry_mv, DRY_SOURCE_MEASURED);
@@ -394,42 +353,7 @@ dry_source_t gate_dry_source(const gate_t *p_gate)
     return p_gate->dry_source;
 }
 
-/* 读取干态指纹：未标定时返回 false（输出参数不动）。 */
-bool gate_get_dry_fingerprint(const gate_t *p_gate, float *p_ec_dry_mv, float *p_ao_dry_mv)
-{
-    if ((NULL == p_gate) || (!p_gate->dry_valid))
-    {
-        return false;
-    }
-    if (NULL != p_ec_dry_mv)
-    {
-        *p_ec_dry_mv = p_gate->ec_dry_mv;
-    }
-    if (NULL != p_ao_dry_mv)
-    {
-        *p_ao_dry_mv = p_gate->ao_dry_mv;
-    }
-    return true;
-}
-
-/* 清除干态指纹（例如换探头/重新标定前）。 */
-void gate_clear_dry_fingerprint(gate_t *p_gate)
-{
-    if (NULL == p_gate)
-    {
-        return;
-    }
-    p_gate->dry_valid = false;
-    p_gate->dry_source = DRY_SOURCE_NONE;
-    p_gate->ec_dry_mv = 0.0f;
-    p_gate->ao_dry_mv = 0.0f;
-}
-
-/*
- * 函数名：gate_note_switch
- * 作用：记录一次物理换向，作为屏蔽窗起点。
- * 参数：p_gate —— 句柄；now_ms —— 换向时刻。
- */
+/* 记录一次物理换向，作为屏蔽窗起点。 */
 void gate_note_switch(gate_t *p_gate, uint32_t now_ms)
 {
     if (NULL == p_gate)
@@ -440,14 +364,8 @@ void gate_note_switch(gate_t *p_gate, uint32_t now_ms)
     p_gate->last_switch_ms = now_ms;
 }
 
-/*
- * 函数名：gate_update
- * 作用：每 tick 计算 validity 位图与 regime。
- * 参数：p_gate —— 句柄；p_out —— 流水线输出；now_ms —— 当前时刻。
- * 返回：无。
- * 时序/边界：pipeline_sample 之后、decision_update 之前调用；纯计算（<10 µs）。
- * 注意：本函数不修改 pipeline/阀，只读 p_out；任何 NULL 输入都保持上一次状态不变。
- */
+/* 每 tick 计算 validity 位图与 regime。 时序/边界：pipeline_sample 之后、decision_update 之前调用；纯计算（<10 µs）。
+ * 注意：本函数不修改 pipeline/阀，只读 p_out；任何 NULL 输入都保持上一次状态不变。 */
 void gate_update(gate_t *p_gate, const pipeline_out_t *p_out, uint32_t now_ms)
 {
     bool sensor_ok;
@@ -561,6 +479,17 @@ void gate_update(gate_t *p_gate, const pipeline_out_t *p_out, uint32_t now_ms)
         p_gate->first_update      = false;
         gate_enter(p_gate, fault ? REGIME_FAULT : REGIME_DRY, now_ms);
     }
+    else if ((fault) && (REGIME_FAULT != p_gate->regime))
+    {
+        /*
+         * 故障迁移优先级最高，且与"从哪个工况来"无关：旧代码在 LOCKOUT/DRY/SETTLE/
+         * MEASURE 四个 case 的首行各写了一遍同样的 if(fault) gate_enter(FAULT)，
+         * 这里统一到 switch 之前，省掉 4 份重复。
+         * REGIME_FAULT 自身是唯一特例（故障仍在时只重置 fault_since_ms，不 gate_enter），
+         * 所以它被排除在这个分支之外、仍留在 switch 里。
+         */
+        gate_enter(p_gate, REGIME_FAULT, now_ms);
+    }
     else
     {
         switch (p_gate->regime)
@@ -582,11 +511,7 @@ void gate_update(gate_t *p_gate, const pipeline_out_t *p_out, uint32_t now_ms)
                 break;
 
             case REGIME_LOCKOUT:
-                if (fault)
-                {
-                    gate_enter(p_gate, REGIME_FAULT, now_ms);
-                }
-                else if (gate_elapsed(now_ms, p_gate->regime_since_ms, p_gate->cfg.lockout_ms))
+                if (gate_elapsed(now_ms, p_gate->regime_since_ms, p_gate->cfg.lockout_ms))
                 {
                     gate_enter(p_gate, REGIME_DRY, now_ms);
                 }
@@ -597,11 +522,7 @@ void gate_update(gate_t *p_gate, const pipeline_out_t *p_out, uint32_t now_ms)
                 break;
 
             case REGIME_DRY:
-                if (fault)
-                {
-                    gate_enter(p_gate, REGIME_FAULT, now_ms);
-                }
-                else if (immersed)
+                if (immersed)
                 {
                     if (gate_elapsed(now_ms, p_gate->wet_since_ms,
                                      p_gate->cfg.wet_debounce_ms))
@@ -616,11 +537,7 @@ void gate_update(gate_t *p_gate, const pipeline_out_t *p_out, uint32_t now_ms)
                 break;
 
             case REGIME_SETTLE:
-                if (fault)
-                {
-                    gate_enter(p_gate, REGIME_FAULT, now_ms);
-                }
-                else if (!immersed)
+                if (!immersed)
                 {
                     if (gate_elapsed(now_ms, p_gate->dry_since_ms,
                                      p_gate->cfg.dry_debounce_ms))
@@ -676,11 +593,7 @@ void gate_update(gate_t *p_gate, const pipeline_out_t *p_out, uint32_t now_ms)
 
             case REGIME_MEASURE:
             default:
-                if (fault)
-                {
-                    gate_enter(p_gate, REGIME_FAULT, now_ms);
-                }
-                else if (!immersed)
+                if (!immersed)
                 {
                     p_gate->unstable_since_ms = now_ms;   /* 失浸没期间不累积"不稳定"计时 */
 
@@ -745,27 +658,15 @@ void gate_update(gate_t *p_gate, const pipeline_out_t *p_out, uint32_t now_ms)
     p_gate->reason = gate_update_reason(p_gate);
 }
 
-/* 工况 → 静态字符串。 */
+/* 工况 → 静态字符串（下标即 regime_t；越界回退 "LOCKOUT"，与旧 switch 的 default 一致）。 */
+static const char *const g_regime_name[] =
+{
+    "FAULT", "DRY", "SETTLE", "MEASURE", "LOCKOUT"
+};
+
 const char *gate_regime_str(regime_t regime)
 {
-    switch (regime)
-    {
-        case REGIME_FAULT:
-            return "FAULT";
-
-        case REGIME_DRY:
-            return "DRY";
-
-        case REGIME_SETTLE:
-            return "SETTLE";
-
-        case REGIME_MEASURE:
-            return "MEASURE";
-
-        case REGIME_LOCKOUT:
-        default:
-            return "LOCKOUT";
-    }
+    return ((unsigned)regime < VAL_TABLE_LEN(g_regime_name)) ? g_regime_name[regime] : "LOCKOUT";
 }
 
 /* 最近一次 gate_update 的原因串（永不返回 NULL）。 */

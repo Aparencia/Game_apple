@@ -1,11 +1,4 @@
 /*
- * sensor_pipeline.h
- *
- *  Created on: 2026年10月30日
- *      Author: Administrator
- */
-
-/*
  * sensor_pipeline.h —— 采集与特征流水线（双通道 ADC + 中值 + EMA + 基线 + Δ特征）
  * ---------------------------------------------------------------------------
  * 数据流（每 50 ms 一个 tick）：
@@ -182,15 +175,10 @@ void pipeline_baseline_begin(sensor_pipeline_t *p_pipe, uint32_t now_ms);
 /* 是否正在采集基线。 */
 bool pipeline_baseline_capturing(const sensor_pipeline_t *p_pipe);
 
-/*
- * 函数名：pipeline_invalidate_baseline
- * 作用：作废当前基线（保留 ec0 数值供诊断，但 baseline_valid=false、特征清零）。
+/* 作废当前基线（保留 ec0 数值供诊断，但 baseline_valid=false、特征清零）。
  * 参数：p_pipe —— 流水线句柄；p_note —— 作废原因（静态串，如 "BASE_LOW" / "CLEARED"）。
- * 返回：无。
- * 时序/边界：命令 Z（清基线）、W 采集后"EC0 < 3×干态"等场景调用；下一 tick 起
- *             decision 的 REGIME 会离开 MEASURE（安全侧）。
- * 注意：与 pipeline_baseline_begin 的区别——后者会重新开始采集，本函数只作废。
- */
+ * 时序/边界：命令 Z（清基线）、W 采集后"EC0 < 3×干态"等场景调用；下一 tick 起 decision 的 REGIME 会离开 MEASURE（安全侧）。
+ * 注意：与 pipeline_baseline_begin 的区别——后者会重新开始采集，本函数只作废。 */
 void pipeline_invalidate_baseline(sensor_pipeline_t *p_pipe, const char *p_note);
 
 /*
@@ -223,4 +211,3 @@ const pipeline_out_t *pipeline_get_out(const sensor_pipeline_t *p_pipe);
 }
 #endif
 #endif /* SENSOR_PIPELINE_H */
-

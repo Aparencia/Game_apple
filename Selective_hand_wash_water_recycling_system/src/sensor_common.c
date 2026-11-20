@@ -1,10 +1,3 @@
-/*
- * sensor_common.c
- *
- *  Created on: 2026年10月30日
- *      Author: Administrator
- */
-
 
 
 
@@ -63,35 +56,16 @@ void SysTick_Handler(void);
 
 static volatile uint32_t s_ms_ticks = 0U;
 
-/**
- * @brief SysTick 中断服务函数（1 ms 一次）
- *
- * 作用：s_ms_ticks 加 1，给全工程提供唯一时间源。
- * 参数：无（函数名固定为 SysTick_Handler，由 CMSIS 启动文件的向量表引用；
- *       FSP 的启动代码里它是弱符号，本文件的强定义会覆盖它）。
- * 返回：无。
- * 时序：中断周期 = SystemCoreClock / 1000；本板约 1 ms。
- * 注意：中断里只允许做这种"几十纳秒"的工作。绝不能在这里 printf、延时、
- *       操作 1-Wire 或调用任何阻塞函数，否则会拖慢 UART/ADC 中断响应。
- */
+/* s_ms_ticks 加 1，给全工程提供唯一时间源。 时序/边界：中断周期 = SystemCoreClock / 1000；本板约 1 ms。
+ * 注意：中断里只允许做这种"几十纳秒"的工作。绝不能在这里 printf、延时、 操作 1-Wire 或调用任何阻塞函数，否则会拖慢 UART/ADC 中断响应。 */
 
 void SysTick_Handler(void)
 {
     s_ms_ticks++;
 }
 
-/**
- * @brief 初始化 1 ms 系统时基
- *
- * 作用：清空计数并按 SystemCoreClock/1000 装载 SysTick，启动周期中断。
- * 参数：无。
- * 返回：true = 配置成功；false = SystemCoreClock 异常（小于 1000）或 SysTick 装载失败。
- * 时序：写 SysTick 的 LOAD/VAL/CVR，立即开始计数；不阻塞。
- * 注意：① 全工程只应调用一次，重复调用会重新装载 SysTick、把时基清零；
- *       ② 必须在 SystemCoreClock 已被 FSP 设置好之后调用（app_main 里调用即可）；
- *       ③ SysTick 优先级用 CMSIS 默认（最低）：时基只做统计调度，
- *          不应该抢 UART/ADC 的实时性；1-Wire 关中断丢 tick 的代价已评估可接受。
- */
+/* 清空计数并按 SystemCoreClock/1000 装载 SysTick，启动周期中断。 时序/边界：写 SysTick 的 LOAD/VAL/CVR，立即开始计数；不阻塞。
+ * 注意：① 全工程只应调用一次，重复调用会重新装载 SysTick、把时基清零； ② 必须在 SystemCoreClock 已被 FSP 设置好之后调用（app_main 里调用即可）； ③ SysTick 优先级用 CMSIS 默认（最低）：时基只做统计调度， 不应该抢 UART/ADC 的实时性；1-Wire 关中断丢 tick 的代价已评估可接受。 */
 
 bool timebase_init(void)
 {
@@ -115,18 +89,8 @@ bool timebase_init(void)
     return true;
 }
 
-/**
- * @brief 读取上电以来的毫秒数
- *
- * 作用：返回 SysTick 中断累加的毫秒计数，供主循环/状态机调度使用。
- * 参数：无。
- * 返回：上电至今毫秒数（uint32_t，约 49.7 天回绕一次）。
- * 时序：单条 32 位对齐读，在 Cortex-M33 上是原子操作，不需要关中断。
- * 注意：① 求时间差必须用 (uint32_t)(now - start) 的无符号减法，
- *          不要写 if (now > start)，回绕后会判断错；
- *       ② 不要在中断和主循环里同时写任何"基于该时间的状态"（本工程约定：
- *          只有主循环调用业务函数，中断只置标志）。
- */
+/* 返回 SysTick 中断累加的毫秒计数，供主循环/状态机调度使用。 时序/边界：单条 32 位对齐读，在 Cortex-M33 上是原子操作，不需要关中断。
+ * 注意：① 求时间差必须用 (uint32_t)(now - start) 的无符号减法， 不要写 if (now > start)，回绕后会判断错； ② 不要在中断和主循环里同时写任何"基于该时间的状态"（本工程约定： 只有主循环调用业务函数，中断只置标志）。 */
 
 uint32_t timebase_ms(void)
 {
@@ -142,18 +106,10 @@ uint32_t timebase_ms(void)
  *  比调用通用 qsort 更省 RAM/代码，也更符合"单片机可读性优先"的工程习惯。
  */
 
-/**
- * @brief 原地升序排序 uint16 数组
- *
- * 作用：插入排序，把 p_values[0..n-1] 从小到大排好。
- * 参数：p_values —— 待排序数组（原地修改，调用者保证可写）；
- *       n        —— 元素个数（n < 2 时直接返回）。
- * 返回：无。
- * 时序：O(n²)；n=5 时最多 10 次比较，微秒级，可在主循环里随意调用。
- * 注意：会修改传入数组；若数据被其他上下文同时读取，调用者需自己保证不同时访问。
- */
+/* 插入排序，把 p_values[0..n-1] 从小到大排好。 时序/边界：O(n²)；n=5 时最多 10 次比较，微秒级，可在主循环里随意调用。
+ * 注意：会修改传入数组；若数据被其他上下文同时读取，调用者需自己保证不同时访问。 */
 
-void sensor_sort_u16(uint16_t*p_values,uint16_t n)
+static void sensor_sort_u16(uint16_t *p_values, uint16_t n)
 {
     if((NULL == p_values) || (n < 2U))
     {
@@ -176,18 +132,8 @@ void sensor_sort_u16(uint16_t*p_values,uint16_t n)
     }
 }
 
-/**
- * @brief 原地排序后取中位数
- *
- * 作用：对样本先升序排序，再取中位数；ADC 去噪的标准做法。
- * 参数：p_values —— 样本数组（会被排序，内容改变）；
- *       n        —— 样本数（0 返回 0；1 返回唯一元素）。
- * 返回：中值（uint16_t）。
- * 时序：内部调用插入排序，O(n²)，n 很小。
- * 注意：偶数个样本时取"偏大的一半"（下标 n/2，0 基）：
- *       5 点取正中、4 点取第 3 小。对 ADC 去噪两种取法等价，固定取上中位数
- *       对"单向的极大干扰"更保守（不会被小值拉低）。
- */
+/* 对样本先升序排序，再取中位数；ADC 去噪的标准做法。 时序/边界：内部调用插入排序，O(n²)，n 很小。
+ * 注意：偶数个样本时取"偏大的一半"（下标 n/2，0 基）： 5 点取正中、4 点取第 3 小。对 ADC 去噪两种取法等价，固定取上中位数 对"单向的极大干扰"更保守（不会被小值拉低）。 */
 
 uint16_t sensor_median_u16(uint16_t*p_values,uint16_t n)
 {
@@ -208,19 +154,8 @@ uint16_t sensor_median_u16(uint16_t*p_values,uint16_t n)
  *  mV = raw × VREF / full_scale，四舍五入到 1 mV。
  */
 
-/**
- * @brief ADC 码 → 毫伏（四舍五入）
- *
- * 作用：把 12 位 ADC 原始码换算成电压；raw 先限幅到 [0, full_scale]，
- *       防止调用方传入脏数据导致溢出或非物理结果。
- * 参数：raw        —— ADC 原始码；
- *       full_scale —— 满量程码（12 位为 4095；0 视为非法，返回 0）；
- *       vref_mv    —— 参考电压 mV（本板 3300）。
- * 返回：电压（mV，四舍五入）。
- * 时序：纯计算，几条指令。
- * 注意：用 uint32 做中间量：4095×3300 = 13,513,500，远小于 2^32，不会溢出；
- *       四舍五入用"+ full_scale/2 再整除"，避免 1 mV 的系统性偏低。
- */
+/* 把 12 位 ADC 原始码换算成电压；raw 先限幅到 [0, full_scale]， 防止调用方传入脏数据导致溢出或非物理结果。 时序/边界：纯计算，几条指令。
+ * 注意：用 uint32 做中间量：4095×3300 = 13,513,500，远小于 2^32，不会溢出； 四舍五入用"+ full_scale/2 再整除"，避免 1 mV 的系统性偏低。 */
 
 uint32_t sensor_adc_to_mv(uint16_t raw,uint16_t full_scale,uint32_t vref_mv)
 {
@@ -239,21 +174,8 @@ uint32_t sensor_adc_to_mv(uint16_t raw,uint16_t full_scale,uint32_t vref_mv)
     return ((code *vref_mv) + ((uint32_t)full_scale / 2U)) / (uint32_t)full_scale;
 }
 
-/**
- * @brief 一阶低通滤波（EMA）
- *
- * 作用：y = prev + alpha × (sample - prev)，指数加权移动平均。
- * 参数：prev   —— 上一次的输出（0 表示首次可传 sample）；
- *       sample —— 本次新样本；
- *       alpha  —— 平滑系数：0=冻结、1=直接跟随；自动限幅到 [0,1]。
- * 返回：滤波后的值。
- * 时序：纯计算。
- * 注意：① 为什么用 EMA 而不用滑动平均：滑动平均要存 N 个历史点（RAM 和
- *          代码都更多），而 50 ms tick 下 EMA(α=0.3) 的等效时间常数约 3 个 tick，
- *          足够压掉 ADC 抖动，又不会把皂液阶跃抹平到判别器看不见；
- *       ② alpha=0（或 NaN）时保持原值，避免配置写错导致"永远不动"；
- *       ③ 要求 sample 来自可信读数（调用方先做 rail/超时检查）。
- */
+/* y = prev + alpha × (sample - prev)，指数加权移动平均。 时序/边界：纯计算。
+ * 注意：① 为什么用 EMA 而不用滑动平均：滑动平均要存 N 个历史点（RAM 和 代码都更多），而 50 ms tick 下 EMA(α=0.3) 的等效时间常数约 3 个 tick， 足够压掉 ADC 抖动，又不会把皂液阶跃抹平到判别器看不见； ② alpha=0（或 NaN）时保持原值，避免配置写错导致"永远不动"； ③ 要求 sample 来自可信读数（调用方先做 rail/超时检查）。 */
 
 float sensor_ema(float prev,float sample,float alpha)
 {
@@ -268,18 +190,8 @@ float sensor_ema(float prev,float sample,float alpha)
     return prev + (a*(sample - prev));
 }
 
-/**
- * @brief 把浮点数限幅到 [min_value, max_value]
- *
- * 作用：统一的安全限幅工具，防止异常输入把下游计算放大或污染。
- * 参数：value     —— 输入值；
- *       min_value —— 下限；
- *       max_value —— 上限（min > max 视为配置错误，直接返回 min）。
- * 返回：限幅后的值。
- * 时序：纯计算。
- * 注意：本实现把非法输入（NaN）当作"小于下限"处理，回落到下限。
- *       这样一条坏数据不会顺着 EMA/统计污染整条链路；阈值类配置可以放心用。
- */
+/* 统一的安全限幅工具，防止异常输入把下游计算放大或污染。 时序/边界：纯计算。
+ * 注意：本实现把非法输入（NaN）当作"小于下限"处理，回落到下限。 这样一条坏数据不会顺着 EMA/统计污染整条链路；阈值类配置可以放心用。 */
 
 float sensor_clampf(float value,float min_value,float max_value)
 {
@@ -301,15 +213,7 @@ float sensor_clampf(float value,float min_value,float max_value)
     return value;
 }
 
-/**
- * @brief 浮点绝对值
- *
- * 作用：替代 fabsf，避免引入 libm。
- * 参数：value —— 输入。
- * 返回：|value|（NaN 输入仍返回 NaN，调用方不应传 NaN）。
- * 时序：纯计算，一条比较+取反。
- * 注意：负数取反即可；不处理 NaN/inf 的特殊语义（传感器数据不会到 inf）。
- */
+/* 替代 fabsf，避免引入 libm。 时序/边界：纯计算，一条比较+取反。 注意：负数取反即可；不处理 NaN/inf 的特殊语义（传感器数据不会到 inf）。 */
 
 float sensor_absf(float value)
 {
@@ -331,15 +235,8 @@ float sensor_absf(float value)
  *    最后把结果乘 (1/2)^shifts 还原（因为 sqrt(value) = sqrt(scaled) / 2^shifts）。
  */
 
-/**
- * @brief 平方根（Newton 迭代，无 libm 依赖）
- *
- * 作用：求 value 的平方根，用于样本标准差 σ = sqrt(方差)。
- * 参数：value —— 被开方数。
- * 返回：value > 0 时返回其平方根；value ≤ 0 或 NaN 返回 0（调用方不必先判）。
- * 时序：最多约 10 次浮点除法（统计每次采样只调用 1~2 次，开销可忽略）。
- * 注意：相对误差 < 1e-5，满足传感器统计；不要用它做精确定点数学运算。
- */
+/* 求 value 的平方根，用于样本标准差 σ = sqrt(方差)。 返回：value > 0 时返回其平方根；value ≤ 0 或 NaN 返回 0（调用方不必先判）。
+ * 时序/边界：最多约 10 次浮点除法（统计每次采样只调用 1~2 次，开销可忽略）。 注意：相对误差 < 1e-5，满足传感器统计；不要用它做精确定点数学运算。 */
 
 float sensor_sqrtf(float value)
 {
@@ -386,101 +283,14 @@ float sensor_sqrtf(float value)
 }
 
 /* ---------------------------------------------------------------------------
- *  五、统计（均值 / 样本标准差 / 极值）
- * ---------------------------------------------------------------------------
- *  用途：基线采集时估计本底噪声 σ，再按 d1=max(4σ, 8mV)、d2=max(8σ, 20mV)
- *  推出自适应阈值（见 decision.h）。σ 估计得准不准，直接决定误判率。
- */
-
-/**
- * @brief 对 float 数组做统计
- *
- * 作用：一次遍历得到均值/最小/最大，第二遍求偏差平方和得到样本标准差。
- * 参数：p_values —— 样本数组（只读，不会被修改）；
- *       n        —— 样本数（0 返回全 0 的结构体）。
- * 返回：sensor_stats_t{mean, std, min, max, n}；
- *       n=1 时 mean=min=max=该值，std=0（单个样本没有离散度）。
- * 时序：O(n) 两遍；基线 20 点时只有 40 次浮点加法，微秒级。
- * 注意：① std 用 n-1（贝塞尔校正）：基线噪声要代表总体噪声，样本标准差
- *          才是无偏估计；n<2 时自由度不足，直接给 0。
- *       ② 用两遍法而不是 E[x²]-E[x]²：电压在 1500 mV 附近、方差只有几个 mV²，
- *          大数相减会严重丢有效位（这是数值稳定性上的必要选择，不是啰嗦）。
- */
-/* -Waggregate-return 会把"函数返回结构体"当风险提示；本函数返回 5 字段的小结构体
- * （20 B，AAPCS 用隐藏指针返回），是刻意的 API 设计、不是误用，所以就地屏蔽。 */
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Waggregate-return"
-sensor_stats_t sensor_stats_f32(const float *p_values, uint16_t n)
-{
-    sensor_stats_t stats = { 0.0f, 0.0f, 0.0f, 0.0f, 0U };
-
-    if ((NULL == p_values) || (0U == n))
-    {
-        return stats;   /* 空输入：全 0，绝不返回未初始化值 */
-    }
-
-    /* ---- 第一遍：均值 + 极值 ---- */
-    float sum  = 0.0f;
-    float vmin = p_values[0];
-    float vmax = p_values[0];
-
-    for (uint16_t i = 0U; i < n; i++)
-    {
-        float v = p_values[i];
-        sum += v;
-        if (v < vmin)
-        {
-            vmin = v;
-        }
-        if (v > vmax)
-        {
-            vmax = v;
-        }
-    }
-
-    stats.mean = sum / (float) n;
-    stats.min  = vmin;
-    stats.max  = vmax;
-    stats.n    = n;
-
-    if (n < 2U)
-    {
-        /* 单样本：标准差无定义，按 0 处理（上层有 σ 下限保护，见 pipeline） */
-        stats.std = 0.0f;
-        return stats;
-    }
-
-    /* ---- 第二遍：偏差平方和（相对均值，数值更稳） ---- */
-    float sumsq = 0.0f;
-    for (uint16_t i = 0U; i < n; i++)
-    {
-        float d = p_values[i] - stats.mean;
-        sumsq += d * d;
-    }
-
-    /* 样本方差 = Σ(x-mean)² / (n-1)，σ = sqrt(方差) */
-    stats.std = sensor_sqrtf(sumsq / (float) (n - 1U));
-
-    return stats;
-}
-#pragma GCC diagnostic pop
-
-/* ---------------------------------------------------------------------------
  *  六、状态码 → 字符串
  * ---------------------------------------------------------------------------
  *  为什么不用宏数组/查表：switch 对负数状态码安全（数组下标会越界），
  *  编译器也能做跳转表优化；返回 static 字符串字面量，不需要释放、绝不会 NULL。
  */
 
-/**
- * @brief 状态码转静态字符串
- *
- * 作用：把 sensor_status_t 转成日志/CSV 用的短字符串（OK/RANGE/...）。
- * 参数：status —— 状态码。
- * 返回：指向静态字符串常量的指针（绝不返回 NULL；未知码返回 "UNKNOWN"）。
- * 时序：纯计算。
- * 注意：返回的指针不要 free、不要写入（字符串在只读段）。
- */
+/* 把 sensor_status_t 转成日志/CSV 用的短字符串（OK/RANGE/...）。 返回：指向静态字符串常量的指针（绝不返回 NULL；未知码返回 "UNKNOWN"）。 时序/边界：纯计算。
+ * 注意：返回的指针不要 free、不要写入（字符串在只读段）。 */
 const char *sensor_status_str(sensor_status_t status)
 {
     switch (status)

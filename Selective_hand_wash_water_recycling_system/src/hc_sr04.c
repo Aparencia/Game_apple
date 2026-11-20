@@ -12,7 +12,7 @@
 
 #include <stddef.h>
 #include "hal_data.h"
-#include "r_ioport.h"
+#include "sensor_common.h"          /* sensor_median_u16：3 点中值 */
 
 #define HC_TRIG_PIN          BSP_IO_PORT_04_PIN_02   /* P402 */
 #define HC_ECHO_PIN          BSP_IO_PORT_04_PIN_09   /* P409 */
@@ -24,6 +24,7 @@
 #define HC_ECHO_TIMEOUT_MS   30U
 #define HC_MIN_PULSE_US      100U
 #define HC_MAX_PULSE_US      25000U
+#define HC_HIST_DEPTH        3U                      /* 中值窗口深度 */
 
 static bool     g_hc_ready;
 static uint32_t g_cycles_per_us;
@@ -62,32 +63,18 @@ static void hc_delay_us(uint32_t us)
 static void hc_add_sample(uint16_t mm, uint32_t now_ms)
 {
     g_hist_mm[g_hist_pos] = mm;
-    g_hist_pos = (uint8_t)((g_hist_pos + 1U) % 3U);
-    if (g_hist_count < 3U)
+    g_hist_pos = (uint8_t)((g_hist_pos + 1U) % HC_HIST_DEPTH);
+    if (g_hist_count < HC_HIST_DEPTH)
     {
         g_hist_count++;
     }
 
-    if (g_hist_count >= 3U)
+    if (g_hist_count >= HC_HIST_DEPTH)
     {
-        uint16_t a = g_hist_mm[0];
-        uint16_t b = g_hist_mm[1];
-        uint16_t c = g_hist_mm[2];
-        uint16_t t;
+        /* 先拷到局部再排序：g_hist_mm 是环形缓冲，就地排序会改变"下一次覆盖哪个样本" */
+        uint16_t window[HC_HIST_DEPTH] = { g_hist_mm[0], g_hist_mm[1], g_hist_mm[2] };
 
-        if (a > b)
-        {
-            t = a; a = b; b = t;
-        }
-        if (b > c)
-        {
-            t = b; b = c; c = t;
-        }
-        if (a > b)
-        {
-            t = a; a = b; b = t;
-        }
-        g_mm = b;
+        g_mm = sensor_median_u16(window, HC_HIST_DEPTH);
     }
     else
     {
@@ -232,30 +219,13 @@ bool hc_sr04_get_mm(uint16_t *p_mm, bool *p_valid)
 
 void hc_sr04_get_diag(uint32_t *p_trig, uint32_t *p_edges, uint32_t *p_rise,
                       uint32_t *p_fall, uint32_t *p_timeout, uint32_t *p_last_us)
-{    if (NULL != p_trig)
-    {
-        *p_trig = g_trig_count;
-    }
-    if (NULL != p_edges)
-    {
-        *p_edges = g_edge_count;
-    }
-    if (NULL != p_rise)
-    {
-        *p_rise = g_rise_count;
-    }
-    if (NULL != p_fall)
-    {
-        *p_fall = g_fall_count;
-    }
-    if (NULL != p_timeout)
-    {
-        *p_timeout = g_timeout_count;
-    }
-    if (NULL != p_last_us)
-    {
-        *p_last_us = g_last_pulse_us;
-    }
+{
+    if (NULL != p_trig)    { *p_trig    = g_trig_count; }
+    if (NULL != p_edges)   { *p_edges   = g_edge_count; }
+    if (NULL != p_rise)    { *p_rise    = g_rise_count; }
+    if (NULL != p_fall)    { *p_fall    = g_fall_count; }
+    if (NULL != p_timeout) { *p_timeout = g_timeout_count; }
+    if (NULL != p_last_us) { *p_last_us = g_last_pulse_us; }
 }
 
 uint32_t hc_sr04_get_cycles_per_us(void)

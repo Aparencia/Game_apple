@@ -1,11 +1,4 @@
 /*
- * display.h
- *
- *  Created on: 2026年10月30日
- *      Author: Administrator
- */
-
-/*
  * display.h —— 板载 0.96" OLED 状态页（v1.3.0：三页，K2 短按切页）
  * ---------------------------------------------------------------------------
  * 定位（与 oled.h 一致）：
@@ -78,62 +71,20 @@ extern "C" {
 /* 开机页保持时间（ms）：上电先让用户看到 "OLED OK"，再切到状态页。 */
 #define DISPLAY_BOOT_HOLD_MS     800U
 
-/*
- * 函数名：display_init
- * 作用：初始化 OLED（I2C0 + SSD1306）并画一屏开机页，证明整条显示链路可用。
- * 参数：无。
- * 返回：true=屏幕可用（后续 display_task 可调用）；false=不可用（app 只打印一次 WARN）。
- * 时序/边界：约 130~150 ms（oled_init 内部含上电延时与清屏）；必须在 UART 初始化之后调用。
- * 注意：返回 false 不是致命错误——本工程的安全路径不依赖显示。
- */
+/* 初始化 OLED（I2C0 + SSD1306）并画一屏开机页，证明整条显示链路可用。 时序/边界：约 130~150 ms（oled_init 内部含上电延时与清屏）；必须在 UART 初始化之后调用。
+ * 注意：返回 false 不是致命错误——本工程的安全路径不依赖显示。 */
 bool display_init(void);
 
-/*
- * 函数名：display_task
- * 作用：把当前"流水线输出 + 判别输出 + 执行器输出"翻译成当前页并刷新
- *       （内容有变化/到节流周期才刷）。
- * 参数：now_ms —— app 的 1 ms 时基（用于节流与心跳；无符号回绕安全）；
- *       p_out  —— 流水线输出（EC0、σ、温度、ΔEC、g、ΔNTU%、note 等）；
- *       p_dec  —— 判别器输出（state/level/action，决定大字与状态串）；
- *       p_valve—— 执行器输出（阀逻辑位置/继电器实际状态/计数/通电时长；可为 NULL）。
- * 返回：true=正常（含"本 tick 无需刷新"）；false=连续 3 帧 I2C 刷新失败或屏幕已判丢失
- *       （app 只打印一次 WARN，之后继续用串口，不影响安全侧）。
+/* 把当前"流水线输出 + 判别输出 + 执行器输出"翻译成当前页并刷新 （内容有变化/到节流周期才刷）。
+ * 参数：now_ms —— app 的 1 ms 时基（用于节流与心跳；无符号回绕安全）； p_out  —— 流水线输出（EC0、σ、温度、ΔEC、g、ΔNTU%、note 等）； p_dec  —— 判别器输出（state/level/action，决定大字与状态串）； p_valve—— 执行器输出（阀逻辑位置/继电器实际状态/计数/通电时长；可为 NULL）。
  * 时序/边界：在 app_tick() 里每 50 ms 调一次；单次最坏约 25 ms（整屏心跳）。
- * 注意：p_out / p_dec 为 NULL 时直接返回 true（防御，不画屏也不报错）；
- *       p_valve 为 NULL 时 P2/P3 显示 "NO VALVE"（旧固件兼容）。
- */
+ * 注意：p_out / p_dec 为 NULL 时直接返回 true（防御，不画屏也不报错）； p_valve 为 NULL 时 P2/P3 显示 "NO VALVE"（旧固件兼容）。 */
 bool display_task(uint32_t now_ms, const pipeline_out_t *p_out, const decision_out_t *p_dec,
                   const valve_out_t *p_valve);
 
-/*
- * 函数名：display_page_next
- * 作用：K2 短按调用：切到下一页（P1→P2→P3→P1），下一 tick 整屏重画。
- * 参数：无。
- * 返回：切换后的页号（1~3，供串口日志）；屏幕不可用时返回 0（不改变内部页号）。
- * 时序/边界：O(1)，可在主循环上下文调用；不产生 I2C 传输。
- * 注意：显示不是安全路径，切页失败/屏坏不影响判别与阀。
+/* K2 短按调用：切到下一页（P1→P2→P3→P1），下一 tick 整屏重画。 时序/边界：O(1)，可在主循环上下文调用；不产生 I2C 传输。 注意：显示不是安全路径，切页失败/屏坏不影响判别与阀。
  */
 uint8_t display_page_next(void);
-
-/*
- * 函数名：display_page_get
- * 作用：读取当前页号（1~3；屏幕不可用时仍返回 1~3，仅用于日志/调试）。
- * 参数：无。
- * 返回：当前页号 1..3。
- * 时序/边界：O(1)。
- * 注意：仅用于日志/调试。
- */
-uint8_t display_page_get(void);
-
-/*
- * 函数名：display_ok
- * 作用：查询显示是否可用（oled_init 成功且未连续失败到"丢失"阈值）。
- * 参数：无。
- * 返回：true=可用；false=初始化失败或已判丢失。
- * 时序/边界：O(1)，可在 app 里用于一次性的 WARN 判断。
- * 注意：显示不可用不代表系统故障，只是"少了一路现场指示"。
- */
-bool display_ok(void);
 
 #ifdef __cplusplus
 }
