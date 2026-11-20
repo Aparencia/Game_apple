@@ -1,0 +1,450 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>整机接线与搭建 · 可回用清洗尾水选择性轻量回收系统</title>
+<style>
+  :root {
+    --ink:#212529; --sub:#5A6268; --line:#DEE2E6; --bg:#F8F9FA;
+    --blue:#1971C2; --green:#2F9E44; --orange:#E8590C; --red:#C92A2A; --purple:#6741D9;
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:#EEF1F4; color:var(--ink);
+         font-family:"Microsoft YaHei","PingFang SC","Hiragino Sans GB",system-ui,sans-serif; }
+  header { background:#0B3D2E; color:#fff; padding:18px 28px 14px; }
+  header h1 { margin:0; font-size:22px; letter-spacing:.5px; }
+  header p { margin:6px 0 0; font-size:12.5px; opacity:.82; }
+  .wrap { max-width:1760px; margin:0 auto; padding:0 18px 40px; }
+  nav { position:sticky; top:0; z-index:20; background:#fff; border-bottom:1px solid var(--line);
+         display:flex; gap:6px; align-items:center; padding:8px 14px; flex-wrap:wrap; }
+  nav button.tab { border:1px solid var(--line); background:#fff; color:var(--sub); padding:7px 16px;
+                    border-radius:999px; cursor:pointer; font-size:13.5px; }
+  nav button.tab.active { background:var(--blue); border-color:var(--blue); color:#fff; font-weight:600; }
+  .spacer { flex:1; }
+  nav .zoom button { width:32px; height:32px; border:1px solid var(--line); background:#fff; border-radius:8px;
+                      cursor:pointer; font-size:16px; line-height:1; }
+  nav .print { border:1px solid var(--line); background:#fff; border-radius:8px; padding:7px 12px; cursor:pointer; font-size:13px; }
+  section { display:none; padding-top:14px; }
+  section.active { display:block; }
+  .card { background:#fff; border-radius:14px; box-shadow:0 1px 3px rgba(16,24,40,.06);
+           border:1px solid var(--line); padding:14px; }
+  .diagram { overflow:auto; }
+  #tab-water svg.flow { width:100%; max-width:1000px; height:auto; display:block; margin:0 auto; }
+  #wiring { width:100%; height:auto; display:block; }
+  #wiring.focus [data-net] { opacity:.14; transition:opacity .12s; }
+  #wiring.focus [data-net].hl { opacity:1; }
+  #wiring [data-net] { cursor:pointer; }
+  #info { margin-top:10px; min-height:38px; background:#F1F5F9; border-left:4px solid var(--blue);
+           border-radius:6px; padding:9px 12px; font-size:13px; color:var(--sub); }
+  h2 { font-size:17px; margin:18px 0 10px; }
+  table { width:100%; border-collapse:collapse; font-size:13.5px; background:#fff; }
+  th, td { border:1px solid var(--line); padding:8px 10px; text-align:left; }
+  th { background:#E7F1FB; font-weight:600; }
+  td.sig { font-weight:600; color:var(--blue); }
+  code { background:#F1F3F5; padding:1px 6px; border-radius:4px; font-size:12.5px; }
+  ol.check { list-style:none; padding:0; margin:0; }
+  ol.check li { border-bottom:1px dashed var(--line); padding:10px 4px; }
+  ol.check label { display:flex; gap:10px; align-items:flex-start; font-size:13.5px; cursor:pointer; }
+  ol.check input { margin-top:3px; width:16px; height:16px; }
+  .grid2 { display:grid; grid-template-columns:1.15fr .85fr; gap:14px; }
+  .note { font-size:12.5px; color:var(--sub); }
+  .warn { background:#FFF5F5; border-left:4px solid var(--red); padding:10px 12px; border-radius:6px; font-size:13px; }
+  .tag { display:inline-block; padding:2px 8px; border-radius:999px; font-size:11.5px; background:#E7F1FB; color:var(--blue); margin-right:6px; }
+  @media (max-width:1100px) { .grid2 { grid-template-columns:1fr; } }
+  @media print {
+    nav, header p { display:none; }
+    body { background:#fff; }
+    section { display:none !important; }
+    section.active { display:block !important; }
+    .card { box-shadow:none; border:none; }
+    #wiring { width:100%; }
+    @page { size:A3 landscape; margin:8mm; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>整机接线与搭建图 · 可回用清洗尾水选择性轻量回收系统</h1>
+  <p>SENSOR-NODE v2.8.0-LEVEL-M2g　｜　RA4M2（R7FA4M2AD3CFL）　｜　电导率 + 浊度 + 水温 + 超声波液位　｜　二位三通阀分流　｜　悬停任一元件可高亮同一路信号</p>
+</header>
+<div class="wrap">
+  <nav>
+    <button class="tab active" data-tab="wire">接线图</button>
+    <button class="tab" data-tab="pin">引脚表</button>
+    <button class="tab" data-tab="water">水路与安全件</button>
+    <button class="tab" data-tab="check">上电检查</button>
+    <span class="spacer"></span>
+    <span class="zoom">
+      <button id="zout" title="缩小">−</button>
+      <button id="zin" title="放大">+</button>
+      <button id="zreset" title="复位">1:1</button>
+    </span>
+    <button class="print" onclick="window.print()">打印 / 导出 PDF</button>
+  </nav>
+
+  <section id="tab-wire" class="active">
+    <div class="card diagram">
+      <div id="svgbox"><svg id="wiring" viewBox="0 0 1680 1120" xmlns="http://www.w3.org/2000/svg" font-family="Microsoft YaHei, PingFang SC, sans-serif">
+<rect width="100%" height="100%" fill="#ffffff"/>
+<rect x="150" y="170" width="320" height="150" rx="12" fill="#EBF5FF" stroke="#1971C2" stroke-width="2" data-net="tds" data-info="模拟 TDS 模块：自来水 1490.6 mV、皂液 2356.3 mV（实验报告），是主判据。" class="el"/>
+<text x="166" y="208" font-size="19" font-weight="700" fill="#212529" data-net="tds" data-info="模拟 TDS 模块：自来水 1490.6 mV、皂液 2356.3 mV（实验报告），是主判据。">TDS / EC 模块</text>
+<text x="166" y="236" font-size="13" fill="#5A6268" data-net="tds" data-info="模拟 TDS 模块：自来水 1490.6 mV、皂液 2356.3 mV（实验报告），是主判据。">AOUT 0~2.3 V，直连 ADC</text>
+<rect x="150" y="340" width="320" height="150" rx="12" fill="#EBF5FF" stroke="#1971C2" stroke-width="2" data-net="ntu" data-info="浊度模块必须 5 V 供电（约 40 mA），输出可达 4.5 V，不能直连 3.3 V ADC。" class="el"/>
+<text x="166" y="378" font-size="19" font-weight="700" fill="#212529" data-net="ntu" data-info="浊度模块必须 5 V 供电（约 40 mA），输出可达 4.5 V，不能直连 3.3 V ADC。">浊度 TS-300B</text>
+<text x="166" y="406" font-size="13" fill="#5A6268" data-net="ntu" data-info="浊度模块必须 5 V 供电（约 40 mA），输出可达 4.5 V，不能直连 3.3 V ADC。">AO 0~4.5 V → 1k/2k 分压 ≤3.0 V</text>
+<rect x="150" y="510" width="320" height="150" rx="12" fill="#EBF5FF" stroke="#1971C2" stroke-width="2" data-net="temp" data-info="水温用于把电导折算到 25 ℃；不要用片内 TSN 代替——那测的是芯片结温。" class="el"/>
+<text x="166" y="548" font-size="19" font-weight="700" fill="#212529" data-net="temp" data-info="水温用于把电导折算到 25 ℃；不要用片内 TSN 代替——那测的是芯片结温。">DS18B20 水温</text>
+<text x="166" y="576" font-size="13" fill="#5A6268" data-net="temp" data-info="水温用于把电导折算到 25 ℃；不要用片内 TSN 代替——那测的是芯片结温。">1-Wire，4.7 kΩ 上拉到 3.3 V</text>
+<rect x="150" y="680" width="320" height="150" rx="12" fill="#EBF5FF" stroke="#1971C2" stroke-width="2" data-net="level" data-info="超声波液位：每 100 ms 触发一轮，输出 mm/valid；液位无效时系统自动回退 EC/NTU 判据。" class="el"/>
+<text x="166" y="718" font-size="19" font-weight="700" fill="#212529" data-net="level" data-info="超声波液位：每 100 ms 触发一轮，输出 mm/valid；液位无效时系统自动回退 EC/NTU 判据。">HC-SR04 液位</text>
+<text x="166" y="746" font-size="13" fill="#5A6268" data-net="level" data-info="超声波液位：每 100 ms 触发一轮，输出 mm/valid；液位无效时系统自动回退 EC/NTU 判据。">TRIG 3.3→5 V ｜ ECHO 串 1 k</text>
+<rect x="640" y="150" width="400" height="690" rx="12" fill="#E9FBEF" stroke="#2F9E44" stroke-width="2" data-net="mcu" data-info="RA4M2 主板：ADC12 双通道 + I2C0 + SCI9 + 1-Wire + IRQ6 + GPIO，主循环 50 ms。" class="el"/>
+<rect x="1250" y="175" width="370" height="125" rx="12" fill="#FFF4E6" stroke="#E8590C" stroke-width="2" data-net="relay" data-info="单路继电器：光耦输入、3.3 V 可触发；高电平吸合 = 回收位。线圈两端并 1N4007 续流。" class="el"/>
+<text x="1266" y="213" font-size="19" font-weight="700" fill="#212529" data-net="relay" data-info="单路继电器：光耦输入、3.3 V 可触发；高电平吸合 = 回收位。线圈两端并 1N4007 续流。">继电器模块</text>
+<text x="1266" y="241" font-size="13" fill="#5A6268" data-net="relay" data-info="单路继电器：光耦输入、3.3 V 可触发；高电平吸合 = 回收位。线圈两端并 1N4007 续流。">SRD-05VDC ｜ 高电平 = 回收位</text>
+<rect x="1250" y="330" width="370" height="130" rx="12" fill="#FFF4E6" stroke="#E8590C" stroke-width="2" data-net="valve" data-info="12 V 二位三通阀：断电弹簧复位到排空口，所以“断电 = 不回收”。阀只切回收支路，主排水路常通。" class="el"/>
+<text x="1266" y="368" font-size="19" font-weight="700" fill="#212529" data-net="valve" data-info="12 V 二位三通阀：断电弹簧复位到排空口，所以“断电 = 不回收”。阀只切回收支路，主排水路常通。">二位三通电磁阀</text>
+<text x="1266" y="396" font-size="13" fill="#5A6268" data-net="valve" data-info="12 V 二位三通阀：断电弹簧复位到排空口，所以“断电 = 不回收”。阀只切回收支路，主排水路常通。">12 V ｜ 断电 = 排空（fail-safe）</text>
+<rect x="1250" y="470" width="370" height="130" rx="12" fill="#F3F0FF" stroke="#6741D9" stroke-width="2" data-net="oled" data-info="OLED 三页：P1 水质、P2 执行器、P3 信息；单页刷新约 3 ms。" class="el"/>
+<text x="1266" y="508" font-size="19" font-weight="700" fill="#212529" data-net="oled" data-info="OLED 三页：P1 水质、P2 执行器、P3 信息；单页刷新约 3 ms。">OLED 0.96″</text>
+<text x="1266" y="536" font-size="13" fill="#5A6268" data-net="oled" data-info="OLED 三页：P1 水质、P2 执行器、P3 信息；单页刷新约 3 ms。">SSD1306 ｜ I²C0 0x3C ｜ 400 kHz</text>
+<rect x="1250" y="640" width="370" height="130" rx="12" fill="#F1F3F5" stroke="#495057" stroke-width="2" data-net="uart" data-info="USB-TTL 接 SCI9：115200 8N1；每 200 ms 一行 CSV、每 2 s 一行人类可读摘要。" class="el"/>
+<text x="1266" y="678" font-size="19" font-weight="700" fill="#212529" data-net="uart" data-info="USB-TTL 接 SCI9：115200 8N1；每 200 ms 一行 CSV、每 2 s 一行人类可读摘要。">USB-TTL（CH340E）</text>
+<text x="1266" y="706" font-size="13" fill="#5A6268" data-net="uart" data-info="USB-TTL 接 SCI9：115200 8N1；每 200 ms 一行 CSV、每 2 s 一行人类可读摘要。">115200 8N1 ｜ 串口日志</text>
+<rect x="1250" y="785" width="370" height="80" rx="12" fill="#F1F3F5" stroke="#495057" stroke-width="2" data-net="key" data-info="K2 接 P000（板载上拉，按下为低）：长按 3 s 进入独立清水标定。" class="el"/>
+<text x="1266" y="823" font-size="19" font-weight="700" fill="#212529" data-net="key" data-info="K2 接 P000（板载上拉，按下为低）：长按 3 s 进入独立清水标定。">按键 K2</text>
+<text x="1266" y="851" font-size="13" fill="#5A6268" data-net="key" data-info="K2 接 P000（板载上拉，按下为低）：长按 3 s 进入独立清水标定。">长按 ≥3 s：独立标定</text>
+<rect x="60" y="930" width="370" height="90" rx="12" fill="#FFF5F5" stroke="#C92A2A" stroke-width="2" data-net="p12" data-info="12 V 适配器（内正外负）只给阀供电，与 5 V 完全分开，避免阀动作干扰 MCU。当前未装保险丝与总开关（已知缺项）。" class="el"/>
+<text x="76" y="968" font-size="18" font-weight="700" fill="#212529" data-net="p12" data-info="12 V 适配器（内正外负）只给阀供电，与 5 V 完全分开，避免阀动作干扰 MCU。当前未装保险丝与总开关（已知缺项）。">12 V / 3 A 电源</text>
+<text x="76" y="996" font-size="13" fill="#5A6268" data-net="p12" data-info="12 V 适配器（内正外负）只给阀供电，与 5 V 完全分开，避免阀动作干扰 MCU。当前未装保险丝与总开关（已知缺项）。">只供阀，不供板；直接接继电器 COM</text>
+<rect x="880" y="872" width="240" height="80" rx="12" fill="#FFF4E6" stroke="#E8590C" stroke-width="2" data-net="power5" data-info="5 V 经 USB-C 进板；传感器 5 V 从板载 5V 引脚取。" class="el"/>
+<text x="896" y="910" font-size="17" font-weight="700" fill="#212529" data-net="power5" data-info="5 V 经 USB-C 进板；传感器 5 V 从板载 5V 引脚取。">USB-C 5 V / 2 A</text>
+<text x="896" y="938" font-size="13" fill="#5A6268" data-net="power5" data-info="5 V 经 USB-C 进板；传感器 5 V 从板载 5V 引脚取。">供板与传感器</text>
+<polyline points="42,150 42,890" fill="none" stroke="#E8590C" stroke-width="3" stroke-linejoin="round" stroke-linecap="round" data-net="power5" data-info="5 V 母线：由主板 5V 引脚引出，供 TDS、浊度、HC-SR04。" class="el"/>
+<polyline points="74,150 74,890" fill="none" stroke="#6741D9" stroke-width="3" stroke-linejoin="round" stroke-linecap="round" data-net="power33" data-info="3.3 V 母线：供 DS18B20（4.7 kΩ 上拉也接 3.3 V）。" class="el"/>
+<polyline points="106,150 106,890" fill="none" stroke="#343A40" stroke-width="3" stroke-linejoin="round" stroke-linecap="round" data-net="gnd" data-info="GND 母线：所有器件单点共地，12 V 侧负极也在此汇合。" class="el"/>
+<polyline points="150,270 42,270" fill="none" stroke="#E8590C" stroke-width="3" stroke-linejoin="round" stroke-linecap="round" data-net="tds power" data-info="VCC 接 5 V" class="el"/>
+<polyline points="150,305 106,305" fill="none" stroke="#343A40" stroke-width="3" stroke-linejoin="round" stroke-linecap="round" data-net="tds gnd" data-info="GND 接公共地" class="el"/>
+<polyline points="470,250 545,250 545,250 640,250" fill="none" stroke="#1971C2" stroke-width="3" stroke-linejoin="round" stroke-linecap="round" data-net="tds" data-info="电导信号进 ADC12 的 AN12（P014）；模块输出不超 3.3 V，可直连。" class="el"/>
+<rect x="482" y="225" width="77.6" height="20" fill="#fff"  data-net="tds" data-info="电导信号进 ADC12 的 AN12（P014）；模块输出不超 3.3 V，可直连。"/>
+<text x="486" y="235" font-size="12" fill="#1971C2"  data-net="tds" data-info="电导信号进 ADC12 的 AN12（P014）；模块输出不超 3.3 V，可直连。">→ AN12</text>
+<polyline points="150,440 42,440" fill="none" stroke="#E8590C" stroke-width="3" stroke-linejoin="round" stroke-linecap="round" data-net="ntu power" data-info="VCC 接 5 V" class="el"/>
+<polyline points="150,475 106,475" fill="none" stroke="#343A40" stroke-width="3" stroke-linejoin="round" stroke-linecap="round" data-net="ntu gnd" data-info="GND 接公共地" class="el"/>
+<polyline points="470,420 560,420 560,350 640,350" fill="none" stroke="#1971C2" stroke-width="3" stroke-linejoin="round" stroke-linecap="round" data-net="ntu" data-info="浊度 AO 经 1 kΩ 串 + 2 kΩ 对地分压到 ≤3.0 V 后进 AN11（P013），并并 0.1 µF。" class="el"/>
+<rect x="482" y="395" width="77.6" height="20" fill="#fff"  data-net="ntu" data-info="浊度 AO 经 1 kΩ 串 + 2 kΩ 对地分压到 ≤3.0 V 后进 AN11（P013），并并 0.1 µF。"/>
+<text x="486" y="405" font-size="12" fill="#1971C2"  data-net="ntu" data-info="浊度 AO 经 1 kΩ 串 + 2 kΩ 对地分压到 ≤3.0 V 后进 AN11（P013），并并 0.1 µF。">→ AN11</text>
+<polyline points="150,610 74,610" fill="none" stroke="#6741D9" stroke-width="3" stroke-linejoin="round" stroke-linecap="round" data-net="temp power" data-info="VDD 接 3.3 V" class="el"/>
+<polyline points="150,645 106,645" fill="none" stroke="#343A40" stroke-width="3" stroke-linejoin="round" stroke-linecap="round" data-net="temp gnd" data-info="GND 接公共地" class="el"/>
+<polyline points="470,590 580,590 580,450 640,450" fill="none" stroke="#2F9E44" stroke-width="3" stroke-linejoin="round" stroke-linecap="round" data-net="temp" data-info="1-Wire 数据线接 P500，并用 4.7 kΩ 上拉到 3.3 V；每 2 s 发起一次转换。" class="el"/>
+<rect x="482" y="565" width="77.6" height="20" fill="#fff"  data-net="temp" data-info="1-Wire 数据线接 P500，并用 4.7 kΩ 上拉到 3.3 V；每 2 s 发起一次转换。"/>
+<text x="486" y="575" font-size="12" fill="#2F9E44"  data-net="temp" data-info="1-Wire 数据线接 P500，并用 4.7 kΩ 上拉到 3.3 V；每 2 s 发起一次转换。">→ P500</text>
+<polyline points="150,780 42,780" fill="none" stroke="#E8590C" stroke-width="3" stroke-linejoin="round" stroke-linecap="round" data-net="level power" data-info="VCC 接 5 V" class="el"/>
+<polyline points="150,815 106,815" fill="none" stroke="#343A40" stroke-width="3" stroke-linejoin="round" stroke-linecap="round" data-net="level gnd" data-info="GND 接公共地" class="el"/>
+<polyline points="470,760 600,760 600,560 640,560" fill="none" stroke="#2F9E44" stroke-width="3" stroke-linejoin="round" stroke-linecap="round" data-net="level" data-info="TRIG 由 P402 输出，需经 74LVC1T45 或 NPN 升到 5 V；HC-SR04 的 VIH≈3.5 V。" class="el"/>
+<rect x="482" y="735" width="77.6" height="20" fill="#fff"  data-net="level" data-info="TRIG 由 P402 输出，需经 74LVC1T45 或 NPN 升到 5 V；HC-SR04 的 VIH≈3.5 V。"/>
+<text x="486" y="745" font-size="12" fill="#2F9E44"  data-net="level" data-info="TRIG 由 P402 输出，需经 74LVC1T45 或 NPN 升到 5 V；HC-SR04 的 VIH≈3.5 V。">→ P402</text>
+<polyline points="470,795 620,795 620,610 640,610" fill="none" stroke="#C92A2A" stroke-width="3" stroke-linejoin="round" stroke-linecap="round" data-net="level" data-info="ECHO 为 5 V 脉冲，串 1 kΩ 后进 P409（5 V 容忍），IRQ6 双沿 + DWT 测脉宽。" class="el"/>
+<rect x="482" y="770" width="77.6" height="20" fill="#fff"  data-net="level" data-info="ECHO 为 5 V 脉冲，串 1 kΩ 后进 P409（5 V 容忍），IRQ6 双沿 + DWT 测脉宽。"/>
+<text x="486" y="780" font-size="12" fill="#C92A2A"  data-net="level" data-info="ECHO 为 5 V 脉冲，串 1 kΩ 后进 P409（5 V 容忍），IRQ6 双沿 + DWT 测脉宽。">→ P409</text>
+<polyline points="700,840 700,858 42,858" fill="none" stroke="#E8590C" stroke-width="3" stroke-linejoin="round" stroke-linecap="round" data-net="power5" data-info="主板 5V 引脚（U2-19/20）是传感器 5 V 的来源。" class="el"/>
+<polyline points="760,840 760,875 74,875" fill="none" stroke="#6741D9" stroke-width="3" stroke-linejoin="round" stroke-linecap="round" data-net="power33" data-info="3.3 V 由板上 LDO 产生。" class="el"/>
+<polyline points="820,840 820,892 106,892" fill="none" stroke="#343A40" stroke-width="3" stroke-linejoin="round" stroke-linecap="round" data-net="gnd" data-info="GND 汇流。" class="el"/>
+<polyline points="1250,200 1040,200" fill="none" stroke="#6741D9" stroke-width="3" stroke-linejoin="round" stroke-linecap="round" data-net="power33 relay" data-info="继电器模块 VCC 接 3.3 V" class="el"/>
+<rect x="1156" y="178" width="42.8" height="20" fill="#fff"  data-net="power33 relay" data-info="继电器模块 VCC 接 3.3 V"/>
+<text x="1160" y="188" font-size="12" fill="#6741D9"  data-net="power33 relay" data-info="继电器模块 VCC 接 3.3 V">3V3</text>
+<polyline points="1250,230 1040,230" fill="none" stroke="#343A40" stroke-width="3" stroke-linejoin="round" stroke-linecap="round" data-net="gnd relay" data-info="共地" class="el"/>
+<rect x="1156" y="208" width="42.8" height="20" fill="#fff"  data-net="gnd relay" data-info="共地"/>
+<text x="1160" y="218" font-size="12" fill="#343A40"  data-net="gnd relay" data-info="共地">GND</text>
+<polyline points="1250,265 1040,265" fill="none" stroke="#2F9E44" stroke-width="3" stroke-linejoin="round" stroke-linecap="round" data-net="relay" data-info="P104 高电平 → 吸合 → 回收位；低电平 → 断电 → 排空" class="el"/>
+<rect x="1156" y="243" width="31.2" height="20" fill="#fff"  data-net="relay" data-info="P104 高电平 → 吸合 → 回收位；低电平 → 断电 → 排空"/>
+<text x="1160" y="253" font-size="12" fill="#2F9E44"  data-net="relay" data-info="P104 高电平 → 吸合 → 回收位；低电平 → 断电 → 排空">IN</text>
+<polyline points="1520,300 1520,350" fill="none" stroke="#C92A2A" stroke-width="3" stroke-linejoin="round" stroke-linecap="round" data-net="valve" data-info="继电器 NO 触点串在 12 V 与阀线圈之间；线圈两端并 1N4007。" class="el"/>
+<rect x="1528" y="314" width="100.8" height="20" fill="#fff"  data-net="valve" data-info="继电器 NO 触点串在 12 V 与阀线圈之间；线圈两端并 1N4007。"/>
+<text x="1532" y="324" font-size="12" fill="#C92A2A"  data-net="valve" data-info="继电器 NO 触点串在 12 V 与阀线圈之间；线圈两端并 1N4007。">NO → 阀 +</text>
+<polyline points="1250,490 1040,490" fill="none" stroke="#6741D9" stroke-width="3" stroke-linejoin="round" stroke-linecap="round" data-net="power33 oled" data-info="OLED 供电与 I²C 连线。" class="el"/>
+<rect x="1156" y="468" width="42.8" height="20" fill="#fff"  data-net="power33 oled" data-info="OLED 供电与 I²C 连线。"/>
+<text x="1160" y="478" font-size="12" fill="#6741D9"  data-net="power33 oled" data-info="OLED 供电与 I²C 连线。">3V3</text>
+<polyline points="1250,520 1040,520" fill="none" stroke="#343A40" stroke-width="3" stroke-linejoin="round" stroke-linecap="round" data-net="gnd oled" data-info="OLED 供电与 I²C 连线。" class="el"/>
+<rect x="1156" y="498" width="42.8" height="20" fill="#fff"  data-net="gnd oled" data-info="OLED 供电与 I²C 连线。"/>
+<text x="1160" y="508" font-size="12" fill="#343A40"  data-net="gnd oled" data-info="OLED 供电与 I²C 连线。">GND</text>
+<polyline points="1250,555 1040,555" fill="none" stroke="#0C8599" stroke-width="3" stroke-linejoin="round" stroke-linecap="round" data-net="oled" data-info="OLED 供电与 I²C 连线。" class="el"/>
+<rect x="1156" y="533" width="42.8" height="20" fill="#fff"  data-net="oled" data-info="OLED 供电与 I²C 连线。"/>
+<text x="1160" y="543" font-size="12" fill="#0C8599"  data-net="oled" data-info="OLED 供电与 I²C 连线。">SDA</text>
+<polyline points="1250,585 1040,585" fill="none" stroke="#0C8599" stroke-width="3" stroke-linejoin="round" stroke-linecap="round" data-net="oled" data-info="OLED 供电与 I²C 连线。" class="el"/>
+<rect x="1156" y="563" width="42.8" height="20" fill="#fff"  data-net="oled" data-info="OLED 供电与 I²C 连线。"/>
+<text x="1160" y="573" font-size="12" fill="#0C8599"  data-net="oled" data-info="OLED 供电与 I²C 连线。">SCL</text>
+<polyline points="1250,660 1040,660" fill="none" stroke="#495057" stroke-width="3" stroke-linejoin="round" stroke-linecap="round" data-net="uart" data-info="串口：MCU 的 TX 接 CH340E 的 RX，交叉连接。" class="el"/>
+<rect x="1156" y="638" width="42.8" height="20" fill="#fff"  data-net="uart" data-info="串口：MCU 的 TX 接 CH340E 的 RX，交叉连接。"/>
+<text x="1160" y="648" font-size="12" fill="#495057"  data-net="uart" data-info="串口：MCU 的 TX 接 CH340E 的 RX，交叉连接。">RXD</text>
+<polyline points="1250,690 1040,690" fill="none" stroke="#495057" stroke-width="3" stroke-linejoin="round" stroke-linecap="round" data-net="uart" data-info="串口：MCU 的 TX 接 CH340E 的 RX，交叉连接。" class="el"/>
+<rect x="1156" y="668" width="42.8" height="20" fill="#fff"  data-net="uart" data-info="串口：MCU 的 TX 接 CH340E 的 RX，交叉连接。"/>
+<text x="1160" y="678" font-size="12" fill="#495057"  data-net="uart" data-info="串口：MCU 的 TX 接 CH340E 的 RX，交叉连接。">TXD</text>
+<polyline points="1250,720 1040,720" fill="none" stroke="#343A40" stroke-width="3" stroke-linejoin="round" stroke-linecap="round" data-net="gnd uart" data-info="串口：MCU 的 TX 接 CH340E 的 RX，交叉连接。" class="el"/>
+<rect x="1156" y="698" width="42.8" height="20" fill="#fff"  data-net="gnd uart" data-info="串口：MCU 的 TX 接 CH340E 的 RX，交叉连接。"/>
+<text x="1160" y="708" font-size="12" fill="#343A40"  data-net="gnd uart" data-info="串口：MCU 的 TX 接 CH340E 的 RX，交叉连接。">GND</text>
+<polyline points="1250,800 1040,800" fill="none" stroke="#2F9E44" stroke-width="3" stroke-linejoin="round" stroke-linecap="round" data-net="key" class="el"/>
+<rect x="1156" y="778" width="54.4" height="20" fill="#fff"  data-net="key"/>
+<text x="1160" y="788" font-size="12" fill="#2F9E44"  data-net="key">P000</text>
+<polyline points="430,975 1650,975 1650,300 1600,300" fill="none" stroke="#C92A2A" stroke-width="3" stroke-linejoin="round" stroke-linecap="round" data-net="p12" data-info="适配器正极直接到继电器 COM；NO 再接到阀。未装保险丝/总开关，插拔适配器即上断电。" class="el"/>
+<rect x="1186" y="953" width="112.39999999999999" height="20" fill="#fff"  data-net="p12" data-info="适配器正极直接到继电器 COM；NO 再接到阀。未装保险丝/总开关，插拔适配器即上断电。"/>
+<text x="1190" y="963" font-size="12" fill="#C92A2A"  data-net="p12" data-info="适配器正极直接到继电器 COM；NO 再接到阀。未装保险丝/总开关，插拔适配器即上断电。">→ 继电器 COM</text>
+<polyline points="1585,460 1585,1035 245,1035 245,1020" fill="none" stroke="#343A40" stroke-width="3" stroke-linejoin="round" stroke-linecap="round" data-net="gnd valve" data-info="阀负极回到 12 V 负极，并与 MCU 的 GND 单点共地。" class="el"/>
+<rect x="976" y="1013" width="228.4" height="20" fill="#fff"  data-net="gnd valve" data-info="阀负极回到 12 V 负极，并与 MCU 的 GND 单点共地。"/>
+<text x="980" y="1023" font-size="12" fill="#343A40"  data-net="gnd valve" data-info="阀负极回到 12 V 负极，并与 MCU 的 GND 单点共地。">12 V −（与板 GND 单点共地）</text>
+<polyline points="1000,872 1000,840" fill="none" stroke="#E8590C" stroke-width="3" stroke-linejoin="round" stroke-linecap="round" data-net="power5" data-info="USB-C 5 V 进板。" class="el"/>
+<polyline points="120,1066 152,1066" fill="none" stroke="#C92A2A" stroke-width="3" stroke-linejoin="round" stroke-linecap="round"/>
+<polyline points="242,1066 274,1066" fill="none" stroke="#E8590C" stroke-width="3" stroke-linejoin="round" stroke-linecap="round"/>
+<polyline points="364,1066 396,1066" fill="none" stroke="#6741D9" stroke-width="3" stroke-linejoin="round" stroke-linecap="round"/>
+<polyline points="486,1066 518,1066" fill="none" stroke="#343A40" stroke-width="3" stroke-linejoin="round" stroke-linecap="round"/>
+<polyline points="608,1066 640,1066" fill="none" stroke="#1971C2" stroke-width="3" stroke-linejoin="round" stroke-linecap="round"/>
+<polyline points="730,1066 762,1066" fill="none" stroke="#2F9E44" stroke-width="3" stroke-linejoin="round" stroke-linecap="round"/>
+<polyline points="852,1066 884,1066" fill="none" stroke="#0C8599" stroke-width="3" stroke-linejoin="round" stroke-linecap="round"/>
+<polyline points="974,1066 1006,1066" fill="none" stroke="#495057" stroke-width="3" stroke-linejoin="round" stroke-linecap="round"/>
+<circle cx="150" cy="270" r="4" fill="#E8590C" data-net="tds" class="el"/>
+<circle cx="150" cy="305" r="4" fill="#343A40" data-net="tds" class="el"/>
+<circle cx="470" cy="250" r="4" fill="#1971C2" data-net="tds" class="el"/>
+<circle cx="640" cy="250" r="4" fill="#1971C2" data-net="mcu" class="el"/>
+<circle cx="150" cy="440" r="4" fill="#E8590C" data-net="ntu" class="el"/>
+<circle cx="150" cy="475" r="4" fill="#343A40" data-net="ntu" class="el"/>
+<circle cx="470" cy="420" r="4" fill="#1971C2" data-net="ntu" class="el"/>
+<circle cx="640" cy="350" r="4" fill="#1971C2" data-net="mcu" class="el"/>
+<circle cx="150" cy="610" r="4" fill="#6741D9" data-net="temp" class="el"/>
+<circle cx="150" cy="645" r="4" fill="#343A40" data-net="temp" class="el"/>
+<circle cx="470" cy="590" r="4" fill="#2F9E44" data-net="temp" class="el"/>
+<circle cx="640" cy="450" r="4" fill="#2F9E44" data-net="mcu" class="el"/>
+<circle cx="150" cy="780" r="4" fill="#E8590C" data-net="level" class="el"/>
+<circle cx="150" cy="815" r="4" fill="#343A40" data-net="level" class="el"/>
+<circle cx="470" cy="760" r="4" fill="#2F9E44" data-net="level" class="el"/>
+<circle cx="640" cy="560" r="4" fill="#2F9E44" data-net="mcu" class="el"/>
+<circle cx="470" cy="795" r="4" fill="#C92A2A" data-net="level" class="el"/>
+<circle cx="640" cy="610" r="4" fill="#C92A2A" data-net="mcu" class="el"/>
+<circle cx="1040" cy="200" r="4" fill="#6741D9" data-net="mcu" class="el"/>
+<circle cx="1040" cy="230" r="4" fill="#343A40" data-net="mcu" class="el"/>
+<circle cx="1040" cy="265" r="4" fill="#2F9E44" data-net="mcu" class="el"/>
+<circle cx="1040" cy="490" r="4" fill="#6741D9" data-net="mcu" class="el"/>
+<circle cx="1040" cy="520" r="4" fill="#343A40" data-net="mcu" class="el"/>
+<circle cx="1040" cy="555" r="4" fill="#0C8599" data-net="mcu" class="el"/>
+<circle cx="1040" cy="585" r="4" fill="#0C8599" data-net="mcu" class="el"/>
+<circle cx="1040" cy="660" r="4" fill="#495057" data-net="mcu" class="el"/>
+<circle cx="1040" cy="690" r="4" fill="#495057" data-net="mcu" class="el"/>
+<circle cx="1040" cy="720" r="4" fill="#343A40" data-net="mcu" class="el"/>
+<circle cx="1040" cy="800" r="4" fill="#2F9E44" data-net="mcu" class="el"/>
+<circle cx="700" cy="840" r="4" fill="#E8590C" data-net="mcu" class="el"/>
+<circle cx="760" cy="840" r="4" fill="#6741D9" data-net="mcu" class="el"/>
+<circle cx="820" cy="840" r="4" fill="#343A40" data-net="mcu" class="el"/>
+<circle cx="1250" cy="200" r="4" fill="#6741D9" data-net="relay" class="el"/>
+<circle cx="1250" cy="230" r="4" fill="#343A40" data-net="relay" class="el"/>
+<circle cx="1250" cy="265" r="4" fill="#2F9E44" data-net="relay" class="el"/>
+<circle cx="1520" cy="350" r="4" fill="#C92A2A" data-net="valve" class="el"/>
+<circle cx="1250" cy="490" r="4" fill="#6741D9" data-net="oled" class="el"/>
+<circle cx="1250" cy="520" r="4" fill="#343A40" data-net="oled" class="el"/>
+<circle cx="1250" cy="555" r="4" fill="#0C8599" data-net="oled" class="el"/>
+<circle cx="1250" cy="585" r="4" fill="#0C8599" data-net="oled" class="el"/>
+<circle cx="1250" cy="660" r="4" fill="#495057" data-net="uart" class="el"/>
+<circle cx="1250" cy="690" r="4" fill="#495057" data-net="uart" class="el"/>
+<circle cx="1250" cy="720" r="4" fill="#343A40" data-net="uart" class="el"/>
+<circle cx="1250" cy="800" r="4" fill="#2F9E44" data-net="key" class="el"/>
+<circle cx="1600" cy="300" r="4" fill="#C92A2A" data-net="p12" class="el"/>
+<circle cx="1000" cy="840" r="4" fill="#E8590C" data-net="power5" class="el"/>
+<text x="60" y="46" font-size="36" fill="#212529" text-anchor="start" dominant-baseline="middle" font-weight="700">整机接线与搭建图</text>
+<text x="60" y="94" font-size="17" fill="#5A6268" text-anchor="start" dominant-baseline="middle">SENSOR-NODE v2.8.0-LEVEL-M2g　｜　RA4M2（R7FA4M2AD3CFL）　｜　电导率 + 浊度 + 水温 + 超声波液位　｜　二位三通阀分流</text>
+<text x="30" y="136" font-size="13" fill="#E8590C" text-anchor="start" dominant-baseline="middle" font-weight="700">5V</text>
+<text x="62" y="136" font-size="13" fill="#6741D9" text-anchor="start" dominant-baseline="middle" font-weight="700">3V3</text>
+<text x="96" y="136" font-size="13" fill="#343A40" text-anchor="start" dominant-baseline="middle" font-weight="700">GND</text>
+<text x="162" y="270" font-size="12" fill="#5A6268" text-anchor="start" dominant-baseline="middle">VCC</text>
+<text x="162" y="305" font-size="12" fill="#5A6268" text-anchor="start" dominant-baseline="middle">GND</text>
+<text x="458" y="250" font-size="12" fill="#5A6268" text-anchor="end" dominant-baseline="middle">AOUT</text>
+<text x="162" y="440" font-size="12" fill="#5A6268" text-anchor="start" dominant-baseline="middle">VCC</text>
+<text x="162" y="475" font-size="12" fill="#5A6268" text-anchor="start" dominant-baseline="middle">GND</text>
+<text x="458" y="420" font-size="12" fill="#5A6268" text-anchor="end" dominant-baseline="middle">AO</text>
+<text x="162" y="610" font-size="12" fill="#5A6268" text-anchor="start" dominant-baseline="middle">VDD</text>
+<text x="162" y="645" font-size="12" fill="#5A6268" text-anchor="start" dominant-baseline="middle">GND</text>
+<text x="458" y="590" font-size="12" fill="#5A6268" text-anchor="end" dominant-baseline="middle">DQ</text>
+<text x="162" y="780" font-size="12" fill="#5A6268" text-anchor="start" dominant-baseline="middle">VCC</text>
+<text x="162" y="815" font-size="12" fill="#5A6268" text-anchor="start" dominant-baseline="middle">GND</text>
+<text x="458" y="760" font-size="12" fill="#5A6268" text-anchor="end" dominant-baseline="middle">TRIG</text>
+<text x="458" y="795" font-size="12" fill="#5A6268" text-anchor="end" dominant-baseline="middle">ECHO</text>
+<text x="840" y="186" font-size="24" fill="#1B5E36" text-anchor="middle" dominant-baseline="middle" font-weight="700" data-net="mcu">RA4M2 主板</text>
+<text x="840" y="218" font-size="12" fill="#5A6268" text-anchor="middle" dominant-baseline="middle">R7FA4M2AD3CFL　·　12 位 ADC　·　50 ms 主循环</text>
+<text x="660" y="244" font-size="13" fill="#1971C2" text-anchor="start" dominant-baseline="middle" font-weight="700" data-net="mcu">P014 / AN12</text>
+<text x="660" y="262" font-size="10.5" fill="#5A6268" text-anchor="start" dominant-baseline="middle" data-net="mcu">电导</text>
+<text x="660" y="344" font-size="13" fill="#1971C2" text-anchor="start" dominant-baseline="middle" font-weight="700" data-net="mcu">P013 / AN11</text>
+<text x="660" y="362" font-size="10.5" fill="#5A6268" text-anchor="start" dominant-baseline="middle" data-net="mcu">浊度</text>
+<text x="660" y="444" font-size="13" fill="#2F9E44" text-anchor="start" dominant-baseline="middle" font-weight="700" data-net="mcu">P500</text>
+<text x="660" y="462" font-size="10.5" fill="#5A6268" text-anchor="start" dominant-baseline="middle" data-net="mcu">1-Wire</text>
+<text x="660" y="554" font-size="13" fill="#2F9E44" text-anchor="start" dominant-baseline="middle" font-weight="700" data-net="mcu">P402</text>
+<text x="660" y="572" font-size="10.5" fill="#5A6268" text-anchor="start" dominant-baseline="middle" data-net="mcu">TRIG</text>
+<text x="660" y="604" font-size="13" fill="#C92A2A" text-anchor="start" dominant-baseline="middle" font-weight="700" data-net="mcu">P409 / IRQ6</text>
+<text x="660" y="622" font-size="10.5" fill="#5A6268" text-anchor="start" dominant-baseline="middle" data-net="mcu">ECHO</text>
+<text x="1020" y="200" font-size="13" fill="#6741D9" text-anchor="end" dominant-baseline="middle" font-weight="700" data-net="mcu">3V3</text>
+<text x="1020" y="230" font-size="13" fill="#343A40" text-anchor="end" dominant-baseline="middle" font-weight="700" data-net="mcu">GND</text>
+<text x="1020" y="265" font-size="13" fill="#2F9E44" text-anchor="end" dominant-baseline="middle" font-weight="700" data-net="mcu">P104</text>
+<text x="1020" y="490" font-size="13" fill="#6741D9" text-anchor="end" dominant-baseline="middle" font-weight="700" data-net="mcu">3V3</text>
+<text x="1020" y="520" font-size="13" fill="#343A40" text-anchor="end" dominant-baseline="middle" font-weight="700" data-net="mcu">GND</text>
+<text x="1020" y="555" font-size="13" fill="#0C8599" text-anchor="end" dominant-baseline="middle" font-weight="700" data-net="mcu">P407</text>
+<text x="1020" y="585" font-size="13" fill="#0C8599" text-anchor="end" dominant-baseline="middle" font-weight="700" data-net="mcu">P408</text>
+<text x="1020" y="660" font-size="13" fill="#495057" text-anchor="end" dominant-baseline="middle" font-weight="700" data-net="mcu">P109</text>
+<text x="1020" y="690" font-size="13" fill="#495057" text-anchor="end" dominant-baseline="middle" font-weight="700" data-net="mcu">P110</text>
+<text x="1020" y="720" font-size="13" fill="#343A40" text-anchor="end" dominant-baseline="middle" font-weight="700" data-net="mcu">GND</text>
+<text x="1020" y="800" font-size="13" fill="#2F9E44" text-anchor="end" dominant-baseline="middle" font-weight="700" data-net="mcu">P000</text>
+<text x="700" y="826" font-size="12" fill="#E8590C" text-anchor="middle" dominant-baseline="middle" font-weight="700" data-net="mcu">5V</text>
+<text x="760" y="826" font-size="12" fill="#6741D9" text-anchor="middle" dominant-baseline="middle" font-weight="700" data-net="mcu">3V3</text>
+<text x="820" y="826" font-size="12" fill="#343A40" text-anchor="middle" dominant-baseline="middle" font-weight="700" data-net="mcu">GND</text>
+<text x="60" y="1066" font-size="15" fill="#212529" text-anchor="start" dominant-baseline="middle" font-weight="700">图例</text>
+<text x="160" y="1066" font-size="12" fill="#5A6268" text-anchor="start" dominant-baseline="middle">+12 V</text>
+<text x="282" y="1066" font-size="12" fill="#5A6268" text-anchor="start" dominant-baseline="middle">5 V</text>
+<text x="404" y="1066" font-size="12" fill="#5A6268" text-anchor="start" dominant-baseline="middle">3.3 V</text>
+<text x="526" y="1066" font-size="12" fill="#5A6268" text-anchor="start" dominant-baseline="middle">GND</text>
+<text x="648" y="1066" font-size="12" fill="#5A6268" text-anchor="start" dominant-baseline="middle">模拟量</text>
+<text x="770" y="1066" font-size="12" fill="#5A6268" text-anchor="start" dominant-baseline="middle">数字 / 中断</text>
+<text x="892" y="1066" font-size="12" fill="#5A6268" text-anchor="start" dominant-baseline="middle">I²C</text>
+<text x="1014" y="1066" font-size="12" fill="#5A6268" text-anchor="start" dominant-baseline="middle">串口</text>
+<text x="60" y="1102" font-size="12" fill="#5A6268" text-anchor="start" dominant-baseline="middle">注：上电前先量 TDS AOUT 与浊度分压节点电压，再插板；主排水路不经过阀，阀只切回收支路；12 V 回路当前未装保险丝与总开关（已知缺项，赛后补）。</text>
+</svg></div>
+      <div id="info">把鼠标放在元件或连线上：会高亮同一路信号，并在这里显示这条线的说明。也可用右上角 +/− 缩放。</div>
+    </div>
+    <p class="note">提示：接线图按“左侧电源母线 + 中间主控 + 右侧执行/人机 + 右下 12 V 回路”布置；颜色代表电位，虚线框内文字为排针位。</p>
+  </section>
+
+  <section id="tab-pin">
+    <div class="card">
+      <h2>引脚对照表</h2>
+      <table>
+        <thead><tr><th style="width:16%">信号</th><th style="width:16%">MCU 引脚</th><th style="width:10%">排针</th><th>电平 / 说明</th></tr></thead>
+        <tbody><tr><td class='sig'>TDS AOUT</td><td><code>P014 / AN12</code></td><td>U1-6</td><td>0~2.3 V 直连；模拟绝对最大 3.6 V</td></tr>
+<tr><td class='sig'>浊度 AO</td><td><code>P013 / AN11</code></td><td>U1-5</td><td>1 kΩ 串 + 2 kΩ 对地 → ≤3.0 V</td></tr>
+<tr><td class='sig'>DS18B20 DQ</td><td><code>P500</code></td><td>U1-17</td><td>1-Wire，4.7 kΩ 上拉到 3.3 V</td></tr>
+<tr><td class='sig'>HC-SR04 TRIG</td><td><code>P402</code></td><td>U1-2</td><td>3.3 V 输出，需电平转换到 5 V</td></tr>
+<tr><td class='sig'>HC-SR04 ECHO</td><td><code>P409</code></td><td>U2-3</td><td>5 V 容忍；串 1 kΩ；IRQ6 双沿</td></tr>
+<tr><td class='sig'>OLED SDA</td><td><code>P407</code></td><td>U1-7</td><td>I²C0，0x3C，400 kHz</td></tr>
+<tr><td class='sig'>OLED SCL</td><td><code>P408</code></td><td>U2-7</td><td>I²C0，与 SDA 成对</td></tr>
+<tr><td class='sig'>阀继电器 IN</td><td><code>P104</code></td><td>U2-8</td><td>高电平 = 回收；10 kΩ 下拉</td></tr>
+<tr><td class='sig'>串口 TX</td><td><code>P109</code></td><td>U2-12</td><td>SCI9，115200 8N1，接 CH340E 的 RX</td></tr>
+<tr><td class='sig'>串口 RX</td><td><code>P110</code></td><td>U2-13</td><td>接 CH340E 的 TX</td></tr>
+<tr><td class='sig'>按键 K2</td><td><code>P000</code></td><td>U1-14</td><td>板载上拉，按下为低；长按 3 s 标定</td></tr>
+<tr><td class='sig'>LED1（可选）</td><td><code>P111</code></td><td>U2-2</td><td>高电平点亮</td></tr></tbody>
+      </table>
+      <h2>最容易接错的五处</h2>
+      <div class="warn">
+        ① 浊度 AO 直连 MCU（可达 4.5 V，会伤 ADC）→ 必须 1 kΩ + 2 kΩ 分压；<br>
+        ② HC-SR04 的 TRIG 直接用 3.3 V 驱动（VIH≈3.5 V，不触发）→ 加电平转换；<br>
+        ③ 阀接成常开（断电反而回收）→ 必须“断电=排空”，用 NO 触点；<br>
+        ④ 12 V 地与板 GND 未共地 → 继电器乱吸合、ADC 跳变；<br>
+        ⑤ 把阀串在主排水路上（阀卡死=水龙头不出水）→ 阀只切回收支路。
+      </div>
+    </div>
+  </section>
+
+  <section id="tab-water">
+    <div class="card">
+      <h2>水路与三条安全件</h2>
+      <svg viewBox="0 0 1200 600" xmlns="http://www.w3.org/2000/svg" font-family="Microsoft YaHei, PingFang SC, sans-serif" class="flow">
+<rect width="100%" height="100%" fill="#ffffff"/>
+<polygon points="100,55 340,55 310,155 130,155" fill="#EBF5FF" stroke="#1971C2" stroke-width="2" data-info="用透明塑料盆模拟洗手盆，水从盆底孔流下，全重力自流、无泵。"/>
+<text x="220" y="88" font-size="19" fill="#212529" text-anchor="middle" dominant-baseline="middle" font-weight="700">模拟洗手盆</text>
+<text x="220" y="120" font-size="13" fill="#5A6268" text-anchor="middle" dominant-baseline="middle">透明塑料盆</text>
+<polyline points="220,155 220,205" fill="none" stroke="#1971C2" stroke-width="4" stroke-linejoin="round" stroke-linecap="round" data-info="盆底孔 → 判定腔，水靠重力自流（无泵）。"/>
+<polygon points="220.0,205.0 214.3,192.2 225.7,192.2" fill="#1971C2" data-info="盆底孔 → 判定腔，水靠重力自流（无泵）。"/>
+<rect x="130" y="210" width="180" height="200" rx="12" fill="#E9FBEF" stroke="#2F9E44" stroke-width="2" data-info="四路传感器都装在判定腔内：电导、水温、浊度、超声波液位。"/>
+<text x="220.0" y="232" font-size="18" fill="#212529" text-anchor="middle" dominant-baseline="hanging" font-weight="700" data-info="四路传感器都装在判定腔内：电导、水温、浊度、超声波液位。">核心判定腔</text>
+<text x="220.0" y="262" font-size="13" fill="#5A6268" text-anchor="middle" dominant-baseline="hanging" data-info="四路传感器都装在判定腔内：电导、水温、浊度、超声波液位。">瓶体 / 流动池</text>
+<text x="220.0" y="287" font-size="13" fill="#5A6268" text-anchor="middle" dominant-baseline="hanging" data-info="四路传感器都装在判定腔内：电导、水温、浊度、超声波液位。">TDS · 水温</text>
+<text x="220.0" y="312" font-size="13" fill="#5A6268" text-anchor="middle" dominant-baseline="hanging" data-info="四路传感器都装在判定腔内：电导、水温、浊度、超声波液位。">浊度 · 超声波</text>
+<text x="220.0" y="337" font-size="13" fill="#8A6D1A" text-anchor="middle" dominant-baseline="hanging" data-info="四路传感器都装在判定腔内：电导、水温、浊度、超声波液位。">0.6~1 L（现状）</text>
+<polyline points="220,410 220,440 415,440" fill="none" stroke="#1971C2" stroke-width="4" stroke-linejoin="round" stroke-linecap="round" data-info="判定腔出水进入二位三通阀。"/>
+<polygon points="415.0,440.0 402.2,445.7 402.2,434.3" fill="#1971C2" data-info="判定腔出水进入二位三通阀。"/>
+<rect x="415" y="400" width="160" height="80" rx="12" fill="#FFF4E6" stroke="#E8590C" stroke-width="2" data-info="断电弹簧复位到排空口：断电 = 不回收，这是硬件的 fail-safe。"/>
+<text x="495.0" y="422" font-size="18" fill="#212529" text-anchor="middle" dominant-baseline="hanging" font-weight="700" data-info="断电弹簧复位到排空口：断电 = 不回收，这是硬件的 fail-safe。">二位三通阀</text>
+<text x="495.0" y="452" font-size="12" fill="#5A6268" text-anchor="middle" dominant-baseline="hanging" data-info="断电弹簧复位到排空口：断电 = 不回收，这是硬件的 fail-safe。">12 V · 断电=排空</text>
+<polyline points="575,420 735,420" fill="none" stroke="#2F9E44" stroke-width="4" stroke-linejoin="round" stroke-linecap="round" data-info="判定为可回收 → 绿桶。"/>
+<polygon points="735.0,420.0 722.2,425.7 722.2,414.3" fill="#2F9E44" data-info="判定为可回收 → 绿桶。"/>
+<rect x="735" y="384" width="220" height="74" rx="12" fill="#E9FBEF" stroke="#2F9E44" stroke-width="2" data-info="回收桶为独立敞口容器，不与自来水管连通（空气隔断）。"/>
+<text x="845.0" y="406" font-size="18" fill="#1B5E36" text-anchor="middle" dominant-baseline="hanging" font-weight="700" data-info="回收桶为独立敞口容器，不与自来水管连通（空气隔断）。">绿桶 · 回收</text>
+<text x="845.0" y="436" font-size="12" fill="#5A6268" text-anchor="middle" dominant-baseline="hanging" data-info="回收桶为独立敞口容器，不与自来水管连通（空气隔断）。">冲厕 / 拖地 / 绿化</text>
+<polyline points="575,456 660,456 660,520 735,520" fill="none" stroke="#C92A2A" stroke-width="4" stroke-linejoin="round" stroke-linecap="round" data-info="判定为不可回用 → 灰桶（下水道）。"/>
+<polygon points="735.0,520.0 722.2,525.7 722.2,514.3" fill="#C92A2A" data-info="判定为不可回用 → 灰桶（下水道）。"/>
+<rect x="735" y="484" width="220" height="74" rx="12" fill="#FFF5F5" stroke="#C92A2A" stroke-width="2" data-info="含皂液或“拿不准”的水一律走这一路。"/>
+<text x="845.0" y="506" font-size="18" fill="#C92A2A" text-anchor="middle" dominant-baseline="hanging" font-weight="700" data-info="含皂液或“拿不准”的水一律走这一路。">灰桶 · 排空</text>
+<text x="845.0" y="536" font-size="12" fill="#5A6268" text-anchor="middle" dominant-baseline="hanging" data-info="含皂液或“拿不准”的水一律走这一路。">下水道</text>
+<polyline points="310,225 1030,225 1030,520 957,520" fill="none" stroke="#ADB5BD" stroke-width="3" stroke-linejoin="round" stroke-linecap="round" stroke-dasharray="8 6" data-info="腔体上沿溢流孔直通排空、不经过阀：阀卡死或进水过量时只溢流，不积水。"/>
+<polygon points="957.0,520.0 969.8,514.3 969.8,525.7" fill="#ADB5BD" data-info="腔体上沿溢流孔直通排空、不经过阀：阀卡死或进水过量时只溢流，不积水。"/>
+<text x="330" y="212" font-size="13" fill="#5A6268" text-anchor="start" dominant-baseline="middle">腔体上沿溢流孔（不经阀，直通排空）</text>
+<text x="1040" y="320" font-size="13" fill="#5A6268" text-anchor="middle" dominant-baseline="middle">旁路</text>
+<text x="100" y="575" font-size="13" fill="#C92A2A" text-anchor="start" dominant-baseline="middle" font-weight="700">① 主通路常通（阀只切回收支路）　② 防倒吸（独立敞口桶）　③ 溢流旁通（不经阀）</text>
+</svg>
+      <div class="grid2" style="margin-top:12px">
+        <div>
+          <p class="note"><span class="tag">现状</span>透明盆（模拟洗手盆）→ 瓶体判定腔（TDS / 水温 / 浊度 / 超声波）→ 二位三通阀 → 绿桶回收 / 灰桶排空。</p>
+          <p class="note"><span class="tag">注意</span>腔体约 0.6~1 L，时间常数大（τ 30~200 s），所以演示每段要 30~60 s；停水后需手动排空才会进 <code>DRY</code>。</p>
+        </div>
+        <div class="warn">
+          <b>三条安全件（缺一条不上台）</b><br>
+          ① 主通路常通：阀只切回收支路，卡死只是“不回收”，不是“不出水”；<br>
+          ② 防倒吸：回收支路是独立敞口桶，与自来水管无物理连通；<br>
+          ③ 溢流旁通：腔体上沿溢流孔直通排空，进水过量或阀卡死时不积水。
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="tab-check">
+    <div class="card">
+      <h2>上电前 8 条检查（照着打勾）</h2>
+      <ol class="check"><li><label><input type='checkbox'><span><b>断电量电压</b>　12 V 适配器空载量 12 V±5%，5 V 适配器量 5 V；确认内正外负。</span></label></li>
+<li><label><input type='checkbox'><span><b>量 TDS 输出</b>　接水后量 AOUT，应在 0~2.3 V；若 >3.0 V 不要插板。</span></label></li>
+<li><label><input type='checkbox'><span><b>量浊度分压点</b>　AO 经 1 kΩ/2 kΩ 后节点 ≤3.0 V；顺带确认 0.1 µF 已并。</span></label></li>
+<li><label><input type='checkbox'><span><b>确认共地</b>　12 V 负极与主板 GND 单点连接；不共地会出现继电器乱吸合。</span></label></li>
+<li><label><input type='checkbox'><span><b>插 OLED 前量 3.3 V</b>　VCC 与 GND 不可反接；I²C 线序 SDA/SCL 不要互换。</span></label></li>
+<li><label><input type='checkbox'><span><b>上电看启动行</b>　串口应出现 `# [BOOT] SENSOR-NODE v2.8.0-LEVEL-M2g`，OLED 进自检。</span></label></li>
+<li><label><input type='checkbox'><span><b>手动验阀向</b>　`V1` 应切回收（绿桶）、`V0` 应切排空；反了先查继电器高/低电平。</span></label></li>
+<li><label><input type='checkbox'><span><b>空腔静置 5 min</b>　不应出现 `CLEAR`，`# VALVE count` 不增长。</span></label></li></ol>
+      <p class="note">全部打勾再上水。任一条不过，先查线，不要先改代码。</p>
+      <div class="warn" style="margin-top:12px">
+        <b>已知缺项（实物现状）</b>：12 V 回路目前没有保险丝与总开关，适配器直接接继电器 COM，
+        上电/断电靠插拔适配器。演示时请先接好阀再插电，拔电前先关水；赛后补一个 2 A 保险丝座即可。
+      </div>
+    </div>
+  </section>
+</div>
+
+<script>
+  const svg = document.getElementById('wiring');
+  const info = document.getElementById('info');
+  const DEF = info.textContent;
+  svg.querySelectorAll('[data-net]').forEach(el => {
+    el.addEventListener('mouseenter', () => {
+      const nets = (el.dataset.net || '').split(/\s+/).filter(Boolean);
+      if (!nets.length) return;
+      svg.classList.add('focus');
+      svg.querySelectorAll('[data-net]').forEach(o => {
+        const on = (o.dataset.net || '').split(/\s+/).some(n => nets.includes(n));
+        o.classList.toggle('hl', on);
+      });
+      if (el.dataset.info) info.textContent = el.dataset.info;
+    });
+    el.addEventListener('mouseleave', () => {
+      svg.classList.remove('focus');
+      svg.querySelectorAll('.hl').forEach(o => o.classList.remove('hl'));
+      info.textContent = DEF;
+    });
+  });
+
+  document.querySelectorAll('nav .tab').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('nav .tab').forEach(b => b.classList.remove('active'));
+      document.querySelectorAll('section').forEach(s => s.classList.remove('active'));
+      btn.classList.add('active');
+      document.getElementById('tab-' + btn.dataset.tab).classList.add('active');
+    });
+  });
+
+  let scale = 1;
+  const base = svg.getBoundingClientRect().width || svg.viewBox.baseVal.width;
+  function apply() { svg.style.width = Math.round(base * scale) + 'px'; }
+  document.getElementById('zin').onclick = () => { scale = Math.min(3, scale + .15); apply(); };
+  document.getElementById('zout').onclick = () => { scale = Math.max(.5, scale - .15); apply(); };
+  document.getElementById('zreset').onclick = () => { scale = 1; svg.style.width = '100%'; };
+</script>
+</body>
+</html>
