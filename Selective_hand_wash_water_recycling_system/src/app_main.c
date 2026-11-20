@@ -262,7 +262,7 @@
 #include <sys/stat.h>                /* struct stat / S_IFCHR：printf 重定向需要的空桩 */
 
 /* ---------- 应用参数（全部集中在这里，便于标定） ---------- */
-#define APP_FW_VERSION          "SENSOR-NODE v2.8.0-LEVEL-M2d"  /* M2d: 液位只区分没水/水脏，不绕过清洁门槛 */
+#define APP_FW_VERSION          "SENSOR-NODE v2.8.0-LEVEL-M2e"  /* M2e: 液位只冻结 trim，不冻结槽切换 */
 #define APP_TICK_MS             50U                  /* 主循环 tick（项目设想 6.2.1） */
 #define APP_CSV_PERIOD_MS       200U                 /* CSV 输出周期：5 行/秒 */
 #define APP_TIP_PERIOD_MS       2000U                /* 人类可读摘要（# TIP）周期：2 s */
@@ -1109,12 +1109,6 @@ static void app_baseline_task(const pipeline_out_t *p_out, uint32_t now_ms)
     uint8_t i;
 
     if ((NULL == p_out) || g_cal_multi_slot || (!g_pipe.initialized))
-    {
-        return;
-    }
-    /* 液位变化时只冻结“已生效基线”的切换；若基线无效（如刚标定完），
-     * 仍必须选一个槽，否则会一直 NO_BASE。 */
-    if ((g_level_hold) && (p_out->baseline_valid))
     {
         return;
     }
