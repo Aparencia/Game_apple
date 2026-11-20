@@ -262,7 +262,7 @@
 #include <sys/stat.h>                /* struct stat / S_IFCHR：printf 重定向需要的空桩 */
 
 /* ---------- 应用参数（全部集中在这里，便于标定） ---------- */
-#define APP_FW_VERSION          "SENSOR-NODE v2.8.0-LEVEL-M2f"  /* M2f: 阀位优先选槽，FULL 由 EC/液位 */
+#define APP_FW_VERSION          "SENSOR-NODE v2.8.0-LEVEL-M2g"  /* M2g: AO 低但液位+EC 确认水时降级继续标定 */
 #define APP_TICK_MS             50U                  /* 主循环 tick（项目设想 6.2.1） */
 #define APP_CSV_PERIOD_MS       200U                 /* CSV 输出周期：5 行/秒 */
 #define APP_TIP_PERIOD_MS       2000U                /* 人类可读摘要（# TIP）周期：2 s */
@@ -529,7 +529,8 @@ static bool                g_ac_need_manual = false;   /* 自检失败，需要�
 static uint32_t            g_ac_done_since_ms = 0U;    /* 进入 DONE 的时刻 */
 static volatile app_base_result_t g_base_result = APP_BASE_NONE;
 static uint8_t             g_cal_stage = 0U;           /* B3：0=DRAIN 1=RECOVER 2=FULL */
-static volatile bool       g_cal_multi_slot = false;     /* true=正在做三槽标定 */
+static bool                g_cal_multi_slot = false;     /* true=正在做三槽标定 */
+static bool                g_cal_soft_water = false;     /* Auto fail 降级：AO 低但液位+EC 确认水 */
 static uint32_t            g_level_log_ms = 0U;          /* HC-SR04 事件行节流 */
 static bool                g_level_hold = false;        /* M2：液位变化中冻结判定 */
 static bool                g_level_has_last = false;
@@ -1487,10 +1488,14 @@ static void app_baseline_validate(uint32_t now_ms, const pipeline_out_t *p_out)
         && (p_out->ntu0_ao_mv
             < (g_dec.gate.ao_dry_mv + g_dec.gate.cfg.ao_clean_delta_mv)))
     {
-        pipeline_invalidate_baseline(&g_pipe, "BASE_TURBID");
-        g_base_result = APP_BASE_REJECT;
-        printf("# BASELINE REJECT note=BASE_TURBID (clean water required; AO too close to dry)\r\n");
-        return;
+        if (!g_cal_soft_water)
+        {
+            pipeline_invalidate_baseline(&g_pipe, "BASE_TURBID");
+            g_base_result = APP_BASE_REJECT;
+            printf("# BASELINE REJECT note=BASE_TURBID (clean water required; AO too close to dry)\r\n");
+            return;
+        }
+        printf("# CAL WARN: accept low-AO baseline (LEVEL+EC confirmed water)\r\n");
     }
 
     if (g_dec.gate.dry_valid)
@@ -2016,6 +2021,7 @@ static void app_autocal_start(uint32_t now_ms)
     g_base_result      = APP_BASE_NONE;
     g_cal_stage        = 0U;      /* 0=DRAIN、1=RECOVER、2=FULL */
     g_cal_multi_slot     = true;
+    g_cal_soft_water     = false;
     pipeline_baseline_clear_slots(&g_pipe);
     pipeline_invalidate_baseline(&g_pipe, "AUTOCAL_START");
 
@@ -2063,6 +2069,7 @@ static void app_cal_start(uint32_t now_ms)
     g_base_result    = APP_BASE_NONE;
     g_cal_stage      = 0U;
     g_cal_multi_slot   = true;
+    g_cal_soft_water   = false;
 
     printf("# CAL: three-slot clean-water calibration requested (DRAIN, RECOVER, FULL)\r\n");
     app_autocal_enter(APP_AC_SETTLE, now_ms, "key_cal");
@@ -2257,6 +2264,7 @@ static void app_autocal_task(uint32_t now_ms, const pipeline_out_t *p_out)
             bool allow_wet = true;
             bool stable_hold = false;
             bool full_ready = true;
+            bool soft_water = false;
             uint16_t lvl_mm = 0U;
             bool lvl_ok = false;
 
@@ -2307,6 +2315,20 @@ static void app_autocal_task(uint32_t now_ms, const pipeline_out_t *p_out)
                     /* 液位只作为“水在腔里”的诊断/区分，不覆盖 AO 清洁门槛。
                      * AO 低说明水可能脏，不能拿液位强行通过。 */
                     (void)hc_sr04_get_mm(&lvl_mm, &lvl_ok);
+
+                    /* Auto fail 兜底：液位确认有水 + EC 已明显高于干态，
+                     * 但 AO 因塑料片/气泡偏低时，允许继续标定并打 WARN。
+                     * 这不是“无视脏水”，而是 AO 不可信时的降级路径。 */
+                    if ((!allow_wet) && (lvl_ok) && (lvl_mm >= 20U)
+                        && (p_out->tds_mv25 >= (g_dec.gate.ec_dry_mv
+                                                + g_dec.gate.cfg.ec_wet_delta_mv)))
+                    {
+                        printf("# CAL WARN: AO low (ao=%.0f) but LEVEL+EC confirm water; continue\r\n",
+                               (double)p_out->ntu_ao_mv);
+                        allow_wet = true;
+                        soft_water = true;
+                        g_cal_soft_water = true;
+                    }
 
                     /* FULL 段必须确认水已满/在流动：EC 至少比 DRAIN/RECOVER 槽高 10 mV，
                      * 否则保持 SETTLE，等用户继续进水（OLED 显示 Cal F fill）。 */
@@ -2364,7 +2386,7 @@ static void app_autocal_task(uint32_t now_ms, const pipeline_out_t *p_out)
                             app_autocal_enter(APP_AC_DONE, now_ms, "water_unconfirmed");
                         }
                     }
-                    else if ((0U == g_cal_stage)
+                    else if ((0U == g_cal_stage) && (!soft_water)
                              && ((float)p_out->ntu_ao_mv
                                  < (g_dec.gate.ao_dry_mv
                                     + g_dec.gate.cfg.ao_clean_delta_mv)))
