@@ -144,6 +144,8 @@ typedef struct st_decision
     uint8_t           upgrade_blocks;    /* 连续"可清"块计数（单侧迟滞） */
     uint8_t           downgrade_hits;    /* 连续"不确定"块计数（L0→L1 去抖） */
     bool              blank_active;      /* 上一 tick 是否在屏蔽窗内（边沿检测） */
+    bool              level_hold;        /* M2：液位变化中，强制 WAIT/DRAIN */
+    const char       *level_reason;      /* 液位保持原因（静态串） */
 } decision_t;
 
 /* 初始化（p_cfg 可为 NULL；内部限幅并初始化工况机）。 */
@@ -158,6 +160,9 @@ void decision_note_valve_switch(decision_t *p_dec, uint32_t now_ms);
 
 /* 每 50 ms tick 调用一次：先跑工况机，再（仅 MEASURE 时）分类并重算许可。 */
 void decision_update(decision_t *p_dec, const sensor_pipeline_t *p_pipe, uint32_t now_ms);
+
+/* M2：液位变化门控。hold=true 时强制 WAIT/L1/DRAIN，不分类、不回收。 */
+void decision_set_level_hold(decision_t *p_dec, bool hold, const char *reason);
 
 /* 读取最近一次输出（只读）。 */
 const decision_out_t *decision_get_out(const decision_t *p_dec);

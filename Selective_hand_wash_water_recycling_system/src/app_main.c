@@ -150,6 +150,11 @@
  *   用 DWT CYCCNT 测 Echo 脉宽，非阻塞 100 ms 一轮；先输出 # LEVEL 事件行，
  *   不改 17 列 CSV，也不改 EC/NTU 阈值。液位状态机/门控在 M2 接入。
  *
+ * v2.8.0-LEVEL-M2（2026-11-20，液位门控）：
+ *   HC-SR04 液位变化 >5 mm/s 时置 level_hold，decision 强制 WAIT/L1/DRAIN；
+ *   稳定 <1 mm/s 持续 1 s 才释放；液位无效回退 v2.7.6。
+ *   同时 EC 迟滞 25%→10%，避免 dEC=+14 被 L0 保持区留在 CLEAR。
+ *
  * v2.0.0（2026-11-16，现场诊断后重做控制模型）：
  *   旧模型"事件闩锁 + 30 s 超时"被整体替换为"工况门控 + 每 tick 重算的回收许可"：
  *     validity(gate) 先判"能不能判"（FAULT/DRY/SETTLE/MEASURE/LOCKOUT），
@@ -257,7 +262,7 @@
 #include <sys/stat.h>                /* struct stat / S_IFCHR：printf 重定向需要的空桩 */
 
 /* ---------- 应用参数（全部集中在这里，便于标定） ---------- */
-#define APP_FW_VERSION          "SENSOR-NODE v2.8.0-LEVEL-M1e"  /* M1e: d1=4% + trim 0.7d1，防弱肥皂被学掉 */
+#define APP_FW_VERSION          "SENSOR-NODE v2.8.0-LEVEL-M2"  /* M2: 液位变化门控 + EC 迟滞 10% */
 #define APP_TICK_MS             50U                  /* 主循环 tick（项目设想 6.2.1） */
 #define APP_CSV_PERIOD_MS       200U                 /* CSV 输出周期：5 行/秒 */
 #define APP_TIP_PERIOD_MS       2000U                /* 人类可读摘要（# TIP）周期：2 s */
@@ -369,7 +374,7 @@ static const decision_cfg_t g_app_decision_cfg =
     .ec_d2_min_mv        = 20.0f,
     .ec_d1_pct           = 4.0f,      /* v2.8.0-M1e：第二次稀释肥皂 dEC≈+14 < 5% 会被 CLEAR；4% 进 L1 */
     .ec_d2_pct           = 9.0f,      /* 肥皂现场 +11.5%×EC0，d2 取 9% */
-    .ec_hyst_ratio       = 0.25f,     /* 25% 迟滞，防阈值附近抖 */
+    .ec_hyst_ratio       = 0.10f,     /* v2.8-M2：25% 会把弱肥皂留在 L0，收到 10% */
     .ntu_d1_pct          = 7.0f,      /* v2.7：清水稳定段 dNTU 实测最高 7.6%，取 7.0 */
     .ntu_d2_pct          = 9.0f,      /* v2.7：肥皂 dNTU ≥8.6；EC+NTU 双通道仍可判 L2 */
     .ntu_hyst_ratio      = 0.25f,
@@ -526,6 +531,11 @@ static volatile app_base_result_t g_base_result = APP_BASE_NONE;
 static uint8_t             g_cal_stage = 0U;           /* B3：0=DRAIN 1=RECOVER 2=FULL */
 static volatile bool       g_cal_multi_slot = false;     /* true=正在做三槽标定 */
 static uint32_t            g_level_log_ms = 0U;          /* HC-SR04 事件行节流 */
+static bool                g_level_hold = false;        /* M2：液位变化中冻结判定 */
+static bool                g_level_has_last = false;
+static uint16_t            g_level_last_mm = 0U;
+static uint32_t            g_level_last_ms = 0U;
+static uint32_t            g_level_stable_since_ms = 0U;
 static uint32_t            g_base_suspect_since_ms = 0U; /* g>1.08 持续起点 */
 static uint32_t            g_base_suspect_log_ms = 0U;   /* 上次 # BASE_SUSPECT 时刻 */
 
@@ -554,6 +564,7 @@ static void        app_base_suspect_task(uint32_t now_ms, const pipeline_out_t *
 static void        app_dry_task(uint32_t now_ms, const pipeline_out_t *p_out);
 static void        app_baseline_task(const pipeline_out_t *p_out, uint32_t now_ms);
 static void        app_baseline_trim_task(const pipeline_out_t *p_out);
+static void        app_level_task(uint32_t now_ms);
 static void        app_dry_begin(uint32_t now_ms, uint16_t target_n, bool auto_cap);
 static void        app_autocal_start(uint32_t now_ms);
 static void        app_cal_start(uint32_t now_ms);
@@ -1016,6 +1027,76 @@ static void app_valve_init(void)
 }
 
 /*
+ * M2：液位状态门控。
+ *   液位变化 >5 mm/s → hold，强制 WAIT/DRAIN；
+ *   连续稳定 <1 mm/s 1 s → 释放；
+ *   液位无效 → 回退 v2.7.6 gate。
+ */
+static void app_level_task(uint32_t now_ms)
+{
+    uint16_t mm = 0U;
+    bool valid = false;
+    int32_t rate;
+    uint32_t dt;
+
+    (void)hc_sr04_get_mm(&mm, &valid);
+
+    if ((!valid) || (mm < 10U))
+    {
+        g_level_hold       = false;
+        g_level_has_last   = false;
+        g_level_stable_since_ms = 0U;
+        decision_set_level_hold(&g_dec, false, NULL);
+        return;
+    }
+
+    if (!g_level_has_last)
+    {
+        g_level_has_last   = true;
+        g_level_last_mm    = mm;
+        g_level_last_ms    = now_ms;
+        g_level_stable_since_ms = now_ms;
+        return;
+    }
+
+    dt = (uint32_t)(now_ms - g_level_last_ms);
+    if (dt < 45U)
+    {
+        return;
+    }
+
+    rate = ((int32_t)mm - (int32_t)g_level_last_mm) * 1000 / (int32_t)dt;
+    g_level_last_mm = mm;
+    g_level_last_ms = now_ms;
+
+    if ((rate > 5) || (rate < -5))
+    {
+        g_level_hold = true;
+        g_level_stable_since_ms = now_ms;
+    }
+    else if ((rate >= -1) && (rate <= 1))
+    {
+        if (0U == g_level_stable_since_ms)
+        {
+            g_level_stable_since_ms = now_ms;
+        }
+        else if ((uint32_t)(now_ms - g_level_stable_since_ms) >= 1000U)
+        {
+            g_level_hold = false;
+        }
+    }
+    else
+    {
+        /* 1~5 mm/s：过渡带，保持冻结 */
+        g_level_hold = true;
+        g_level_stable_since_ms = now_ms;
+    }
+
+    decision_set_level_hold(&g_dec, g_level_hold,
+                            g_level_hold ? "LEVEL_MOVE" : NULL);
+}
+
+/*
  * B3：最近基线槽选择。
  *   三条槽分别覆盖 DRAIN 静态 / RECOVER 静态 / FULL 流动；
  *   按当前 EC 找最近槽，带 8 mV 保持迟滞，避免两槽之间来回切。
@@ -1028,7 +1109,7 @@ static void app_baseline_task(const pipeline_out_t *p_out, uint32_t now_ms)
     uint8_t best = 0xFFU;
     uint8_t i;
 
-    if ((NULL == p_out) || g_cal_multi_slot || (!g_pipe.initialized))
+    if ((NULL == p_out) || g_cal_multi_slot || g_level_hold || (!g_pipe.initialized))
     {
         return;
     }
@@ -1120,7 +1201,7 @@ static void app_baseline_trim_task(const pipeline_out_t *p_out)
     float d_ntu;
     float step = 0.20f;   /* 50 ms tick × 0.2 mV = 4 mV/s（清洁时才允许） */
 
-    if ((NULL == p_out) || g_cal_multi_slot || (!p_out->baseline_valid))
+    if ((NULL == p_out) || g_cal_multi_slot || g_level_hold || (!p_out->baseline_valid))
     {
         return;
     }
@@ -3531,6 +3612,7 @@ static void app_tick(uint32_t now_ms)
 
     /* 3b) HC-SR04 液位：非阻塞，每 1 s 打一行事件（不改 17 列 CSV） */
     hc_sr04_task(now_ms);
+    app_level_task(now_ms);
     if ((uint32_t)(now_ms - g_level_log_ms) >= 1000U)
     {
         uint16_t level_mm = 0U;

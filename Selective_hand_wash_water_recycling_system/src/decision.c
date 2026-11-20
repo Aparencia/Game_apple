@@ -619,6 +619,8 @@ void decision_init(decision_t *p_dec, const decision_cfg_t *p_cfg)
     p_dec->upgrade_blocks = 0U;
     p_dec->downgrade_hits = 0U;
     p_dec->blank_active   = false;
+    p_dec->level_hold     = false;
+    p_dec->level_reason   = NULL;
     for (i = 0U; i < (uint8_t)DECISION_MAX_BLOCK_SAMPLES; i++)
     {
         p_dec->verdict_ring[i] = 0U;
@@ -686,6 +688,17 @@ void decision_note_valve_switch(decision_t *p_dec, uint32_t now_ms)
     gate_note_switch(&p_dec->gate, now_ms);
 }
 
+/* M2：液位变化中强制 WAIT/DRAIN，避免用旧状态继续回收。 */
+void decision_set_level_hold(decision_t *p_dec, bool hold, const char *reason)
+{
+    if (NULL == p_dec)
+    {
+        return;
+    }
+    p_dec->level_hold   = hold;
+    p_dec->level_reason = hold ? reason : NULL;
+}
+
 /*
  * 判别主函数（每 50 ms 一次）。
  * 流程：
@@ -740,6 +753,21 @@ void decision_update(decision_t *p_dec, const sensor_pipeline_t *p_pipe, uint32_
     p_dec->out.immersed    = p_dec->gate.immersed;
     p_dec->out.blanking    = p_dec->gate.blanking;
     p_dec->out.gate_reason = gate_reason_str(&p_dec->gate);
+
+    /* ---------- M2：液位变化门控 ---------- */
+    if (p_dec->level_hold)
+    {
+        p_dec->rate_hits      = 0U;
+        p_dec->upgrade_blocks = 0U;
+        p_dec->downgrade_hits = 0U;
+        p_dec->blank_active   = false;
+        decision_reset_block(p_dec, now_ms);
+        decision_apply_output(p_dec, DEC_STATE_WAIT, DEC_LEVEL_L1, DEC_ACTION_DRAIN,
+                              false,
+                              (NULL != p_dec->level_reason) ? p_dec->level_reason : "LEVEL_MOVE",
+                              now_ms);
+        return;
+    }
 
     /* ---------- ② 非测量工况：禁止分类，强制排空 ---------- */
     /*
