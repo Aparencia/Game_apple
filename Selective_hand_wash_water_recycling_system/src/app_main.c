@@ -262,7 +262,7 @@
 #include <sys/stat.h>                /* struct stat / S_IFCHR：printf 重定向需要的空桩 */
 
 /* ---------- 应用参数（全部集中在这里，便于标定） ---------- */
-#define APP_FW_VERSION          "SENSOR-NODE v2.8.0-LEVEL-M2"  /* M2: 液位变化门控 + EC 迟滞 10% */
+#define APP_FW_VERSION          "SENSOR-NODE v2.8.0-LEVEL-M2a"  /* M2a: 液位只冻结基线，不插入 WAIT */
 #define APP_TICK_MS             50U                  /* 主循环 tick（项目设想 6.2.1） */
 #define APP_CSV_PERIOD_MS       200U                 /* CSV 输出周期：5 行/秒 */
 #define APP_TIP_PERIOD_MS       2000U                /* 人类可读摘要（# TIP）周期：2 s */
@@ -1046,7 +1046,6 @@ static void app_level_task(uint32_t now_ms)
         g_level_hold       = false;
         g_level_has_last   = false;
         g_level_stable_since_ms = 0U;
-        decision_set_level_hold(&g_dec, false, NULL);
         return;
     }
 
@@ -1092,8 +1091,8 @@ static void app_level_task(uint32_t now_ms)
         g_level_stable_since_ms = now_ms;
     }
 
-    decision_set_level_hold(&g_dec, g_level_hold,
-                            g_level_hold ? "LEVEL_MOVE" : NULL);
+    /* 注意：level_hold 只冻结基线选槽/trim，不覆盖 decision；
+     * 识别状态保持连续，不插入 WAIT 区间。 */
 }
 
 /*
