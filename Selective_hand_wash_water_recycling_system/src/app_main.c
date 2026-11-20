@@ -262,7 +262,7 @@
 #include <sys/stat.h>                /* struct stat / S_IFCHR：printf 重定向需要的空桩 */
 
 /* ---------- 应用参数（全部集中在这里，便于标定） ---------- */
-#define APP_FW_VERSION          "SENSOR-NODE v2.8.0-LEVEL-M2c"  /* M2c: 液位辅助确认水体，避免 water_unconfirmed */
+#define APP_FW_VERSION          "SENSOR-NODE v2.8.0-LEVEL-M2d"  /* M2d: 液位只区分没水/水脏，不绕过清洁门槛 */
 #define APP_TICK_MS             50U                  /* 主循环 tick（项目设想 6.2.1） */
 #define APP_CSV_PERIOD_MS       200U                 /* CSV 输出周期：5 行/秒 */
 #define APP_TIP_PERIOD_MS       2000U                /* 人类可读摘要（# TIP）周期：2 s */
@@ -2257,6 +2257,10 @@ static void app_autocal_task(uint32_t now_ms, const pipeline_out_t *p_out)
             bool allow_wet = true;
             bool stable_hold = false;
             bool full_ready = true;
+            uint16_t lvl_mm = 0U;
+            bool lvl_ok = false;
+
+            (void)hc_sr04_get_mm(&lvl_mm, &lvl_ok);
 
             if (!g_dec.gate.immersed)
             {
@@ -2300,22 +2304,9 @@ static void app_autocal_task(uint32_t now_ms, const pipeline_out_t *p_out)
                              && ((float)p_out->ntu_ao_mv >= (g_dec.gate.ao_dry_mv
                                                              + g_dec.gate.cfg.ao_water_delta_mv));
 
-                    /* 液位是“水在腔里”的直接证据：AO/EC 边缘时不要误判 water_unconfirmed。 */
-                    {
-                        uint16_t lvl_mm = 0U;
-                        bool lvl_ok = false;
-
-                        (void)hc_sr04_get_mm(&lvl_mm, &lvl_ok);
-                        if ((lvl_ok) && (lvl_mm >= 20U))
-                        {
-                            if (!allow_wet)
-                            {
-                                printf("# CAL water confirmed by LEVEL mm=%u\r\n",
-                                       (unsigned)lvl_mm);
-                            }
-                            allow_wet = true;
-                        }
-                    }
+                    /* 液位只作为“水在腔里”的诊断/区分，不覆盖 AO 清洁门槛。
+                     * AO 低说明水可能脏，不能拿液位强行通过。 */
+                    (void)hc_sr04_get_mm(&lvl_mm, &lvl_ok);
 
                     /* FULL 段必须确认水已满/在流动：EC 至少比 DRAIN/RECOVER 槽高 10 mV，
                      * 否则保持 SETTLE，等用户继续进水（OLED 显示 Cal F fill）。 */
@@ -2348,10 +2339,30 @@ static void app_autocal_task(uint32_t now_ms, const pipeline_out_t *p_out)
 
                     if (!allow_wet)
                     {
-                        /* 没有足够证据证明"腔里是水"：不允许自动采湿态（否则可能采到水膜） */
+                        /* 没有足够证据证明"腔里是干净水"：不允许自动采湿态。
+                         * 液位只用于区分“没水”和“有水但水脏”，不能强行放行。 */
                         g_ac_fail_retry  = true;
                         g_ac_need_manual = true;
-                        app_autocal_enter(APP_AC_DONE, now_ms, "water_unconfirmed");
+
+                        if ((lvl_ok) && (lvl_mm >= 20U))
+                        {
+                            char s_ec[20];
+                            char s_ecd[20];
+                            char s_ao[20];
+                            char s_aod[20];
+
+                            app_fmt_x10(s_ec, sizeof(s_ec), p_out->tds_mv25);
+                            app_fmt_x10(s_ecd, sizeof(s_ecd), g_dec.gate.ec_dry_mv);
+                            app_fmt_x10(s_ao, sizeof(s_ao), (float)p_out->ntu_ao_mv);
+                            app_fmt_x10(s_aod, sizeof(s_aod), g_dec.gate.ao_dry_mv);
+                            printf("# CAL REJECT water_dirty: ec=%s(ec_dry=%s) ao=%s(ao_dry=%s) mm=%u\r\n",
+                                   s_ec, s_ecd, s_ao, s_aod, (unsigned)lvl_mm);
+                            app_autocal_enter(APP_AC_DONE, now_ms, "water_dirty");
+                        }
+                        else
+                        {
+                            app_autocal_enter(APP_AC_DONE, now_ms, "water_unconfirmed");
+                        }
                     }
                     else if ((0U == g_cal_stage)
                              && ((float)p_out->ntu_ao_mv
