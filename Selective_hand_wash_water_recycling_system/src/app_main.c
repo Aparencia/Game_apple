@@ -257,7 +257,7 @@
 #include <sys/stat.h>                /* struct stat / S_IFCHR：printf 重定向需要的空桩 */
 
 /* ---------- 应用参数（全部集中在这里，便于标定） ---------- */
-#define APP_FW_VERSION          "SENSOR-NODE v2.8.0-LEVEL-M1d"  /* M1d: SysTick 反推 cycles/us + 诊断 */
+#define APP_FW_VERSION          "SENSOR-NODE v2.8.0-LEVEL-M1e"  /* M1e: d1=4% + trim 0.7d1，防弱肥皂被学掉 */
 #define APP_TICK_MS             50U                  /* 主循环 tick（项目设想 6.2.1） */
 #define APP_CSV_PERIOD_MS       200U                 /* CSV 输出周期：5 行/秒 */
 #define APP_TIP_PERIOD_MS       2000U                /* 人类可读摘要（# TIP）周期：2 s */
@@ -367,7 +367,7 @@ static const decision_cfg_t g_app_decision_cfg =
     .ec_d2_sigma         = 8.0f,      /* d2 = max(8σ, 20 mV) */
     .ec_d1_min_mv        = 8.0f,
     .ec_d2_min_mv        = 20.0f,
-    .ec_d1_pct           = 5.0f,      /* v2.7.5：清水槽内 dEC≈0；肥皂冲洗水 +5.4% 要能进 L1 */
+    .ec_d1_pct           = 4.0f,      /* v2.8.0-M1e：第二次稀释肥皂 dEC≈+14 < 5% 会被 CLEAR；4% 进 L1 */
     .ec_d2_pct           = 9.0f,      /* 肥皂现场 +11.5%×EC0，d2 取 9% */
     .ec_hyst_ratio       = 0.25f,     /* 25% 迟滞，防阈值附近抖 */
     .ntu_d1_pct          = 7.0f,      /* v2.7：清水稳定段 dNTU 实测最高 7.6%，取 7.0 */
@@ -1140,10 +1140,10 @@ static void app_baseline_trim_task(const pipeline_out_t *p_out)
     {
         d_ec = -d_ec;
     }
-    if ((d_ec < 5.0f) || (d_ec >= g_dec.out.d1_ec_mv))
+    if ((d_ec < 5.0f) || (d_ec >= (0.7f * g_dec.out.d1_ec_mv)))
     {
-        /* 只跟踪 d1 以内的小漂移；d1 以上的偏移可能是肥皂/脏水，
-         * 绝不能用 trim 把它慢慢学成“干净”。 */
+        /* 只跟踪 d1 以内的小漂移；超过 0.7×d1 的偏移可能是肥皂/脏水，
+         * 不能用 trim 把它慢慢学成“干净”。 */
         return;
     }
 
