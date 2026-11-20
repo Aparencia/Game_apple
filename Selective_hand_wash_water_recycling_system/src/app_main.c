@@ -257,7 +257,7 @@
 #include <sys/stat.h>                /* struct stat / S_IFCHR：printf 重定向需要的空桩 */
 
 /* ---------- 应用参数（全部集中在这里，便于标定） ---------- */
-#define APP_FW_VERSION          "SENSOR-NODE v2.8.0-LEVEL-M1c"  /* M1c: 修复 DWT 周期未换算成 us */
+#define APP_FW_VERSION          "SENSOR-NODE v2.8.0-LEVEL-M1d"  /* M1d: SysTick 反推 cycles/us + 诊断 */
 #define APP_TICK_MS             50U                  /* 主循环 tick（项目设想 6.2.1） */
 #define APP_CSV_PERIOD_MS       200U                 /* CSV 输出周期：5 行/秒 */
 #define APP_TIP_PERIOD_MS       2000U                /* 人类可读摘要（# TIP）周期：2 s */
@@ -3545,10 +3545,11 @@ static void app_tick(uint32_t now_ms)
         g_level_log_ms = now_ms;
         (void)hc_sr04_get_mm(&level_mm, &level_valid);
         hc_sr04_get_diag(&trig_n, &edge_n, &rise_n, &fall_n, &timeout_n, &last_us);
-        printf("# LEVEL t=%lums mm=%u valid=%u trig=%lu edge=%lu rise=%lu fall=%lu to=%lu us=%lu\r\n",
+        printf("# LEVEL t=%lums mm=%u valid=%u trig=%lu edge=%lu rise=%lu fall=%lu to=%lu us=%lu cpus=%lu\r\n",
                (unsigned long)now_ms, (unsigned)level_mm, level_valid ? 1U : 0U,
                (unsigned long)trig_n, (unsigned long)edge_n, (unsigned long)rise_n,
-               (unsigned long)fall_n, (unsigned long)timeout_n, (unsigned long)last_us);
+               (unsigned long)fall_n, (unsigned long)timeout_n, (unsigned long)last_us,
+               (unsigned long)hc_sr04_get_cycles_per_us());
     }
 
     /* 4) 干态指纹采集（命令 D，非阻塞；完成后写入 gate 并影响本 tick 的工况） */
@@ -3699,7 +3700,8 @@ void app_main(void)
     /* ----- 步骤 3b：HC-SR04 液位（非阻塞，失败只 WARN） ----- */
     if (hc_sr04_init())
     {
-        printf("# hc-sr04: ready (TRIG=P402/U1-2, ECHO=P409/U2-3 IRQ6)\r\n");
+        printf("# hc-sr04: ready (TRIG=P402/U1-2, ECHO=P409/U2-3 IRQ6) c/us=%lu\r\n",
+               (unsigned long)hc_sr04_get_cycles_per_us());
     }
     else
     {

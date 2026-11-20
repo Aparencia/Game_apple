@@ -32,6 +32,9 @@ bool hc_sr04_get_mm(uint16_t *p_mm, bool *p_valid);
 void hc_sr04_get_diag(uint32_t *p_trig, uint32_t *p_edges, uint32_t *p_rise,
                       uint32_t *p_fall, uint32_t *p_timeout, uint32_t *p_last_us);
 
+/* 当前用于换算的 CPU cycles/us（用于日志核对）。 */
+uint32_t hc_sr04_get_cycles_per_us(void);
+
 /* Echo 双边沿中断处理（vector_data.c 使用）。 */
 void hc_sr04_echo_isr(void);
 

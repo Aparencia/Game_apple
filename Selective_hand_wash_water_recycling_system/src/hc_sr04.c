@@ -101,11 +101,21 @@ static void hc_add_sample(uint16_t mm, uint32_t now_ms)
 bool hc_sr04_init(void)
 {
     fsp_err_t err;
+    uint32_t reload;
 
-    g_cycles_per_us = SystemCoreClock / 1000000U;
-    if (0U == g_cycles_per_us)
+    /* 用 SysTick 的 1 ms 重装值反推 CPU cycles/us，避免 SystemCoreClock 未更新。 */
+    reload = SysTick->LOAD + 1U;
+    if (reload >= 1000U)
     {
-        g_cycles_per_us = 180U;
+        g_cycles_per_us = reload / 1000U;
+    }
+    else
+    {
+        g_cycles_per_us = SystemCoreClock / 1000000U;
+    }
+    if ((g_cycles_per_us < 10U) || (g_cycles_per_us > 500U))
+    {
+        g_cycles_per_us = 90U;   /* RA4M2_MINI: PLL 180 MHz / ICLK 2 */
     }
 
     CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
@@ -222,8 +232,7 @@ bool hc_sr04_get_mm(uint16_t *p_mm, bool *p_valid)
 
 void hc_sr04_get_diag(uint32_t *p_trig, uint32_t *p_edges, uint32_t *p_rise,
                       uint32_t *p_fall, uint32_t *p_timeout, uint32_t *p_last_us)
-{
-    if (NULL != p_trig)
+{    if (NULL != p_trig)
     {
         *p_trig = g_trig_count;
     }
@@ -247,6 +256,11 @@ void hc_sr04_get_diag(uint32_t *p_trig, uint32_t *p_edges, uint32_t *p_rise,
     {
         *p_last_us = g_last_pulse_us;
     }
+}
+
+uint32_t hc_sr04_get_cycles_per_us(void)
+{
+    return g_cycles_per_us;
 }
 
 void hc_sr04_echo_isr(void)
