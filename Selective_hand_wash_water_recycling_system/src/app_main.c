@@ -262,7 +262,7 @@
 #include <sys/stat.h>                /* struct stat / S_IFCHR：printf 重定向需要的空桩 */
 
 /* ---------- 应用参数（全部集中在这里，便于标定） ---------- */
-#define APP_FW_VERSION          "SENSOR-NODE v2.8.0-LEVEL-M2b"  /* M2b: 基线无效时即使液位变化也选槽 */
+#define APP_FW_VERSION          "SENSOR-NODE v2.8.0-LEVEL-M2c"  /* M2c: 液位辅助确认水体，避免 water_unconfirmed */
 #define APP_TICK_MS             50U                  /* 主循环 tick（项目设想 6.2.1） */
 #define APP_CSV_PERIOD_MS       200U                 /* CSV 输出周期：5 行/秒 */
 #define APP_TIP_PERIOD_MS       2000U                /* 人类可读摘要（# TIP）周期：2 s */
@@ -2299,6 +2299,23 @@ static void app_autocal_task(uint32_t now_ms, const pipeline_out_t *p_out)
                                                      + g_dec.gate.cfg.ec_wet_delta_mv))
                              && ((float)p_out->ntu_ao_mv >= (g_dec.gate.ao_dry_mv
                                                              + g_dec.gate.cfg.ao_water_delta_mv));
+
+                    /* 液位是“水在腔里”的直接证据：AO/EC 边缘时不要误判 water_unconfirmed。 */
+                    {
+                        uint16_t lvl_mm = 0U;
+                        bool lvl_ok = false;
+
+                        (void)hc_sr04_get_mm(&lvl_mm, &lvl_ok);
+                        if ((lvl_ok) && (lvl_mm >= 20U))
+                        {
+                            if (!allow_wet)
+                            {
+                                printf("# CAL water confirmed by LEVEL mm=%u\r\n",
+                                       (unsigned)lvl_mm);
+                            }
+                            allow_wet = true;
+                        }
+                    }
 
                     /* FULL 段必须确认水已满/在流动：EC 至少比 DRAIN/RECOVER 槽高 10 mV，
                      * 否则保持 SETTLE，等用户继续进水（OLED 显示 Cal F fill）。 */
