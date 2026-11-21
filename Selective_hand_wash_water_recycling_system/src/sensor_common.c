@@ -56,12 +56,31 @@ void SysTick_Handler(void);
 
 static volatile uint32_t s_ms_ticks = 0U;
 
+/* 软件看门狗：主循环每个 tick 喂一次；SysTick 里累加，连续 3 s 未喂就复位。
+ * 3 s 远大于一次 tick（50 ms）与最长阻塞打印/OLED 刷新（~120 ms），不会误复位；
+ * 但能覆盖 main loop 卡死、I2C 等待、printf 自旋、HardFault 后的死循环（只要还在喂之前的值）。
+ * 注意：这是软件兜底，不是硬件 IWDT；关中断超过 3 s 时 SysTick 本身不跑，仍会失效。 */
+#define TIMEBASE_WDT_TIMEOUT_MS  3000U
+
+static volatile bool     s_wdt_armed = false;
+static volatile uint32_t s_wdt_ticks = 0U;
+
 /* s_ms_ticks 加 1，给全工程提供唯一时间源。 时序/边界：中断周期 = SystemCoreClock / 1000；本板约 1 ms。
- * 注意：中断里只允许做这种"几十纳秒"的工作。绝不能在这里 printf、延时、 操作 1-Wire 或调用任何阻塞函数，否则会拖慢 UART/ADC 中断响应。 */
+ * 注意：中断里只允许做这种"几十纳秒"的工作。绝不能在这里 printf、延时、 操作 1-Wire 或调用任何阻塞函数，否则会拖慢 UART/ADC 中断响应。
+ * 软件看门狗超时后直接 NVIC_SystemReset()：复位后 P104 回到排空电平，阀断电。 */
 
 void SysTick_Handler(void)
 {
     s_ms_ticks++;
+
+    if (s_wdt_armed)
+    {
+        s_wdt_ticks++;
+        if (s_wdt_ticks >= TIMEBASE_WDT_TIMEOUT_MS)
+        {
+            NVIC_SystemReset();
+        }
+    }
 }
 
 /* 清空计数并按 SystemCoreClock/1000 装载 SysTick，启动周期中断。 时序/边界：写 SysTick 的 LOAD/VAL/CVR，立即开始计数；不阻塞。
@@ -79,6 +98,8 @@ bool timebase_init(void)
     }
 
     s_ms_ticks = 0U;/*从0开始计时，便于日志里看“上电多少毫秒”*/
+    s_wdt_armed = false;
+    s_wdt_ticks = 0U;
 
     if(0U != SysTick_Config(ticks))
     {
@@ -95,6 +116,20 @@ bool timebase_init(void)
 uint32_t timebase_ms(void)
 {
     return s_ms_ticks;
+}
+
+/* 启动软件看门狗：清零计数并置 armed。上电初始化全部完成后调用，避免把 boot 的
+ * 800 ms DS18B20 自检/OLED 初始化误判为死机。 */
+void timebase_wdt_arm(void)
+{
+    s_wdt_ticks = 0U;
+    s_wdt_armed = true;
+}
+
+/* 喂狗：主循环每次迭代调用一次。只写一个 volatile 计数，不关闭中断。 */
+void timebase_wdt_feed(void)
+{
+    s_wdt_ticks = 0U;
 }
 
 /* ---------------------------------------------------------------------------

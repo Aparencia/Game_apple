@@ -14,9 +14,9 @@
  *   ① 中值（默认 5 次/tick）：ADC 偶发单点野值（气泡、电源毛刺、调度抖动）只污染
  *      一个样本，中值直接把它剔除，均值则会被一个离群点拖偏。12-bit 单次转换是
  *      微秒量级，5 次的双通道扫描相对 50 ms tick 可忽略。
- *   ② EMA（alpha=0.30）：一级低通，时间常数约 -50 ms / ln(1-0.30) ≈ 140 ms
- *      （2~3 个 tick），把中值后剩下的白噪声继续压低（方差约降到 α/(2-α) 倍），
- *      又不像长窗口平均那样把阶跃边沿拉平——后面的 200 ms 块内一致消抖还需要
+ *   ② EMA（alpha=0.15）：一级低通，时间常数约 -50 ms / ln(1-0.15) ≈ 307 ms
+ *      （约 6 个 tick），把中值后剩下的白噪声继续压低（方差约降到 α/(2-α) 倍），
+ *      又不像长窗口平均那样把阶跃边沿拉平——后面的 400 ms 块内一致消抖还需要
  *      看到边沿。两段串联 = "先剔野值、再压噪声"，都不需要额外缓冲。
  *   ③ 基线 σ 用"中值后、EMA 前"的原始样本统计，得到的是偏保守的噪声估计：
  *      EMA 平滑后的实际噪声更小，按 4σ/8σ 定的阈值不会偏小（安全侧）。
@@ -31,7 +31,7 @@
  * 时间预算（对齐《项目设想》6.2.1 与 00 文档）
  *   - 每 tick：adc_median_n 次双通道扫描（默认 5）。单次 12-bit 双通道扫描在微秒
  *     量级，5 次 + 换算 + 拟合的总开销远小于 1 ms，只占 50 ms tick 的很小部分；
- *   - 判别层消抖 200 ms，变化率抢先不等待；端到端判定目标 ≤1.5 s（报告只写实测值）。
+ *   - 判别层消抖 400 ms（8 采 6 票）+ 3 块升级，变化率抢先不等待；端到端判定目标 ≤1.5 s（报告只写实测值）。
  *
  * 关键约定 / 注意事项
  *   - 所有电压单位 mV；ΔEC 用 25 ℃ 补偿后的 mv25；ΔNTU 用方向归一化后的电压差
@@ -837,6 +837,14 @@ bool pipeline_baseline_select_slot(sensor_pipeline_t *p_pipe, uint8_t slot)
                       ? (float) p_out->ntu_ao_mv
                       : (float) p_pipe->slots[slot].ntu0_ao_mv;
     pipeline_rate_reset(p_pipe);
+    /*
+     * M2j：切槽当 tick 立即重算 dEC/g/dNTU，避免 decision_update 在同一 tick
+     * 用“旧基线的 dEC + 新基线的 EC0”混合判断（现场日志 07:40:08 的 5.9→18.9
+     * 跳变就是这个时序造成的）。速率已由 rate_reset 清零。
+     */
+    pipeline_features_update(p_pipe);
+    p_out->ec_rate_mv_s  = 0.0f;
+    p_out->ntu_rate_mv_s = 0.0f;
     pipeline_note_set(p_out->note, (uint32_t) sizeof(p_out->note), "OK");
     return true;
 }

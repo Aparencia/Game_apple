@@ -195,9 +195,12 @@ void valve_task(valve_t *p_valve, uint32_t now_ms)
         return;
     }
 
-    /* 5) 需要换向时先过"最小驻留"（防继电器抖动/阀频繁换向） */
+    /* 5) 需要换向时先过"最小驻留"（防继电器抖动/阀频繁换向）。
+     *    安全侧例外：切 DRAIN 永不等驻留。许可撤销/故障/失水时必须立即排空，
+     *    否则 500 ms 驻留会让脏水继续进回收桶（P0-03）。 */
     dwell_elapsed = (uint32_t)(now_ms - p_valve->last_switch_ms);
-    if ((desired != p_valve->out.position) && (dwell_elapsed >= p_valve->cfg.min_dwell_ms))
+    if ((desired != p_valve->out.position) &&
+        ((VALVE_POS_DRAIN == desired) || (dwell_elapsed >= p_valve->cfg.min_dwell_ms)))
     {
         target_level = valve_level_for_pos(p_valve, desired);
         old_pos      = p_valve->out.position;

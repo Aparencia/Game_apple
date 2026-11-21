@@ -7,6 +7,86 @@
 
 ---
 
+## v2.8.0-LEVEL-M2j（2026-11-21）现场日志修复（M2i Auto fail）
+
+现场日志 `SaveWindows2026_11_21_7-40-20.TXT`：
+
+- 07:39:43 `# CAL RECOVER` 提示；07:39:58（15 s）`recover_skipped`，
+  `SLOTS DRAIN=280.5 RECOVER=INVALID FULL=INVALID`，OLED `Auto fail`；
+- 07:40:08 仍 `STATE to=CLEAR` / `VALVE pos=RECOVER`，而 RECOVER 槽无效；
+  dEC 5.9 mV、ec0 约 291（DRAIN 槽 280.5），水仍在上涨。
+
+修复：
+
+1. **部分标定禁止自动回收**：`app_valve_recover_requested` 在 RECOVER 槽无效时返回 false；
+   LED 不亮、串口只报一次；仅手动 `V1` 保留。
+2. **确认窗口 15→60 s**，每 5 s 重复 `# CAL RECOVER waiting ...`；OLED 仍 `K2 confirm recover`。
+3. **trim 默认关闭**（`APP_ENABLE_BASELINE_TRIM=0`）：现场日志显示它可 4 mV/s 跟踪进水，
+   基线 280.5→约 291、dEC 16.5→5.9，导致 CLEAR；重开需液位/流量证明稳定。
+4. **切槽当 tick 重算 dEC/g/dNTU**：避免 `decision_update` 用旧基线 dEC + 新基线 EC0 混合判断。
+5. OLED `Auto fail` → `Cal partial`（部分标定不是故障）；W 单槽不再启用自动回收，
+   K2 完整标定并确认 RECOVER 才恢复。
+6. K2 人工启动允许低 AO（boot autocal 仍严格）；`g_cal_operator_started` 在 DONE 复位，
+   5 min 自动重试不继承旧授权。
+7. **OLED 方向可配置**：`oled.h` 的 `OLED_ORIENTATION`（0 正常 / 1 左右 / 2 上下 / 3 180°）；
+   当前源码取 3（面板倒装），对应 `Docs/firmware/v2.8.0-LEVEL-M2j_oled180.hex`；
+   正常方向 hex 保留为 `Docs/firmware/v2.8.0-LEVEL-M2j.hex`。
+
+构建：`text 88640 / data 480 / bss 11560`，0 error / 0 warning。
+未上板：需按 `Docs/缺陷审查_20261121.md` §12 复现。
+
+---
+
+## v2.8.0-LEVEL-M2i（2026-11-21）安全修复包
+
+依据 `Docs/缺陷审查_20261121.md`，只修软件层能闭环的部分；硬件 IWDT、流量计、阀位反馈仍未做。
+
+**P0 修复**
+
+- **P0-01 湿膜**：湿态基线必须 `DRY_SOURCE_MEASURED`；`ec0_default_min_mv` 150→400；
+  `dry_blocked_wet` 直接 DONE(need_manual)，不再回落 SETTLE 自动采湿态。
+- **P0-02 标定强制 RECOVER**：取消自动强制换向；RECOVER 槽必须长按 K2 或发 `Y` 确认，
+  15 s 不确认则 `recover_skipped`（只保留 DRAIN 槽）；确认后仍要求 `sensor_ok && immersed`，
+  故障/失水立即回 DRAIN；删除“长按跳过标定用默认槽”。
+- **P0-03 DRAIN 驻留**：切 DRAIN 不再等 `min_dwell`，撤销许可/故障/失水立即排空。
+- **P0-04 手动 W 旧基线**：采集期间 `app_baseline_task` 直接返回；W 开始清槽，
+  成功存当前阀位槽，失败保持无基线；旧槽不再复活。W 期间 baseline invalid 会让阀
+  立即回 DRAIN，因此 W 实际只采 DRAIN 槽；RECOVER 槽必须走 K2 确认流程。
+- **P0-05 AO 硬门槛**：自动湿态基线恢复第一段 DRAIN 的 AO 硬门槛；手动 W 保留
+  “操作员确认后接受低 AO”的 M2g 路径。
+- **P0-06 看门狗**：3 s 软件看门狗（SysTick 超时 `NVIC_SystemReset`），主循环每轮喂狗；
+  复位后 P104 回排空电平。硬件 IWDT 仍建议量产启用。
+
+**P1/P2 修复**
+
+- SOAP_LATCH：DRY 持续 2 s 清除，避免 45 s 内下一位用户被上一次锁存强制排空。
+- 部分标定（RECOVER/FULL 跳过）保持 `K2 recal; confirm` 提示；RECOVER 段失败后的重试回到
+  SETTLE 重新人工确认，避免以 DRAIN 位置误采 RECOVER 槽。
+- TDS 运行期合理性：`mv25 < 5` 或 `> ec0_max_mv` 连续 3 tick → SENSOR/FAULT（拔探头不再只报 L1/L2）。
+- UART TX 连续超时后不再永久静默；半行命令 500 ms 超时丢弃；`T` 拒绝尾随垃圾。
+- DS18B20 上电未发现器件改为周期重试（“有应答但读不到有效温度”仍停用）。
+- `V1` 强制回收 10 s 自动过期，防止调试后忘发 `VA`。
+- 去掉唯一一处 `%f` printf（构建 map 无 `_printf_float`，原行不会打印数值）。
+
+**参数/文档**
+
+- `decision.c g_default_cfg` 与生产一致（d1 4% / d2 9% / NTU 7%/9% / hyst 10%）。
+- 更新 `decision.h`、`validity.h`、`sensor_pipeline.c`、`app_main.c` 的过期默认值/α/τ/3× 注释。
+- 更新 `README.md`、`Docs/快速启动卡_现场版.md`；hex 备份到 `Docs/firmware/v2.8.0-LEVEL-M2i.hex`。
+
+**构建/验证**
+
+- `text 88640 / data 480 / bss 11552`，0 error / 0 warning（GCC ARM 13.2，2026-11-21）。
+- **未上板**：新增的 RECOVER 确认、AO 硬门槛、软件看门狗、TDS 合理性均需按
+  `Docs/缺陷审查_20261121.md` 第 8 章复现实验上板确认。
+
+**已知未修**
+
+- 硬件 IWDT、流量计、阀位反馈、Flash 持久化；
+- 三槽自动标定与“未经判别不回收”的架构冲突（需产品决策，见重审 §11）。
+
+---
+
 ## v1.2.0（2026-11-13）执行器升级为真实阀
 
 P104 → SRD-05VDC-SL-C 单路继电器模块 IN；继电器常开触点驱动 12 V 二位三通电磁阀。

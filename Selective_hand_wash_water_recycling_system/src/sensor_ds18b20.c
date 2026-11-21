@@ -513,10 +513,13 @@ bool ds18b20_boot_test(ds18b20_t *p_dev)
     p_dev->conv_pending = false;
     p_dev->fail_streak  = 0U;
 
-    /* ---- 1) 先看有没有器件；没有就不白等 800 ms ---- */
+    /* ---- 1) 先看有没有器件；没有就不白等 800 ms ----
+     * M2i：这里只标 "present=false"，不置 disabled，让主循环每 redetect_period_ms
+     * 自动重试一次（支持上电后再插/接触不良恢复）。只有"有应答但读不到有效温度"
+     * 才 disabled=true，避免假 0.00 ℃ 反复污染数据。 */
     if (!ds18b20_ping(p_dev->cfg.pin))
     {
-        p_dev->disabled       = true;
+        p_dev->disabled       = false;
         p_dev->last_detect_ms = now_ms;
         ds18b20_apply_fallback(p_dev);
         return false;

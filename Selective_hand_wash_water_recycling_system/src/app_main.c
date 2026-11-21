@@ -6,10 +6,10 @@
  *   - 上电按固定顺序初始化：P104 先置排空（fail-safe）→ LED → UART → 板载 OLED（步骤 2b）→
  *     ADC → DS18B20 自检 → pipeline → decision（含 validity 工况机）→ 启动开机自检；
  *   - 主循环由 timebase_ms() 调度成 50 ms tick（落后不补做，避免时间堆积）；
- *   - 串口是数据留痕通道：115200 8N1，命令 H/M/D/W/G/Z/T/C/P/V1/V0/VA，每 200 ms
+ *   - 串口是数据留痕通道：115200 8N1，命令 H/M/D/W/G/Z/T/C/P/V1/V0/VA/Y，每 200 ms
  *     输出一行 CSV，事件行以 "# " 开头；板载 OLED 只做现场指示（不参与判别/安全侧）。
  *
- * 版本变更历史（v1.2.0 → v2.8.0-LEVEL-M2g，含每版现场依据）：见 Docs/CHANGELOG.md。
+ * 版本变更历史（v1.2.0 → v2.8.0-LEVEL-M2i，含每版现场依据）：见 Docs/CHANGELOG.md。
  * 当前版本号见下方 APP_FW_VERSION；改阈值/判据时请同步更新该文档。
  *
  * 接线（详见 docs_sensor/00、12、15）：TDS AOUT→P014/AN12；TS-300B AO→1k+2k 分压→P013/AN11；
@@ -19,7 +19,7 @@
  *   与 Docs/CHANGELOG.md 附录——接真阀前必须逐条确认。
  * 时间预算（项目设想 6.2.1，v2 参数）：
  *   tick 50 ms / 块 400 ms（8 采样 6 一致）/ 升级 L0 需 3 块 / CSV 200 ms /
- *   入水稳定期 4000 ms / 换向屏蔽 400 ms / 变化率抢先 120 mV/s（连续 2 tick）/
+ *   入水稳定期 1~4 s（M2h 液位相关）/ 换向屏蔽 400 ms / 变化率抢先 120 mV/s（连续 2 tick）/
  *   DS18B20 每 2 s 发起、800 ms 后读数（非阻塞）；
  *   OLED 状态页：状态变化立即刷、数值最快 200 ms、心跳 1 s，只刷脏页；
  *   单次刷新 I2C 阻塞约 3 ms/页（400 kHz，整屏 ≈25 ms），失败不影响该 tick 的安全工作。
@@ -29,6 +29,8 @@
  *   - 干态指纹/水中基线都只存在 RAM（掉电丢失，P2 计划用数据 Flash 保存）；
  *   - 浊度只输出"相对基线变化 %"，不是 NTU；TDS 参考 ppm 只作过程量，不作结论；
  *   - OLED 失效（连续 3 帧刷新失败）不影响判别/CSV/阀，安全侧不依赖显示；
+ *   - M2i 起湿态基线要求实测干态（DRY_SOURCE_MEASURED）；没有实测干态时只排空，需先发 D；
+ *   - 3 s 软件看门狗已启用，但硬件 IWDT 仍未启用（量产前应补）；
  *   - 本文件不识别污染物种类、不做达标判定（红线）。
  * ---------------------------------------------------------------------------
  * 参考：spec_design.md §5/§6/§7；spec_headers.md §7/§9；硬件方案 §5.2、§6.4、§7.5。
@@ -52,12 +54,13 @@
 #include <sys/stat.h>                /* struct stat / S_IFCHR：printf 重定向需要的空桩 */
 
 /* ---------- 应用参数（全部集中在这里，便于标定） ---------- */
-#define APP_FW_VERSION          "SENSOR-NODE v2.8.0-LEVEL-M2h"  /* M2h: SOAP_LATCH + NTU rate + level-aware settle */
+#define APP_FW_VERSION          "SENSOR-NODE v2.8.0-LEVEL-M2j"  /* M2j: field log fix (partial cal no-recover / 60s confirm / trim disabled) */
 #define APP_TICK_MS             50U                  /* 主循环 tick（项目设想 6.2.1） */
 #define APP_CSV_PERIOD_MS       200U                 /* CSV 输出周期：5 行/秒 */
 #define APP_TIP_PERIOD_MS       2000U                /* 人类可读摘要（# TIP）周期：2 s */
 #define APP_KEY_LONG_MS         3000U                /* K2 长按判据：≥3 s 进入清水标定 */
 #define APP_RX_BUF_SIZE         64U                  /* 串口命令行缓冲（含 '\0'） */
+#define APP_RX_LINE_TIMEOUT_MS  500U                 /* 半行命令超时：超时丢弃，避免与下一条拼接 */
 #define APP_CSV_LINE_MAX        256U                 /* CSV 行缓冲（17 列整数+逗号足够） */
 #define APP_BASELINE_N          40U                  /* 基线点数（40 × 50 ms = 2 s，方案 §10） */
 #define APP_ADC_MEDIAN_N        5U                   /* 每通道每 tick 中值采样次数 */
@@ -78,8 +81,11 @@
 #define APP_AUTOCAL_WET_TIMEOUT  8000U               /* 单次湿态采集的兜底超时（2 s 标称，留 4× 余量） */
 #define APP_AUTOCAL_FAIL_RETRY_MS 300000U            /* 自检失败后每 5 min 低频重试一次 */
 #define APP_AUTOCAL_FULL_WAIT_MS  15000U             /* FULL 段最多等 15 s，等不到就保留前两槽 */
+#define APP_AUTOCAL_CONFIRM_MS    60000U             /* M2j：RECOVER 槽确认窗口 60 s（现场 15 s 太短） */
+#define APP_ENABLE_BASELINE_TRIM  0                  /* M2j：默认关闭 trim；现场日志显示它会以 4 mV/s 跟踪进水斜坡 */
 /* 默认干态指纹：来自 2026-11-16 现场实测（空腔 TDS 43.7~58 mV、浊度 AO≈2337 mV）。
- * 只用于"是否浸没"的绝对门限；没有水中基线时工况仍是 FAULT，不会回收。 */
+ * 只用于"是否浸没"的绝对门限；M2i 起它不再能作为水中基线的依据——湿态基线必须
+ * 先实测到 DRY_SOURCE_MEASURED，否则 app_baseline_begin 直接拒绝。 */
 #define APP_EC_DRY_DEFAULT_MV    60.0f
 #define APP_AO_DRY_DEFAULT_MV    2337.0f
 
@@ -115,9 +121,10 @@
  *   R_IOPORT_PinCfg/PinWrite 运行时会失败 → 执行器模块回读自检会报 INIT_FAIL。 */
 #define APP_VALVE_PIN                BSP_IO_PORT_01_PIN_04   /* P104 / U2-8 */
 #define APP_VALVE_RELAY_ON_LEVEL     BSP_IO_LEVEL_HIGH       /* 回收位（继电器吸合）电平：默认高触发模块 */
-#define APP_VALVE_MIN_DWELL_MS       500U                    /* 最小换向间隔：防继电器抖动 */
+#define APP_VALVE_MIN_DWELL_MS       500U                    /* 最小换向间隔：防继电器抖动（只约束切 RECOVER） */
 #define APP_VALVE_MAX_ON_MS          120000U                 /* 单次连续吸合上限（阀连续工作制） */
 #define APP_VALVE_COOLDOWN_MS        10000U                  /* 超时强制释放后的冷却时间 */
+#define APP_VALVE_MANUAL_TIMEOUT_MS  10000U                  /* V1 强制回收自动过期：防止调试后忘发 VA */
 
 /* ---------- 板载引脚（与已验证固件 tds_mini 一致） ---------- */
 #define APP_LED_PIN             BSP_IO_PORT_01_PIN_11   /* P111 / U2-2，高电平点亮 */
@@ -186,7 +193,7 @@ static const decision_cfg_t g_app_decision_cfg =
         .ec_dry_max_mv      = 200.0f,     /* 干态指纹上限 */
         .ec0_min_mv         = 50.0f,
         .ec0_max_mv         = 1600.0f,    /* 开路伪值 ~1650 与脏水本底都要挡住 */
-        .ec0_default_min_mv = 150.0f,     /* v2.3：默认干态时基线只需 ≥150 mV（现场水 348） */
+        .ec0_default_min_mv = 400.0f,     /* v2.8.0-M2i：默认干态时基线必须 ≥400 mV（150 会放过湿膜） */
         .ao_water_delta_mv  = 80.0f,      /* v2.3：本装置水 AO 比空气高约 400 mV */
         .ao_clean_delta_mv  = 250.0f,     /* 现场清水 AO-AO_DRY≈244，300 会误杀清水，恢复 250 */
         .ntu_ao_min_mv      = 20U,
@@ -217,12 +224,14 @@ static char             g_rx_buf[APP_RX_BUF_SIZE];
 static volatile uint8_t g_rx_len       = 0U;
 static volatile bool    g_rx_ready     = false;  /* 收满一整行（\r 或 \n） */
 static volatile bool    g_rx_overflow  = false;  /* 本行超长，丢弃 */
+static volatile uint32_t g_rx_last_ms  = 0U;     /* 最近收到字符的时刻（半行超时用） */
 
 /* ---------- 命令触发的动作标志（主循环里消费，不在 ISR 里执行） ---------- */
 static bool g_force_temp_recheck = false;   /* 命令 C：下一 tick 强制重检 DS18B20 */
 
 /* ---------- 执行器/日志状态 ---------- */
 static app_valve_mode_t g_valve_mode = APP_VALVE_AUTO;
+static uint32_t         g_valve_mode_since_ms = 0U;   /* V1/V0/VA 切换时刻（V1 超时用） */
 
 /* 阀/继电器执行器配置（时间常量见文件头"执行器"区块；应用参数集中在此） */
 static const valve_cfg_t g_app_valve_cfg =
@@ -281,7 +290,7 @@ static app_dry_capture_t g_dry_capture = { false, false, 0U, 0U, 0.0f, 0.0f, 0.0
  * 目标：上电后不需要串口 D/W，装置自己完成"干态 → 等水 → 水中基线 → 正常判别"。
  * 安全前提（与旧固件"上电在空气里采基线"的根本区别）：
  *   ① 自动采的干态只用于"是否浸没"，绝不能当水中基线；
- *   ② 水中基线只在"确认浸没（EC≥3×EC_DRY）"之后才采；
+ *   ② 水中基线只在"确认浸没（EC≥EC_DRY+80 mV）"之后才采；
  *   ③ 自检全程没有基线 → decision 仍是 FAULT/DRY → 阀恒排空，不可能回收空气；
  *   ④ 手动 D/W/G/Z 随时可覆盖自检。
  * 已知限制：没有 Flash 持久化时，每次上电都要重来；若上电时腔里已有脏水，
@@ -316,10 +325,16 @@ static bool                g_ac_dry_blocked = false;   /* 自动干态因"腔里
 static float               g_dry_last_mean_mv = 0.0f;  /* 最近一次干态采集的 EC 均值（诊断用） */
 static bool                g_ac_fail_retry = false;    /* 自检 base_fail 后是否允许低频重试 */
 static bool                g_ac_need_manual = false;   /* 自检失败，需要人工 W（OLED 提示） */
+static bool                g_cal_partial_done = false; /* 三槽只完成部分（RECOVER/FULL 跳过），保持人工提示 */
+static uint32_t            g_cal_confirm_log_ms = 0U;  /* RECOVER 确认提示节流 */
+static bool                g_recover_slot_warned = false; /* RECOVER 槽缺失只报一次 */
+static bool                g_cal_operator_started = false; /* true=K2 人工启动；允许低 AO 路径 */
 static uint32_t            g_ac_done_since_ms = 0U;    /* 进入 DONE 的时刻 */
 static volatile app_base_result_t g_base_result = APP_BASE_NONE;
 static uint8_t             g_cal_stage = 0U;           /* B3：0=DRAIN 1=RECOVER 2=FULL */
 static bool                g_cal_multi_slot = false;     /* true=正在做三槽标定 */
+static bool                g_cal_recover_confirm_pending = false; /* RECOVER 槽需要人工确认 */
+static bool                g_cal_recover_confirmed = false;       /* 人工已确认可切 RECOVER */
 static uint32_t            g_level_log_ms = 0U;          /* HC-SR04 事件行节流 */
 static bool                g_level_hold = false;        /* M2：液位变化中冻结判定 */
 static bool                g_level_has_last = false;
@@ -355,7 +370,7 @@ static void        app_level_task(uint32_t now_ms, const pipeline_out_t *p_out);
 static void        app_dry_begin(uint32_t now_ms, uint16_t target_n, bool auto_cap);
 static void        app_autocal_start(uint32_t now_ms);
 static void        app_cal_start(uint32_t now_ms);
-static void        app_cal_skip_defaults(uint32_t now_ms);
+static void        app_cal_confirm_recover(uint32_t now_ms);
 static void        app_autocal_cancel(const char *p_why);
 static void        app_autocal_task(uint32_t now_ms, const pipeline_out_t *p_out);
 static const char *app_autocal_state_str(app_autocal_state_t state);
@@ -406,10 +421,16 @@ APP_PUTCHAR_PROTOTYPE
 {
     uint32_t spin = 0U;
 
-    /* 连续多次等不到 TDRE = 串口物理层判废：直接丢字符，别让每字节 5~8 ms 的等待拖垮启动 */
+    /* 连续多次等不到 TDRE = 串口物理层异常：本字节先丢，别让每字节 5~8 ms 的等待拖垮启动。
+     * M2i：不要永久放弃——若 TDRE 已恢复（线接好/干扰消失），清零计数继续打印；
+     * 若仍未恢复，每字节只做一次检查后丢弃，不会回到长自旋。 */
     if (g_uart_tx_timeouts >= APP_UART_TX_FAIL_LIMIT)
     {
-        return ch;
+        if (0U == (R_SCI9->SSR & 0x80U))
+        {
+            return ch;
+        }
+        g_uart_tx_timeouts = 0U;
     }
 
     while (0U == (R_SCI9->SSR & 0x80U))   /* 0x80 = SCI SSR.TDRE（发送数据寄存器空） */
@@ -507,6 +528,7 @@ void user_uart_callback(uart_callback_args_t *p_args)
     if (UART_EVENT_RX_CHAR == p_args->event)
     {
         c = (char)p_args->data;
+        g_rx_last_ms = timebase_ms();
 
         if (('\r' == c) || ('\n' == c))
         {
@@ -840,9 +862,10 @@ static void app_baseline_task(const pipeline_out_t *p_out, uint32_t now_ms)
     float ec;
     uint8_t desired = 0xFFU;
 
-    if ((NULL == p_out) || g_cal_multi_slot || (!g_pipe.initialized))
+    if ((NULL == p_out) || g_cal_multi_slot || (!g_pipe.initialized)
+        || pipeline_baseline_capturing(&g_pipe))
     {
-        return;
+        return;   /* 采集期间禁止旧槽复活：安全侧保持“无基线→排空” */
     }
     ec = p_out->tds_mv25;
     if (ec <= 1.0f)
@@ -897,13 +920,19 @@ static void app_baseline_task(const pipeline_out_t *p_out, uint32_t now_ms)
 }
 
 /*
- * B3 液位漂移跟踪：
- *   清洁、稳定、非屏蔽窗内，若 |dEC| 超过 d1 但不到 45 mV，说明当前
- *   液位平台比 active 槽高/低（不是肥皂，因为 dNTU 干净），把 active EC0
- *   以 1 mV/s 缓慢拉向当前 EC。肥皂时 dNTU 会抬起来，自动停止跟踪。
+ * B3 液位漂移跟踪（M2j 默认关闭）：
+ *   现场日志 2026-11-21 07:39 显示：进水上涨时 EC 约 +4 mV/s，而 trim 也以
+ *   4 mV/s 跟随，基线 280.5 mV 被逐步抬高约 10 mV，dEC 从 16.5 降到 5.9，
+ *   于是 CLEAR/RECOVER——这是“trim 跟踪进水斜坡”，不是液位慢漂移。
+ *   trim 无法区分两者，软件层先关闭（APP_ENABLE_BASELINE_TRIM=0）；
+ *   需要可靠液位/流量证明“稳定”后再启用。
  */
 static void app_baseline_trim_task(const pipeline_out_t *p_out)
 {
+#if (0 == APP_ENABLE_BASELINE_TRIM)
+    (void)p_out;
+    return;
+#else
     float d_ec;
     float d_ntu;
     float step = 0.20f;   /* 50 ms tick × 0.2 mV = 4 mV/s（清洁时才允许） */
@@ -936,6 +965,7 @@ static void app_baseline_trim_task(const pipeline_out_t *p_out)
     }
 
     pipeline_baseline_trim_active(&g_pipe, p_out->tds_mv25, step);
+#endif
 }
 
 /* 把本 tick 的目标位置交给执行器：手动覆盖优先，否则跟随判别动作；然后跑状态机。 时序/边界：每个 50 ms tick 调用一次；内部只做寄存器读写，不阻塞。
@@ -946,10 +976,14 @@ static void app_valve_apply(bool recover, uint32_t now_ms)
     const valve_out_t *p_valve;
     valve_pos_t pos_before;
 
-    /* B3 标定期间强制阀位：槽 0=DRAIN，槽 1=RECOVER，槽 2=FULL 也保持 DRAIN */
+    /* B3/M2i 标定期间强制阀位：默认 DRAIN；只有操作员明确确认 RECOVER 槽后，
+     * 才允许在 stage==1 切 RECOVER（P0-02）。确认前/确认失效后一律 DRAIN。 */
     if (g_cal_multi_slot && app_autocal_active())
     {
-        recover = (1U == g_cal_stage);
+        /* 人工确认只解决“允许标定水进回收支路”，不豁免传感器/浸没条件：
+         * 一旦故障或失水，仍立即回 DRAIN。 */
+        recover = (1U == g_cal_stage) && g_cal_recover_confirmed
+                  && g_dec.gate.sensor_ok && g_dec.gate.immersed;
     }
 
     p_reason = app_valve_mode_str(g_valve_mode);
@@ -1024,6 +1058,17 @@ static bool app_valve_recover_requested(const decision_out_t *p_dec)
     {
         return false;
     }
+
+    /*
+     * M2j：自动回收必须有 RECOVER 槽基线。部分标定（只有 DRAIN 槽）时
+     * decision 仍可能给 CLEAR（DRAIN 基线 + trim/斜坡），但阀必须保持 DRAIN。
+     * 手动 V1 仍保留（调试/演示），不受此限。
+     */
+    if (!pipeline_baseline_slot_valid(&g_pipe, (uint8_t)PIPELINE_SLOT_RECOVER))
+    {
+        return false;
+    }
+
     return (DEC_ACTION_RECOVER == p_dec->action);
 }
 
@@ -1058,7 +1103,8 @@ static void app_led_task(const decision_out_t *p_dec, uint32_t now_ms)
                 break;
 
             case DEC_STATE_CLEAR:
-                on = true;                        /* 可回收：常亮 */
+                /* M2j：没有 RECOVER 槽时阀会被强制 DRAIN，LED 不能显示“回收”。 */
+                on = pipeline_baseline_slot_valid(&g_pipe, (uint8_t)PIPELINE_SLOT_RECOVER);
                 break;
 
             case DEC_STATE_UNCERTAIN:
@@ -1075,7 +1121,7 @@ static void app_led_task(const decision_out_t *p_dec, uint32_t now_ms)
 /* ---------- 基线 / 标记 ---------- */
 /* 开始一次基线采集（上电自动 / 命令 B / K2 长按），并打印事件行。
  * 参数：now_ms —— 当前时间（日志时间戳）；p_src —— 触发来源字符串 （"UART"/"KEY"，上电传 NULL 表示不需要额外提示行）。
- * 时序/边界：pipeline 会连续采 baseline_n 个 tick 完成（默认 20 × 50 ms = 1 s）， 期间 baseline_valid=false → 判别层安全侧 L1 排空。
+ * 时序/边界：pipeline 会连续采 baseline_n 个 tick 完成（默认 40 × 50 ms = 2 s）， 期间 baseline_valid=false → 判别层安全侧 L1 排空。
  * 注意：探头必须在水中！空气里 TDS 是开路伪值（约 1.6 V），采出来的基线是错的。 */
 static void app_baseline_begin(uint32_t now_ms, const char *p_src)
 {
@@ -1091,12 +1137,34 @@ static void app_baseline_begin(uint32_t now_ms, const char *p_src)
         return;
     }
 
+    /*
+     * M2i：默认干态指纹（60 mV）只配做浸没门限，不能作为水中基线依据。
+     * 否则电极上一层 150~200 mV 的水膜会被采成“清水本底”，空腔判 L0 → 回收空气。
+     * 必须先在空腔里实测到 DRY_SOURCE_MEASURED。
+     */
+    if (DRY_SOURCE_MEASURED != gate_dry_source(&g_dec.gate))
+    {
+        printf("# ERR: dry fingerprint is DEFAULT -> dry the probe, empty chamber, send D first\r\n");
+        return;
+    }
+
     if (g_dry_capture.active)
     {
         /* W 与 D 不能同时进行：D 采的是"空腔"，W 要求"电极浸没"，样本会互相污染 */
         printf("# ERR: dry capture in progress (%u/%u) -> wait or send D again to restart\r\n",
                (unsigned)g_dry_capture.n, (unsigned)APP_DRY_CAPTURE_N);
         return;
+    }
+
+    if (!g_cal_multi_slot)
+    {
+        /*
+         * 手动 W：先清槽，禁止 app_baseline_task 在采集期间把旧槽重新选回；
+         * 采完成功后再把新基线存入当前阀位槽；失败则保持无基线（安全侧）。
+         * 三槽标定（g_cal_multi_slot=true）不走这里，避免清掉已采到的槽。
+         */
+        pipeline_baseline_clear_slots(&g_pipe);
+        decision_clear_soap_latch(&g_dec);
     }
 
     pipeline_baseline_begin(&g_pipe, now_ms);
@@ -1128,16 +1196,21 @@ static void app_baseline_validate(uint32_t now_ms, const pipeline_out_t *p_out)
     {
         /* 量程/CV 校验已经失败（pipeline 把原因写进 note） */
         g_base_result = APP_BASE_REJECT;
+        if (!g_cal_multi_slot)
+        {
+            g_ac_need_manual = true;   /* 手动 W 失败：OLED 继续提示重试 */
+        }
         printf("# BASELINE REJECT note=%s (check electrode immersed / water still)\r\n", p_out->note);
         return;
     }
 
-    /* M2h：AO 只告警，不再硬拒基线。 */
+    /* M2i：自动路径的低 AO 已在 app_ac_start_wet 里硬拒；这里的 WARN 只针对手动 W
+     * （操作员确认“这是清水”后，允许低 AO 基线，保留 M2g 的现场降级能力）。 */
     if ((g_dec.gate.dry_valid)
         && (p_out->ntu0_ao_mv
             < (g_dec.gate.ao_dry_mv + g_dec.gate.cfg.ao_clean_delta_mv)))
     {
-        printf("# CAL WARN: low-AO baseline accepted (AO advisory; EC/level decide water)\r\n");
+        printf("# CAL WARN: low-AO manual baseline accepted (operator-confirmed clean water)\r\n");
     }
 
     if (g_dec.gate.dry_valid)
@@ -1146,6 +1219,10 @@ static void app_baseline_validate(uint32_t now_ms, const pipeline_out_t *p_out)
         {
             pipeline_invalidate_baseline(&g_pipe, "BASE_LOW");
             g_base_result = APP_BASE_REJECT;
+            if (!g_cal_multi_slot)
+            {
+                g_ac_need_manual = true;
+            }
             app_fmt_x10(ec0, p_out->ec0_mv25);
             app_fmt_x10(dry, g_dec.gate.ec_dry_mv);
             app_fmt_x10(ratio, g_dec.gate.cfg.ec_wet_delta_mv);
@@ -1153,6 +1230,27 @@ static void app_baseline_validate(uint32_t now_ms, const pipeline_out_t *p_out)
                    ec0, dry, ratio);
             printf("#   hint: water did not cover the electrode, or D was taken while wet\r\n");
             return;
+        }
+    }
+
+    if (!g_cal_multi_slot)
+    {
+        /* 手动 W 成功：把新基线存进当前阀位槽；旧槽已在采集开始时清空。
+         * M2j：如果 RECOVER 槽仍无效，自动回收会被 app_valve_recover_requested
+         * 强制 DRAIN，因此保留“Cal partial / K2 recal”提示，不能假装完整。 */
+        g_cal_partial_done = (!pipeline_baseline_slot_valid(&g_pipe,
+                                                            (uint8_t)PIPELINE_SLOT_RECOVER));
+        g_ac_need_manual   = g_cal_partial_done;
+        g_ac_fail_retry    = g_cal_partial_done;
+
+        const valve_out_t *p_valve = valve_get_out(&g_valve);
+        uint8_t slot = ((NULL != p_valve) && (VALVE_POS_RECOVER == p_valve->position))
+                       ? (uint8_t)PIPELINE_SLOT_RECOVER : (uint8_t)PIPELINE_SLOT_DRAIN;
+
+        if (pipeline_baseline_store_slot(&g_pipe, slot))
+        {
+            printf("# BASELINE stored slot=%s\r\n",
+                   (PIPELINE_SLOT_RECOVER == slot) ? "RECOVER" : "DRAIN");
         }
     }
 
@@ -1215,7 +1313,7 @@ static void app_dry_begin(uint32_t now_ms, uint16_t target_n, bool auto_cap)
     bool  chamber_wet = false;
 
     /* 空腔校验：D 的前提是"腔里没有液体"。
-     * 已经有干态指纹时，用"已浸没"或"EC ≥ 3×EC_DRY"判断；
+     * 已经有干态指纹时，用"已浸没"或"EC ≥ EC_DRY + 80 mV"判断；
      * 首次标定时没有参考，只能用绝对上限（EC_DRY_MAX，默认 200 mV）。 */
     if (g_dec.gate.dry_valid)
     {
@@ -1367,7 +1465,7 @@ static void app_dry_task(uint32_t now_ms, const pipeline_out_t *p_out)
                    s_ec, s_ao, s_cv, (unsigned)g_dry_capture.n);
 
             /*
-             * 新干态指纹会改变"浸没门限 = 3×EC_DRY"。若现场还存着一条旧的水中基线，
+             * 新干态指纹会改变"浸没门限 = EC_DRY + 80 mV"。若现场还存着一条旧的水中基线，
              * 而它已经低于新门限（例如残水时按了 D，把 EC_DRY 抬高了），
              * 继续留着会让 gate 直接判 FAULT 却不给原因 —— 这里就地作废并提示重做 W。
              */
@@ -1448,7 +1546,12 @@ static void app_autocal_enter(app_autocal_state_t state, uint32_t now_ms, const 
         g_ac_done_since_ms = now_ms;
         /* 任何结束（成功/部分成功/失败）都必须恢复运行时槽选择；
          * 否则 g_cal_multi_slot 会一直为 true，运行永远用旧/手工基线。 */
-        g_cal_multi_slot = false;
+        g_cal_multi_slot              = false;
+        g_cal_recover_confirm_pending = false;
+        g_cal_recover_confirmed       = false;
+        /* M2j：K2 的“允许低 AO”人工授权只对本次 K2 会话有效；DONE 后必须复位，
+         * 否则 5 min 后的自动重试会沿用旧授权、跳过 AO 硬门槛。 */
+        g_cal_operator_started        = false;
 
         if (pipeline_baseline_slot_valid(&g_pipe, (uint8_t)PIPELINE_SLOT_DRAIN))
         {
@@ -1496,8 +1599,11 @@ void app_autocal_text(char *p_buf, uint32_t buf_size)
     {
         if (g_ac_need_manual)
         {
-            /* 8x16 字体每行最多 16 个字符（128/8），状态串必须短 */
-            (void)snprintf(p_buf, (size_t)buf_size, "Auto fail");
+            /* 8x16 字体每行最多 16 个字符（128/8），状态串必须短。
+             * M2j：部分标定（RECOVER/FULL 跳过）不是故障，显示 Cal partial，
+             * 配合 hint “K2 recal; confirm”。 */
+            (void)snprintf(p_buf, (size_t)buf_size,
+                           g_cal_partial_done ? "Cal partial" : "Auto fail");
         }
         return;
     }
@@ -1568,7 +1674,25 @@ void app_autocal_hint(char *p_buf, uint32_t buf_size)
 
     if ((APP_AC_DONE == g_ac_state) && (g_ac_need_manual))
     {
-        p_hint = "Send W in clean water";
+        /* 没有实测干态时，W 会被拒绝，提示用户先擦干/排空后发 D；
+         * 部分槽完成时提示重新长按 K2 标定并确认 RECOVER。 */
+        if (DRY_SOURCE_MEASURED != gate_dry_source(&g_dec.gate))
+        {
+            p_hint = "Dry probe, send D";
+        }
+        else if (g_cal_partial_done)
+        {
+            p_hint = "K2 recal; confirm";
+        }
+        else
+        {
+            p_hint = "Send W in clean water";
+        }
+    }
+    else if ((APP_AC_SETTLE == g_ac_state) && (g_cal_multi_slot)
+             && (1U == g_cal_stage) && (!g_cal_recover_confirmed))
+    {
+        p_hint = "K2 confirm recover";
     }
     else
     {
@@ -1630,8 +1754,12 @@ static void app_autocal_cancel(const char *p_why)
     }
 
     printf("# AUTOCAL cancelled (%s)\r\n", (NULL != p_why) ? p_why : "manual");
-    g_cal_multi_slot = false;
-    g_ac_state = APP_AC_OFF;
+    g_cal_multi_slot              = false;
+    g_cal_recover_confirm_pending = false;
+    g_cal_recover_confirmed       = false;
+    g_cal_confirm_log_ms          = 0U;
+    g_cal_operator_started        = false;
+    g_ac_state                    = APP_AC_OFF;
 }
 
 /* 自检/标定共用的状态清零（不含 g_dry_last_mean_mv：两处语义不同）。 */
@@ -1640,21 +1768,38 @@ static void app_ac_reset(void)
     g_ac_dry_tries   = 0U;
     g_ac_wet_tries   = 0U;
     g_ac_dry_blocked = false;
-    g_ac_fail_retry  = false;
-    g_ac_need_manual = false;
-    g_base_result    = APP_BASE_NONE;
-    g_cal_stage      = 0U;      /* 0=DRAIN、1=RECOVER、2=FULL */
+    g_ac_fail_retry    = false;
+    g_ac_need_manual   = false;
+    g_cal_partial_done = false;
+    g_base_result      = APP_BASE_NONE;
+    g_cal_stage        = 0U;    /* 0=DRAIN、1=RECOVER、2=FULL */
     g_cal_multi_slot = true;
+    g_cal_recover_confirm_pending = false;
+    g_cal_recover_confirmed       = false;
+    g_cal_confirm_log_ms          = 0U;
 }
 
 /* 湿态采集失败计数：达到上限 → DONE(p_done) 并置"需要人工"，否则 RETRY(p_retry)。 */
 static void app_ac_wet_fail(uint32_t now_ms, const char *p_done, const char *p_retry)
 {
+    /* M2i：RECOVER 段采集失败后必须退回“未确认”，否则重试等待期间阀会一直吸合。 */
+    if ((g_cal_multi_slot) && (1U == g_cal_stage))
+    {
+        /* 失败后进入 RETRY/DONE，先撤销确认；等下一次重试真正回到 SETTLE 时
+         * 再由 SETTLE 闸门重新置 pending（避免 RETRY 期间 K2/Y 被误用）。 */
+        g_cal_recover_confirmed       = false;
+        g_cal_recover_confirm_pending = false;
+    }
+
     g_ac_wet_tries++;
     if (g_ac_wet_tries >= APP_AUTOCAL_WET_TRIES)
     {
         g_ac_fail_retry  = true;
         g_ac_need_manual = true;
+        if ((g_cal_multi_slot) && (g_cal_stage > 0U))
+        {
+            g_cal_partial_done = true;   /* 已有前序槽，但 RECOVER/FULL 未完成 */
+        }
         app_autocal_enter(APP_AC_DONE, now_ms, p_done);
     }
     else
@@ -1667,16 +1812,54 @@ static void app_ac_wet_fail(uint32_t now_ms, const char *p_done, const char *p_r
 static void app_ac_start_wet(uint32_t now_ms, const char *p_ok, const char *p_fail,
                              bool fail_done)
 {
+    const pipeline_out_t *p_now = pipeline_get_out(&g_pipe);
+
     g_base_result = APP_BASE_NONE;
+
+    /*
+     * M2i：自动湿态基线恢复 v2.7.4 的 AO 硬门槛（只查第一段 DRAIN；同一腔水进入
+     * RECOVER/FULL 段时不重复判）。手动 W 不走这里，允许操作员确认后接受低 AO
+     * （保留 M2g 的现场降级路径）。这样自动流程不会再把肥皂/浑浊水当成本底。
+     */
+    if ((NULL != p_now) && ((!g_cal_multi_slot) || (0U == g_cal_stage))
+        && (!g_cal_operator_started)   /* K2 人工启动：允许操作员确认低 AO；boot autocal 仍严格 */
+        && (g_dec.gate.dry_valid)
+        && (p_now->ntu_ao_mv
+            < (g_dec.gate.ao_dry_mv + g_dec.gate.cfg.ao_clean_delta_mv)))
+    {
+        printf("# CAL REJECT ao_low: ao=%lumV < ao_dry+%lumV (auto refuses dirty water)\r\n",
+               (unsigned long)p_now->ntu_ao_mv,
+               (unsigned long)(uint32_t)g_dec.gate.cfg.ao_clean_delta_mv);
+        printf("#   if water is visually clean: send W manually (operator-confirmed low-AO baseline)\r\n");
+        g_ac_fail_retry  = true;
+        g_ac_need_manual = true;
+        app_autocal_enter(APP_AC_DONE, now_ms, "ao_low");
+        return;
+    }
+
     app_baseline_begin(now_ms, "AUTO");
     if (pipeline_baseline_capturing(&g_pipe))
     {
         app_autocal_enter(APP_AC_WET, now_ms, p_ok);
+        return;
     }
-    else if (fail_done)
+
+    /* 启动失败（例如 app_baseline_begin 拒绝）：RECOVER 段必须退回未确认，
+     * 否则重试路径会让阀保持 RECOVER。 */
+    if ((g_cal_multi_slot) && (1U == g_cal_stage))
+    {
+        g_cal_recover_confirmed       = false;
+        g_cal_recover_confirm_pending = false;
+    }
+
+    if (fail_done)
     {
         g_ac_fail_retry  = true;
         g_ac_need_manual = true;
+        if ((g_cal_multi_slot) && (g_cal_stage > 0U))
+        {
+            g_cal_partial_done = true;
+        }
         app_autocal_enter(APP_AC_DONE, now_ms, p_fail);
     }
     else
@@ -1692,6 +1875,7 @@ static void app_ac_start_wet(uint32_t now_ms, const char *p_ok, const char *p_fa
 static void app_autocal_start(uint32_t now_ms)
 {
 #if (1 == APP_AUTOCAL_ENABLE)
+    g_cal_operator_started = false;   /* boot autocal：AO 硬门槛生效 */
     app_ac_reset();
     g_dry_last_mean_mv = 0.0f;
     pipeline_baseline_clear_slots(&g_pipe);
@@ -1699,11 +1883,11 @@ static void app_autocal_start(uint32_t now_ms)
 
     /*
      * 只有"本次上电已经实测过干态"才允许因为"已浸没"直接去采湿态。
-     * 若干态还是 DEFAULT（60 mV），上电时 EC≥180 可能只是电极被淋湿/腔里有残水，
+     * 若干态还是 DEFAULT（60 mV），上电时 EC≥140 可能只是电极被淋湿/腔里有残水，
      * 直接采湿态会把一层水膜当成水中基线 → 空腔 g≡1 → 回收空气。
-     * 所以 DEFAULT 必须先走干态采集；腔里真有水时干态采集会被拒绝，
-     * 随后进入 SETTLE 用"EC≥400 + 浊度 AO 下降"确认水体，证据不足则 DONE(water_unconfirmed)，
-     * 由人发 W（或等腔体干燥后自动低频重试）。
+     * 所以 DEFAULT 必须先走干态采集；若腔里有水/电极湿，干态采集会被拒绝，
+     * 随后直接 DONE(dry_blocked_wet)/DONE(dry_failed)，提示用户擦干/排空后发 D；
+     * M2i 起不再回落 SETTLE 自动采湿态（旧路径会把湿膜采成水中基线）。
      */
     if ((g_dec.gate.immersed) && (DRY_SOURCE_MEASURED == gate_dry_source(&g_dec.gate)))
     {
@@ -1725,48 +1909,53 @@ static void app_autocal_start(uint32_t now_ms)
  *   2) 直接复用自检的 SETTLE→WET 流程：等浸没、稳定 300 ms、AO 清洁、
  *      采 2 s、采后 5 mV 漂移校验；成功后才重新生效。
  *   3) 现场流程：先排空/用清水冲 2~3 倍腔体，再淹过电极，然后长按 3 s。
- * 注意：这一步只重建水基线；干态指纹沿用开机自检（DEFAULT/MEASURED）。
+ * 注意：这一步只重建水基线；干态指纹必须是开机自检/命令 D 实测到的 MEASURED，
+ *       DEFAULT 会被拒绝（M2i 起湿膜不再能作为基线）。
  */
 static void app_cal_start(uint32_t now_ms)
 {
     app_autocal_cancel("KEY CAL");
+
+    /* M2i：没有实测干态就不允许重建湿态基线（防湿膜）。 */
+    if (DRY_SOURCE_MEASURED != gate_dry_source(&g_dec.gate))
+    {
+        printf("# ERR: dry fingerprint is DEFAULT -> empty chamber, dry probe, send D first\r\n");
+        return;
+    }
+
+    if (g_dry_capture.active)
+    {
+        g_dry_capture.active = false;
+        printf("# NOTE: manual dry capture aborted by K2 calibration\r\n");
+    }
+
     decision_clear_soap_latch(&g_dec);
     pipeline_baseline_clear_slots(&g_pipe);
     pipeline_invalidate_baseline(&g_pipe, "KEY_CAL");
 
+    g_cal_operator_started = true;    /* K2 人工启动：允许低 AO + 人工确认 RECOVER */
     app_ac_reset();
 
     printf("# CAL: three-slot clean-water calibration requested (DRAIN, RECOVER, FULL)\r\n");
     app_autocal_enter(APP_AC_SETTLE, now_ms, "key_cal");
 }
 
-/* 长按跳过标定：三条槽写入默认清水基线，按当前阀位选 active。 */
-static void app_cal_skip_defaults(uint32_t now_ms)
+/* M2i：RECOVER 槽人工确认。只在 stage==1 且未确认时有效；确认后阀才允许切 RECOVER。
+ * 现场必须先断开/改接回收支路，再长按 K2 或发送 Y。 */
+static void app_cal_confirm_recover(uint32_t now_ms)
 {
-    const valve_out_t *p_valve = valve_get_out(&g_valve);
-    uint8_t slot = ((NULL != p_valve) && (VALVE_POS_RECOVER == p_valve->position))
-                   ? (uint8_t)PIPELINE_SLOT_RECOVER : (uint8_t)PIPELINE_SLOT_DRAIN;
-
-    if (g_dry_capture.active && g_dry_capture.auto_cap)
+    if ((APP_AC_SETTLE != g_ac_state) || (!g_cal_recover_confirm_pending)
+        || (!g_cal_multi_slot) || (1U != g_cal_stage))
     {
-        g_dry_capture.active = false;
+        printf("# ERR: no RECOVER calibration confirmation pending\r\n");
+        return;
     }
-    decision_clear_soap_latch(&g_dec);
-    pipeline_invalidate_baseline(&g_pipe, "CAL_SKIP");
 
-    (void)pipeline_baseline_set_default(&g_pipe, (uint8_t)PIPELINE_SLOT_DRAIN,
-                                        APP_DEFAULT_EC0_DRAIN_MV, APP_DEFAULT_NTU0_AO_MV);
-    (void)pipeline_baseline_set_default(&g_pipe, (uint8_t)PIPELINE_SLOT_RECOVER,
-                                        APP_DEFAULT_EC0_RECOVER_MV, APP_DEFAULT_NTU0_AO_MV);
-    (void)pipeline_baseline_set_default(&g_pipe, (uint8_t)PIPELINE_SLOT_FULL,
-                                        APP_DEFAULT_EC0_FULL_MV, APP_DEFAULT_NTU0_AO_MV);
-    (void)pipeline_baseline_select_slot(&g_pipe, slot);
-
-    g_cal_multi_slot = false;
-    g_ac_need_manual = false;
-    g_ac_fail_retry  = false;
-    printf("# CAL SKIP: default slots DRAIN=258 RECOVER=305 FULL=333 ntu0=2659mV\r\n");
-    app_autocal_enter(APP_AC_DONE, now_ms, "skip_default");
+    g_cal_recover_confirm_pending = false;
+    g_cal_recover_confirmed       = true;
+    g_ac_since_ms                 = now_ms;   /* 重新开始 800 ms / stable 计时 */
+    g_ac_stable_since_ms          = now_ms;
+    printf("# CAL RECOVER confirmed -> valve will switch to RECOVER; keep water clean\r\n");
 }
 
 /* 三槽标定：每段的槽号、日志名、收尾原因与下一状态（数组顺序即执行顺序）。 */
@@ -1802,8 +1991,13 @@ static void app_autocal_task(uint32_t now_ms, const pipeline_out_t *p_out)
         /* 手动 W 成功后要清掉"需要人工"提示，否则 OLED 会一直显示 AUTO FAIL */
         if (g_dec.gate.baseline_ok)
         {
-            g_ac_need_manual = false;
-            g_ac_fail_retry  = false;
+            /* 部分完成（RECOVER/FULL 跳过）时 DRAIN 槽也可能让 baseline_ok=true，
+             * 不能用它把“需要人工”的提示清掉；手动 W 成功时才清。 */
+            if (!g_cal_partial_done)
+            {
+                g_ac_need_manual = false;
+                g_ac_fail_retry  = false;
+            }
             return;
         }
 
@@ -1858,6 +2052,15 @@ static void app_autocal_task(uint32_t now_ms, const pipeline_out_t *p_out)
         {
             app_autocal_enter(APP_AC_WAIT, now_ms, "retry_no_water");
         }
+        else if ((g_cal_multi_slot) && (1U == g_cal_stage))
+        {
+            /* M2i：RECOVER 段失败后的重试必须回到 SETTLE 重新人工确认，
+             * 不能直接 start_wet——否则会以 DRAIN 位置采“RECOVER 槽”，
+             * 或者在未确认时让阀吸合。 */
+            g_cal_recover_confirmed       = false;
+            g_cal_recover_confirm_pending = true;
+            app_autocal_enter(APP_AC_SETTLE, now_ms, "retry_recover");
+        }
         else
         {
             app_ac_start_wet(now_ms, "retry", "retry_refused", true);
@@ -1899,18 +2102,15 @@ static void app_autocal_task(uint32_t now_ms, const pipeline_out_t *p_out)
                 app_autocal_enter(APP_AC_DRY, now_ms, "dry_retry");
                 app_dry_begin(now_ms, (uint16_t)APP_AUTOCAL_DRY_N, true);
             }
-            else if ((!g_ac_dry_blocked)
-                     && (g_dry_last_mean_mv < g_dec.gate.cfg.ec_dry_max_mv))
-            {
-                /* 干态采集失败但读数一直是"干"的（只是 CV 抖）：用默认值继续等水 */
-                app_autocal_enter(APP_AC_WAIT, now_ms, "dry_default");
-            }
             else
             {
-                /* 腔里有水/电极湿：不能自己定干态。
-                 * 但仍给一次"有水"的确认机会：SETTLE 里会用 EC 差值 + 浊度 AO 两道证据
-                 * 判断是不是真水体；过不了就落到 DONE(need_manual)。 */
-                app_autocal_enter(APP_AC_SETTLE, now_ms, "chamber_wet_confirm");
+                /* 干态没测到（腔里有水/电极湿，或 CV 抖动）：不能自动定干态。
+                 * M2i 起湿态基线要求 DRY_SOURCE_MEASURED，所以这里直接 DONE(need_manual)，
+                 * 不再回落 SETTLE——旧路径会把 150~200 mV 的湿膜采成水中基线。 */
+                g_ac_fail_retry  = true;
+                g_ac_need_manual = true;
+                app_autocal_enter(APP_AC_DONE, now_ms,
+                                  g_ac_dry_blocked ? "dry_blocked_wet" : "dry_failed");
             }
             break;
 
@@ -1931,15 +2131,55 @@ static void app_autocal_task(uint32_t now_ms, const pipeline_out_t *p_out)
 
             (void)hc_sr04_get_mm(&lvl_mm, &lvl_ok);
 
+            /* M2i：RECOVER 槽必须人工确认（K2 长按或串口 Y）。确认前阀保持 DRAIN；
+             * 15 s 内不确认则跳过该槽，只用 DRAIN 槽继续运行（安全侧，不自动切回收）。 */
+            if ((g_cal_multi_slot) && (1U == g_cal_stage) && (!g_cal_recover_confirmed))
+            {
+                uint32_t waited;
+                uint32_t left_s;
+
+                /* 进入 SETTLE 后重新置 pending，保证 K2/Y 可用；RETRY/WAIT 期间
+                 * pending=false，K2 长按会走“中止标定”而不是误确认。 */
+                g_cal_recover_confirm_pending = true;
+                waited = (uint32_t)(now_ms - g_ac_since_ms);
+
+                if (waited >= APP_AUTOCAL_CONFIRM_MS)
+                {
+                    printf("# CAL RECOVER skipped: no K2/Y confirmation -> DRAIN slot only\r\n");
+                    g_ac_need_manual   = true;
+                    g_ac_fail_retry    = true;
+                    g_cal_partial_done = true;
+                    app_autocal_enter(APP_AC_DONE, now_ms, "recover_skipped");
+                }
+                else if ((uint32_t)(now_ms - g_cal_confirm_log_ms) >= 5000U)
+                {
+                    /* M2j：15 s 太短；60 s 内每 5 s 重复提示，串口/OLED 都能看到。 */
+                    g_cal_confirm_log_ms = now_ms;
+                    left_s = (APP_AUTOCAL_CONFIRM_MS - waited + 999U) / 1000U;
+                    printf("# CAL RECOVER waiting: hold K2 3s or send Y; %lus left (DRAIN until confirm)\r\n",
+                           (unsigned long)left_s);
+                }
+                return;
+            }
+
             if (!g_dec.gate.immersed)
             {
                 if ((g_cal_multi_slot) && (2U == g_cal_stage))
                 {
                     printf("# CAL FULL skipped: water lost -> keep DRAIN/RECOVER slots\r\n");
+                    g_cal_partial_done = true;
                     app_autocal_enter(APP_AC_DONE, now_ms, "full_no_water");
                 }
                 else
                 {
+                    if ((g_cal_multi_slot) && (1U == g_cal_stage))
+                    {
+                        /* 已确认但水丢了：必须退回“未确认”，下次有水时重新确认，
+                         * 绝不能让 RECOVER 位在等待水期间保持吸合。 */
+                        g_cal_recover_confirmed       = false;
+                        g_cal_recover_confirm_pending = false;
+                        printf("# CAL RECOVER cancelled: water lost -> valve DRAIN\r\n");
+                    }
                     app_autocal_enter(APP_AC_WAIT, now_ms, "water_lost");
                 }
             }
@@ -1963,16 +2203,19 @@ static void app_autocal_task(uint32_t now_ms, const pipeline_out_t *p_out)
                         || ((uint32_t)(now_ms - g_ac_since_ms)
                             >= APP_AUTOCAL_WATER_MAX_MS)))
                 {
-                    /* M2h：AO 改为 advisory。水体确认以 EC 为主，AO 低只告警，
-                     * 不再因为塑料片/气泡导致 AO 偏低而 Auto fail。 */
+                    /* 这里只做“有水”的 EC 确认 + AO 告警；自动湿态的真正 AO 硬门槛
+                     * 在 app_ac_start_wet（M2i 恢复 v2.7.4 语义），避免肥皂水当本底。 */
                     allow_wet = (p_out->tds_mv25 >= (g_dec.gate.ec_dry_mv
                                                      + g_dec.gate.cfg.ec_wet_delta_mv));
                     if ((allow_wet)
                         && ((float)p_out->ntu_ao_mv < (g_dec.gate.ao_dry_mv
                                                        + g_dec.gate.cfg.ao_water_delta_mv)))
                     {
-                        printf("# CAL WARN: AO low (ao=%.0f) treated as advisory; EC confirms water\r\n",
-                               (double)p_out->ntu_ao_mv);
+                        char s_ao_warn[20];
+
+                        app_fmt_x10(s_ao_warn, (float)p_out->ntu_ao_mv);
+                        printf("# CAL WARN: AO low (ao=%smV) treated as advisory; EC confirms water\r\n",
+                               s_ao_warn);
                     }
 
                     /* FULL 段必须确认水已满/在流动：EC 至少比 DRAIN/RECOVER 槽高 10 mV，
@@ -2000,6 +2243,7 @@ static void app_autocal_task(uint32_t now_ms, const pipeline_out_t *p_out)
                         && ((uint32_t)(now_ms - g_ac_since_ms) >= APP_AUTOCAL_FULL_WAIT_MS))
                     {
                         printf("# CAL FULL timeout: no full-flow plateau -> keep DRAIN/RECOVER slots\r\n");
+                        g_cal_partial_done = true;
                         app_autocal_enter(APP_AC_DONE, now_ms, "full_timeout");
                         break;
                     }
@@ -2084,13 +2328,23 @@ static void app_autocal_task(uint32_t now_ms, const pipeline_out_t *p_out)
                         printf("# BASELINE SLOT %s ec0=%smV\r\n", p_stage->p_name, s_ec0);
                         if (last)
                         {
-                            g_cal_multi_slot = false;
+                            g_cal_multi_slot              = false;
+                            g_cal_recover_confirm_pending = false;
+                            g_cal_recover_confirmed       = false;
                         }
                         else
                         {
                             g_cal_stage++;
-                            g_base_result = APP_BASE_NONE;
+                            g_base_result                 = APP_BASE_NONE;
+                            g_cal_recover_confirmed       = false;
+                            g_cal_recover_confirm_pending = (g_cal_multi_slot
+                                                             && (1U == g_cal_stage));
+                            g_cal_confirm_log_ms = now_ms;
                             pipeline_invalidate_baseline(&g_pipe, "CAL_NEXT");
+                            if (g_cal_recover_confirm_pending)
+                            {
+                                printf("# CAL RECOVER: divert/disconnect recovery branch, then hold K2 3s or send Y within 15s\r\n");
+                            }
                         }
                         app_autocal_enter(p_stage->next, now_ms, p_stage->p_reason);
                     }
@@ -2269,10 +2523,17 @@ static void app_key_task(uint32_t now_ms)
     {
         g_key_long_fired = true;
 
-        if (app_autocal_active() || g_cal_multi_slot)
+        if (g_cal_recover_confirm_pending)
         {
-            printf("# KEY: long press >=3s -> skip calibration, use defaults\r\n");
-            app_cal_skip_defaults(now_ms);
+            printf("# KEY: long press >=3s -> confirm RECOVER calibration stage\r\n");
+            app_cal_confirm_recover(now_ms);
+        }
+        else if (app_autocal_active() || g_cal_multi_slot)
+        {
+            /* M2i：不再“跳过标定用默认槽”（默认槽与现场水样无关，且会绕过
+             * MEASURED 干态要求）；长按改为安全中止，交给手动 D/W。 */
+            printf("# KEY: long press >=3s -> abort calibration\r\n");
+            app_autocal_cancel("KEY ABORT");
         }
         else
         {
@@ -2308,14 +2569,14 @@ static void app_key_task(uint32_t now_ms)
 /* 帮助文本（串口契约，逐字节固定；两行一条源行只为节省篇幅，内容不变）。 */
 static const char s_help[] =
     "# ---------- commands (115200 8N1, newline, case-insensitive) ----------\r\n#  H  or  ?      print this help\r\n"
-    "#  M             mark now (# MARK t=... src=UART)\r\n#  auto           # TIP every 2s: regime/state/permit + EC/g/dEC/T + next action\r\n"
-    "#  self-check    automatic at boot: dry -> wait water -> wet baseline (no input)\r\n#  D             manual: capture DRY fingerprint (chamber EMPTY, 60 s)\r\n"
-    "#  W             manual: capture WET baseline (electrode IMMERSED, 2 s; D first)\r\n#  G             print gate: valid bits / regime / dry+wet fingerprints\r\n"
+    "#  M             mark now (# MARK t=... src=UART)\r\n#  (auto)        # TIP every 2s: regime/state/permit + EC/g/dEC/T + next action\r\n"
+    "#  self-check    automatic at boot: dry -> wait water -> DRAIN baseline -> confirm RECOVER\r\n#  D             manual: capture DRY fingerprint (chamber EMPTY, 60 s)\r\n"
+    "#  W             manual: capture WET baseline (electrode IMMERSED, 2 s; measured D first)\r\n#  Y             confirm RECOVER calibration (only when prompted; divert recovery branch first)\r\n#  G             print gate: valid bits / regime / dry+wet fingerprints\r\n"
     "#  Z             clear the wet baseline (regime -> fault/dry, drain)\r\n#  R / E         event markers for logs only (v2: no control effect)\r\n"
     "#  B             alias of W (legacy baseline command)\r\n#  T24.5         manual water temp 0..60 C (used when DS18B20 is absent)\r\n"
     "#  C             re-detect DS18B20\r\n#  P             print status / gate / thresholds / parameters\r\n"
-    "#  V1 / V0 / VA  manual valve: RECOVER (relay ON) / DRAIN (relay OFF) / auto\r\n#  K2 short press: next OLED page (P1 water / P2 exec / P3 info)\r\n"
-    "#  K2 long press >=3s: three-slot clean-water calibration; during calibration=skip(default)\r\n# ---------------------------------------------------------------------\r\n";
+    "#  V1 / V0 / VA  manual valve: RECOVER (relay ON, auto-expires 10s) / DRAIN (relay OFF) / auto\r\n#  K2 short press: next OLED page (P1 water / P2 exec / P3 info)\r\n"
+    "#  K2 long press >=3s: clean-water calibration; during calib: confirm RECOVER / abort\r\n# ---------------------------------------------------------------------\r\n";
 
 /* 打印全部串口命令的简要帮助（纯 ASCII，串口助手不乱码）。 时序/边界：上电打印一次，命令 H/? 再打印；任何命令都必须在这里有说明。 注意：命令大小写不敏感；发送新行（\r 或 \n）结束一行。
  */
@@ -2487,6 +2748,14 @@ static bool app_parse_temperature(const char *p_text, float *p_temp_c)
     {
         return false;   /* 一个数字都没解析出来 */
     }
+    while ((' ' == *p_end) || ('\t' == *p_end) || ('\r' == *p_end))
+    {
+        p_end++;
+    }
+    if ('\0' != *p_end)
+    {
+        return false;   /* 拒绝 T24.5abc 这类尾随垃圾 */
+    }
     if ((value < 0.0) || (value > 60.0))
     {
         return false;   /* 水温范围保护：-? / >60 都拒绝，防止温补系数被拉飞 */
@@ -2533,6 +2802,7 @@ static void app_handle_valve_cmd(const char *p_text)
 
     if (changed_cmd)
     {
+        g_valve_mode_since_ms = timebase_ms();
         printf("# valve mode=%s enabled=%u (0=fake LED only, 1=P104 drives relay)\r\n",
                app_valve_mode_str(g_valve_mode), (unsigned)APP_USE_VALVE);
     }
@@ -2631,6 +2901,11 @@ static void app_handle_command(char *p_cmd, uint32_t now_ms)
             app_baseline_begin(now_ms, "UART");
             break;
 
+        case 'Y':
+            /* 只对 RECOVER 槽标定有效：操作员确认已断开/改接回收支路。 */
+            app_cal_confirm_recover(now_ms);
+            break;
+
         case 'C':
             g_force_temp_recheck = true;
             printf("# DS18B20: re-detect requested\r\n");
@@ -2678,6 +2953,23 @@ static void app_poll_command(uint32_t now_ms)
     uint8_t i;
     bool overflow;
     uint32_t primask;
+
+    if ((!g_rx_ready) && (0U != g_rx_len)
+        && ((uint32_t)(now_ms - g_rx_last_ms) >= APP_RX_LINE_TIMEOUT_MS))
+    {
+        /* M2i：半行命令超过 500 ms 没有换行 → 丢弃，避免与下一条命令拼成
+         * "V1V0" 之类的合法但错误的命令。只在主循环写，关中断复制计数字段。 */
+        primask = __get_PRIMASK();
+        __disable_irq();
+        g_rx_len      = 0U;
+        g_rx_overflow = false;
+        if (0U == primask)
+        {
+            __enable_irq();
+        }
+        printf("# ERR: partial command timeout, discarded\r\n");
+        return;
+    }
 
     if (!g_rx_ready)
     {
@@ -3036,10 +3328,10 @@ static void app_print_boot_summary(void)
     printf("# uart: 115200 8N1 polled-TX | tx_poll_fail=%lu (0=正常, >0=发送异常)\r\n",
            (unsigned long)g_uart_tx_timeouts);
     printf("# display: SSD1306 128x64 I2C0 addr=0x3C | 3 pages: P1 water / P2 exec / P3 info\r\n");
-    printf("# display: K2 short = next page; K2 long >=3s = three-slot calibration / skip; M = mark\r\n");
+    printf("# display: K2 short = next page; K2 long >=3s = calibration / confirm RECOVER / abort; M = mark\r\n");
     printf("# display: site indicator only; CSV remains the record (display is NOT safety path)\r\n");
     printf("# IMPORTANT: baseline must be captured in water; TDS probe in air is a fake ~1.6V value\r\n");
-    printf("# operation: autocal at boot (dry -> wait water -> wet). manual D/W/G/Z still available.\r\n");
+    printf("# operation: autocal at boot (dry -> wait water -> DRAIN baseline -> confirm RECOVER/FULL).\r\n");
     printf("# operation: G (gate) / Z (clear base) / R,E (log markers) / P (status) / H (help)\r\n");
     printf("# serial legend: '#' lines are annotations/events; other lines are 17-column CSV data\r\n");
     printf("# TIP: human-readable summary every %lus (regime/state/permit/EC/g/dEC/T + next action)\r\n",
@@ -3199,6 +3491,31 @@ static void app_tick(uint32_t now_ms)
     app_base_suspect_task(now_ms, p_out);
 
     /* 8) 执行器：LED 假执行器（P111）+ 真阀（P104 → 继电器 → 12V 二位三通阀） */
+    /* M2i：V1 强制回收 10 s 自动过期，避免调试后忘发 VA 长期吸合。 */
+    if ((APP_VALVE_FORCE_RECOVER == g_valve_mode)
+        && ((uint32_t)(now_ms - g_valve_mode_since_ms) >= APP_VALVE_MANUAL_TIMEOUT_MS))
+    {
+        g_valve_mode          = APP_VALVE_AUTO;
+        g_valve_mode_since_ms = now_ms;
+        printf("# WARN: V1 manual recover expired (%lums) -> AUTO\r\n",
+               (unsigned long)APP_VALVE_MANUAL_TIMEOUT_MS);
+    }
+
+    /* M2j：decision 可能因 DRAIN 基线/trim 给出 CLEAR，但没有 RECOVER 槽时
+     * 自动回收必须被禁止；这里只报一次，避免刷屏。 */
+    if (!pipeline_baseline_slot_valid(&g_pipe, (uint8_t)PIPELINE_SLOT_RECOVER))
+    {
+        if ((DEC_ACTION_RECOVER == p_dec->action) && (!g_recover_slot_warned))
+        {
+            g_recover_slot_warned = true;
+            printf("# WARN: RECOVER slot missing -> auto recovery disabled; run K2 calibration and confirm\r\n");
+        }
+    }
+    else
+    {
+        g_recover_slot_warned = false;
+    }
+
     recover = app_valve_recover_requested(p_dec);
     app_valve_apply(recover, now_ms);
     app_valve_log(now_ms);
@@ -3350,7 +3667,7 @@ void app_main(void)
      * 才自动采水中基线；全程无基线时阀恒排空。
      */
 #if (1 == APP_AUTOCAL_ENABLE)
-    printf("# AUTOCAL enabled: dry(%lus) -> wait water -> wet baseline (no input needed)\r\n",
+    printf("# AUTOCAL enabled: dry(%lus) -> wait water -> DRAIN baseline; RECOVER needs K2/Y confirm\r\n",
            (unsigned long)(APP_AUTOCAL_DRY_MS / 1000U));
 #else
     printf("# AUTOCAL disabled: send D (empty) then W (water) manually\r\n");
@@ -3373,6 +3690,12 @@ void app_main(void)
     g_prev_valid_bits      = 0U;
     g_prev_regime          = REGIME_FAULT;
 
+    /* ----- 步骤 11：软件看门狗（3 s）-----
+     * 必须在所有耗时初始化之后 arm；主循环每轮喂狗。超时由 SysTick 复位，
+     * 复位后 P104 回排空电平。硬件 IWDT 仍建议在量产时启用。 */
+    timebase_wdt_arm();
+    printf("# wdt: software watchdog armed (3000 ms; hardware IWDT still recommended)\r\n");
+
     /* ----- 主循环：timebase_ms 调度 50 ms tick；落后不补做（时间不堆积） ----- */
     now_ms       = timebase_ms();
     next_tick_ms = now_ms + APP_TICK_MS;
@@ -3380,6 +3703,8 @@ void app_main(void)
     while (1)
     {
         uint32_t now = timebase_ms();
+
+        timebase_wdt_feed();
 
         /* 无符号差值比较：< 0x80000000 表示"已到或已过 deadline"，跨 49.7 天回绕安全 */
         if ((uint32_t)(now - next_tick_ms) < 0x80000000U)

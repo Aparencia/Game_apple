@@ -4,10 +4,10 @@
 通过 TDS/EC + 浊度（NTU）+ 水温，判断腔体内是清水、肥皂水还是无水和故障，
 用三通阀把清水回收到回收桶、脏水排空。
 
-- 当前固件：`SENSOR-NODE v2.4.1-FAST`
-- 构建：`text 77620 / data 480 / bss 11352`，0 error / 0 warning
+- 当前固件：`SENSOR-NODE v2.8.0-LEVEL-M2j`（M2h + M2i 安全修复 + M2j 现场日志修复）
+- 构建：`text 88640 / data 480 / bss 11560`，0 error / 0 warning
 - 目标板：RA4M2，e2studio / FSP
-- 版本管理：Git（本仓库从 v2.4.1 建立基线）
+- 版本管理：Git；`v2.4.1-baseline` 为历史基线，当前固件与审查见 `Docs/CHANGELOG.md`、`Docs/缺陷审查_20261121.md`
 
 ---
 
@@ -77,14 +77,22 @@ $tc   = "D:\Ranesas\toolchains\gcc_arm\arm-gnu-toolchain-13.2.Rel1-mingw-w64-i68
 
 ## 3. 快速验收
 
-1. 烧录后串口启动行应为 `SENSOR-NODE v2.4.1-FAST`；
-2. 空腔上电：`Auto dry n/200` → `Auto wait water`，阀不吸合；
-3. 注清水淹过电极：约 1.5~2 s 进 `MEASURE`，随后 `Clear / Recover`；
-4. 肥皂水：应稳定 `Soap / L2 / Drain`，不得回收；
-5. 液面降到电极以下：≤300 ms 转 `DRY`，阀排空；
-6. 拔探头/断线：`FAULT / SENSOR`，阀排空。
+1. 烧录后串口启动行应为 `SENSOR-NODE v2.8.0-LEVEL-M2j`；
+2. 空腔、电极擦干上电：`Auto dry n/40`（2 s）→ `Auto wait water`，阀保持 DRAIN；
+   若电极仍有水膜：`AUTOCAL state=DONE reason=dry_blocked_wet`，阀不吸合；擦干后发 `D`。
+3. 注清水淹过电极：先采 DRAIN 槽（`BASELINE SLOT DRAIN`）；随后串口提示
+   `CAL RECOVER: ...`，OLED 显示 `K2 confirm recover`。确认前阀仍是 DRAIN；
+   长按 K2 或发 `Y` 后才切 RECOVER；**60 s** 内不确认则 `recover_skipped`，只保留 DRAIN 槽，
+   此时 OLED 显示 `Cal partial`，且**自动回收被禁止**（阀恒 DRAIN；仅手动 `V1` 可调试）。
+4. 清水稳定后应进 `MEASURE`，随后 `CLEAR / RECOVER`；若出现 `CAL REJECT ao_low`，
+   目视确认是清水后**长按 K2 启动人工标定**（K2 路径允许低 AO），到 RECOVER 提示时再确认；
+   单发 `W` 只采 DRAIN 槽，不能启用自动回收。M2j 起 trim 默认关闭，进水斜坡不会再抬基线。
+5. 肥皂水：应稳定 `SOAP / L2 / DRAIN`，不得回收；失水 2 s 后锁存清除，下一次洗手不继承。
+6. 液面降到电极以下：≤300 ms 转 `DRY`，阀排空；拔 TDS 探头约 3 tick 内 `FAULT/SENSOR`。
+7. 主循环卡死：3 s 软件看门狗复位，阀断电回排空（硬件 IWDT 仍待启用）。
 
-详细验收见 `Docs/实施说明_v2_20261116.md`、`Docs/开机自检_v2.1_20261116.md`。
+详细验收见 `Docs/实施说明_v2_20261116.md`、`Docs/M2h_SOAP_LATCH_20261121.md`、
+`Docs/缺陷审查_20261121.md` 第 8 章复现实验清单。
 
 ---
 
@@ -100,6 +108,9 @@ $tc   = "D:\Ranesas\toolchains\gcc_arm\arm-gnu-toolchain-13.2.Rel1-mingw-w64-i68
 | `Docs/进水识别加速与OLED大小写_v2.4_20261117.md` | 自适应 SETTLE、OLED 首字母大写 |
 | `Docs/洗手情景仿真_v2.4.1_20261117.md` | 真实洗手全过程仿真与指标 |
 | `Docs/气泡问题分析与处理_20261117.md` | 上方进水气泡的机械/软件处理建议 |
+| `Docs/CHANGELOG.md` | 全版本变更记录（含 M2i 安全修复、M2j 现场日志修复） |
+| `Docs/M2h_SOAP_LATCH_20261121.md` | SOAP_LATCH / NTU 速率 / 液位稳定带 |
+| `Docs/缺陷审查_20261121.md` | 35 项缺陷、12 个复现实验、修复后重审 |
 
 ---
 
@@ -108,9 +119,11 @@ $tc   = "D:\Ranesas\toolchains\gcc_arm\arm-gnu-toolchain-13.2.Rel1-mingw-w64-i68
 - 主分支：`main`；
 - 提交信息建议：`feat:` / `fix:` / `docs:` / `build:` / `test:`；
 - **不要提交**：`Debug/`、`.metadata/`、`_tmp/`、`*.log`、`*.launch`；
-- 发布固件如需入库，放在 `Firmware/<version>/`（当前尚未建立），不要从 `Debug/` 直接提交；
-- 修改阈值/判据时，同步更新 `Docs/` 下对应说明和验收记录。
+- 发布固件入库位置：`Docs/firmware/<version>.hex`（与现有 hex 约定一致），不要从 `Debug/` 直接提交；
+- 修改阈值/判据时，同步更新 `Docs/CHANGELOG.md`、`Docs/缺陷审查_20261121.md` 与验收记录。
 
 ### 基线
 
-- `v2.4.1-baseline`：首次纳入 Git 的完整源码基线（含 `validity.c`、v2.4.1 参数与文档）。
+- `v2.4.1-baseline`：首次纳入 Git 的完整源码基线（含 `validity.c`、v2.4.1 参数与文档）；
+- `v2.8.0-LEVEL-M2i`：2026-11-21 安全修复包（湿膜、标定强制 RECOVER、DRAIN 驻留、W 旧基线、AO 硬门槛、软件看门狗）；
+- `v2.8.0-LEVEL-M2j`：2026-11-21 现场日志修复（部分标定禁止自动回收、RECOVER 确认 60 s、trim 关闭、切槽特征即时重算）。

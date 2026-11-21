@@ -75,12 +75,12 @@ typedef struct st_decision_cfg
     float    ec_d2_sigma;        /* 判定"含皂液"的 σ 倍数，默认 8.0 */
     float    ec_d1_min_mv;       /* d1 绝对下限，默认 8.0 mV */
     float    ec_d2_min_mv;       /* d2 绝对下限，默认 20.0 mV */
-    float    ec_d1_pct;          /* d1 相对 EC0 的百分比下限，默认 6.0 %（348→20.9 mV） */
+    float    ec_d1_pct;          /* d1 相对 EC0 的百分比下限，默认 4.0 %（348→13.9 mV） */
     float    ec_d2_pct;          /* d2 相对 EC0 的百分比下限，默认 9.0 %（348→31.3 mV） */
-    float    ec_hyst_ratio;      /* EC 回差比例，默认 0.25 */
+    float    ec_hyst_ratio;      /* EC 回差比例，默认 0.10（v2.8-M2） */
     /* 浊度阈值（相对基线百分比） */
-    float    ntu_d1_pct;         /* 浊度"可清"上限，默认 8.0 % */
-    float    ntu_d2_pct;         /* 浊度"明显变脏"阈值，默认 25.0 % */
+    float    ntu_d1_pct;         /* 浊度"可清"上限，默认 7.0 % */
+    float    ntu_d2_pct;         /* 浊度"明显变脏"阈值，默认 9.0 % */
     float    ntu_hyst_ratio;     /* 浊度回差比例，默认 0.25 */
     /* 变化率抢先（方案 §6.4 四约束） */
     float    ec_rate_th_mv_s;    /* ΔEC 正向变化率阈值，默认 120.0 mV/s */

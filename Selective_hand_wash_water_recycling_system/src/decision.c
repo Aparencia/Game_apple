@@ -91,11 +91,11 @@ static const decision_cfg_t g_default_cfg =
     .ec_d2_sigma         = 8.0f,     /* 判定含皂液的 σ 倍数（默认 8σ） */
     .ec_d1_min_mv        = 8.0f,     /* d1 绝对下限 mV，防 σ 过小阈值退化 */
     .ec_d2_min_mv        = 20.0f,    /* d2 绝对下限 mV */
-    .ec_d1_pct           = 6.0f,     /* d1 相对 EC0 的百分比下限（现场清水漂移约 5%） */
+    .ec_d1_pct           = 4.0f,     /* d1 相对 EC0 的百分比下限（v2.8.0-M1e：第二次稀释肥皂 +14 mV 需进 L1） */
     .ec_d2_pct           = 9.0f,     /* d2 相对 EC0 的百分比下限（肥皂现场约 +11.5%） */
-    .ec_hyst_ratio       = 0.25f,    /* EC 迟滞 25% */
-    .ntu_d1_pct          = 8.0f,     /* 浊度"可清"上限（相对基线 %） */
-    .ntu_d2_pct          = 25.0f,    /* 浊度"明显变脏"阈值（相对基线 %） */
+    .ec_hyst_ratio       = 0.10f,    /* EC 迟滞 10%（v2.8-M2：25% 会把弱肥皂留在 L0） */
+    .ntu_d1_pct          = 7.0f,     /* 浊度"可清"上限（相对基线 %；清水稳定段实测最高 7.6%） */
+    .ntu_d2_pct          = 9.0f,     /* 浊度"明显变脏"阈值（肥皂 dNTU ≥8.6） */
     .ntu_hyst_ratio      = 0.25f,    /* 浊度迟滞 25% */
     .ec_rate_th_mv_s     = 120.0f,   /* 正向变化率阈值（≥3× 实测瞬态 38 mV/s） */
     .ec_rate_min_jump_mv = 5.0f,     /* 触发抢先所需最小绝对跳变 mV */
@@ -758,6 +758,17 @@ void decision_update(decision_t *p_dec, const sensor_pipeline_t *p_pipe, uint32_
      */
     if (REGIME_MEASURE != p_dec->gate.regime)
     {
+        /*
+         * M2i：失水（DRY）持续 2 s 视为一次洗手段结束，清除 SOAP 锁存。
+         * 原实现 45 s 内不区分“同一次洗手的稀释尾水”和“下一位用户的新洗手”，
+         * 第二个用户会被上一次的锁存强制排空。连续 MEASURE 内的尾水仍受保护。
+         */
+        if ((REGIME_DRY == p_dec->gate.regime)
+            && ((uint32_t)(now_ms - p_dec->gate.regime_since_ms) >= 2000U))
+        {
+            decision_clear_soap_latch(p_dec);
+        }
+
         p_dec->blank_active = false;
         decision_clear_counters(p_dec, now_ms);
 

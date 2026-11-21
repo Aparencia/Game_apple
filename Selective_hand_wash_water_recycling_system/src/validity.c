@@ -48,7 +48,7 @@ static const gate_cfg_t g_gate_default_cfg =
     .ec_dry_max_mv      = 200.0f,   /* 干态指纹上限（本次实测 58 mV） */
     .ec0_min_mv         = 50.0f,    /* 基线下限：低于它=模块没供电/探头悬空 */
     .ec0_max_mv         = 1600.0f,  /* 基线上限：开路伪值约 1650 mV 与脏水本底都要排除 */
-    .ec0_default_min_mv = 150.0f,   /* 默认干态（未实测）时，水中基线必须 ≥150 mV */
+    .ec0_default_min_mv = 400.0f,   /* 默认干态（未实测）时，水中基线必须 ≥400 mV（M2i 恢复防湿膜） */
     .ao_water_delta_mv  = 80.0f,    /* 水 AO 至少比空腔高 80 mV（本装置水 AO 高于空气） */
     .ao_clean_delta_mv  = 250.0f,   /* 自检基线要求清亮水：清水 AO-AO_DRY≈409，肥皂≈69 */
     .ntu_ao_min_mv      = 20U,      /* 浊度 AO 低于它=未供电/断线 */
@@ -296,6 +296,7 @@ void gate_init(gate_t *p_gate, const gate_cfg_t *p_cfg)
     p_gate->first_update      = true;
     p_gate->switch_seen      = false;
     p_gate->last_switch_ms   = 0U;
+    p_gate->tds_bad_count    = 0U;
     p_gate->sensor_ok        = false;
     p_gate->baseline_ok      = false;
     p_gate->immersed         = false;
@@ -369,6 +370,7 @@ void gate_note_switch(gate_t *p_gate, uint32_t now_ms)
 void gate_update(gate_t *p_gate, const pipeline_out_t *p_out, uint32_t now_ms)
 {
     bool sensor_ok;
+    bool tds_plausible;
     bool baseline_ok;
     bool immersed;
     bool stable;
@@ -392,11 +394,32 @@ void gate_update(gate_t *p_gate, const pipeline_out_t *p_out, uint32_t now_ms)
      * AO≈4.9V）仍被判"传感器正常"，工况停在 MEASURE —— 这是不能接受的。
      * 驱动契约里 ERR_RANGE 从不表示"数据可用"，所以这里直接从严。
      */
+    /*
+     * M2i：增加 TDS 绝对量程合理性。探头开路约 1650 mV、未供电约 0 mV，
+     * 二者都不属于任何真实水体；旧逻辑只看贴轨（raw≥4000），所以运行中拔探头
+     * 会变成 L1/L2 而不是 FAULT。连续 3 tick 异常才判故障，避免单点毛刺
+     * 触发 FAULT→LOCKOUT 3 s。
+     */
+    tds_plausible = (p_out->tds_mv25 >= 5.0f)
+                 && (p_out->tds_mv25 <= p_gate->cfg.ec0_max_mv);
+    if ((!p_out->adc_timeout) && (SENSOR_OK == p_out->tds_status))
+    {
+        if (tds_plausible)
+        {
+            p_gate->tds_bad_count = 0U;
+        }
+        else if (p_gate->tds_bad_count < 3U)
+        {
+            p_gate->tds_bad_count++;
+        }
+    }
+
     sensor_ok = (!p_out->adc_timeout)
              && (SENSOR_OK == p_out->tds_status)
              && (SENSOR_OK == p_out->ntu_status)
              && (!p_out->tds_rail)
-             && (p_out->ntu_ao_mv >= p_gate->cfg.ntu_ao_min_mv);
+             && (p_out->ntu_ao_mv >= p_gate->cfg.ntu_ao_min_mv)
+             && (p_gate->tds_bad_count < 3U);
 
     /*
      * 基线有效三条件：已标定 + 量程合理 + 明显高于干态。
@@ -411,10 +434,10 @@ void gate_update(gate_t *p_gate, const pipeline_out_t *p_out, uint32_t now_ms)
                && (p_out->ec0_mv25 >= (p_gate->ec_dry_mv + p_gate->cfg.ec_wet_delta_mv));
 
     /*
-     * 干态指纹若是"默认值"（没实测），水中基线还要过一道更高的绝对门限：
-     * 默认 EC_DRY=60 时 3× 只有 180 mV，而"电极刚被水淋湿、腔里其实没水"很容易读到
-     * 200~500 mV —— 那样的基线一旦生效，空腔 g≡1 → 又回到回收空气。
-     * 400 mV 以上的读数才认为"确实有水体、不是一层水膜"。
+     * 干态指纹若是"默认值"（没实测），水中基线还要过 400 mV 绝对门限：
+     * 电极刚被水淋湿、腔里其实没水时很容易读到 150~500 mV，那样的基线一旦生效，
+     * 空腔 g≡1 → 又回到回收空气。M2i 起自动/手动湿态基线都要求 DRY_SOURCE_MEASURED，
+     * 这里的 400 mV 是第二道防线（防止未来有路径绕过 app 层检查）。
      */
     if ((baseline_ok) && (DRY_SOURCE_MEASURED != p_gate->dry_source))
     {

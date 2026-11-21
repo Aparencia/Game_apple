@@ -38,15 +38,32 @@ extern "C" {
 #define OLED_I2C_ADDR       0x3CU  /* SSD1306 7-bit 地址 */
 #define OLED_MAX_FAIL       3U     /* 连续失败帧数达到后判"屏幕丢失" */
 
-/* 面板左右方向：SSD1306 的"列重映射 Segment Re-map"命令字（软件里唯一的镜像开关）。
- *   0xA0 = 显存列地址 0 → SEG0；
- *   0xA1 = 显存列地址 127 → SEG0（大部分 0.96" 模块的配方）。
- * 本板实测（2026-11-01，照片逐字比对）：写 0xA1 时整屏文字左右镜像（"L2 SOAP DRAIN"
- * 反着写、读不出来），改 0xA0 后方向正常。原因是这块面板的玻璃/软排线走线与常见模块
- * 相反，与固件其它部分无关（显存坐标、字库、布局都不用动）。
- * 换模块/换批次后如果左右又反了，只改这一个宏（0xA0 <-> 0xA1），不用改 oled.c/display.c。
- * 注意：这只是面板硬件级的左右翻转，不改变显存语义：x=0 永远是"逻辑最左列"。 */
+/*
+ * 面板安装方向（SSD1306 硬件级重映射，不改显存坐标/字库/布局）：
+ *   0 = 正常        列 0xA0 + 行 0xC8（本板原方向）
+ *   1 = 左右镜像    列 0xA1 + 行 0xC8
+ *   2 = 上下翻转    列 0xA0 + 行 0xC0
+ *   3 = 180° 反转   列 0xA1 + 行 0xC0（面板倒装时用）
+ *
+ * 说明：本板 2026-11-01 实测 0xA1 单独使用会左右镜像，因此正常方向取 0xA0；
+ * 若整块屏倒装（现场“反转”），必须同时翻列和翻行，即 0xA1 + 0xC0。
+ * 只改这一个宏即可，oled.c/display.c 不用动。
+ */
+#define OLED_ORIENTATION     3
+
+#if   (0 == OLED_ORIENTATION)
 #define OLED_SEG_REMAP_CMD   0xA0U
+#define OLED_COM_SCAN_CMD    0xC8U
+#elif (1 == OLED_ORIENTATION)
+#define OLED_SEG_REMAP_CMD   0xA1U
+#define OLED_COM_SCAN_CMD    0xC8U
+#elif (2 == OLED_ORIENTATION)
+#define OLED_SEG_REMAP_CMD   0xA0U
+#define OLED_COM_SCAN_CMD    0xC0U
+#else
+#define OLED_SEG_REMAP_CMD   0xA1U
+#define OLED_COM_SCAN_CMD    0xC0U
+#endif
 
 /* 32x32 汉字索引：与 oledfont.h 的 oled_hz32_bitmaps[] 顺序一一对应（改顺序必须两边一起改）。
  * 字库共 17 个字：清水污待机冲洗故障 + v1.3.0 追加 回收排空手动 + v2.4.2 追加 校准；

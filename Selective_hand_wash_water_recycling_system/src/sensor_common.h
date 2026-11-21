@@ -39,6 +39,15 @@ bool     timebase_init(void);
 /* 读取上电以来的毫秒数（中断里累加；安全回绕）。 */
 uint32_t timebase_ms(void);
 
+/*
+ * 软件看门狗：在 SysTick 中断里计一个 3 s 超时，主循环必须定期 timebase_wdt_feed()；
+ * 超时用 NVIC_SystemReset() 复位，P104 复位后回到排空电平。
+ * 注意：这是软件看门狗，不能替代硬件 IWDT——若主循环在关中断状态下永久卡死，
+ *       本机制也失效；量产应再启用硬件 IWDT。
+ */
+void     timebase_wdt_arm(void);
+void     timebase_wdt_feed(void);
+
 /* ============================ 数学/滤波工具 ============================ */
 /* 原地排序后取中位数（会修改传入数组）。n=0 返回 0。 */
 uint16_t sensor_median_u16(uint16_t *p_values, uint16_t n);

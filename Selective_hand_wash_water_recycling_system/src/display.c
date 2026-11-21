@@ -442,7 +442,7 @@ static void disp_build_water_page(const pipeline_out_t *p_out, const decision_ou
     {
         p_page->big0 = (uint8_t)OLED_HZ32_DAI;
         p_page->big1 = (uint8_t)OLED_HZ32_JI;
-        disp_copy(p_page->r1, (uint32_t)sizeof(p_page->r1), "Settle wait 4s");
+        disp_copy(p_page->r1, (uint32_t)sizeof(p_page->r1), "Settle wait");
         disp_fmt_numbers(p_page->r2, (uint32_t)sizeof(p_page->r2), p_out);
         return;
     }

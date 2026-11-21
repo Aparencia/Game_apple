@@ -21,7 +21,7 @@
  *
  * 位图语义（VAL_*）：
  *   VAL_SENSOR_OK    两路 ADC 无超时、无贴轨、驱动状态可接受；
- *   VAL_BASELINE_OK  基线已建立且落在物理量程内（水中 EC0 ≥ 3×EC_DRY）；
+ *   VAL_BASELINE_OK  基线已建立且落在物理量程内（水中 EC0 ≥ EC_DRY + 80 mV）；
  *   VAL_IMMERSED     电极被水淹到（见 gate_update 里的浸没判据）；
  *   VAL_STABLE       特征量在稳定带内（变化率不超限）；
  *   VAL_BLANKING     换向后的屏蔽窗内（此时判据冻结，但已生效的许可不撤销）；
@@ -93,7 +93,7 @@ typedef enum e_dry_source
 typedef struct st_gate_cfg
 {
     /* 浸没判据（v2.3 改为"差值"而非固定倍数）：
-     *   - 现场清水 EC0≈348 mV、空腔 23 mV，3×EC_DRY 在干态被残水抬高时会误判"没水"；
+     *   - 现场清水 EC0≈348 mV、空腔 23 mV，固定倍数在干态被残水抬高时会误判"没水"；
      *   - 改用 EC ≥ EC_DRY + ec_wet_delta_mv（默认 80 mV），同时保留 g ≥ wet_ratio。
      *   - ec_dry_ratio 保留但不再参与判据（旧版 3× 逻辑已弃用）。 */
     float    wet_ratio;             /* 默认 0.30：低于它认为是"没淹到电极" */
@@ -103,7 +103,7 @@ typedef struct st_gate_cfg
     /* 基线量程校验：EC0 必须落在 [ec0_min, ec0_max]，且 ≥ EC_DRY + ec_wet_delta_mv */
     float    ec0_min_mv;            /* 默认 50：低于它视为模块未供电/探头悬空 */
     float    ec0_max_mv;            /* 默认 1600：开路伪值约 1650 与脏水本底都要挡住 */
-    float    ec0_default_min_mv;    /* 默认 150：干态指纹是 DEFAULT 时，水中基线必须 ≥ 它 */
+    float    ec0_default_min_mv;    /* 默认 400：干态指纹是 DEFAULT 时，水中基线必须 ≥ 它（M2i 恢复；防湿膜） */
     /*
      * 浊度"有水"确认（v2.3，按现场实测方向）：
      *   本装置 清水 AO≈2639 mV > 空腔 AO≈2241 mV，与"空气满量程"的常见假设相反。
@@ -115,8 +115,8 @@ typedef struct st_gate_cfg
     /* 浊度故障判据：AO 小于它视为未供电/断线（NTU_RAIL） */
     uint32_t ntu_ao_min_mv;         /* 默认 20 */
     /* 稳定判据（方案 §6.2） */
-    float    rate_stable_mv_s;      /* 默认 30 mV/s（约干态噪声 3σ） */
-    float    rate_stable_pct_s;     /* 默认 5 %/s（浊度相对变化率） */
+    float    rate_stable_mv_s;      /* 默认 80 mV/s（v2.4.1：肥皂约 50、换向约 38，30 太紧） */
+    float    rate_stable_pct_s;     /* 默认 20 %/s（肥皂约 16%/s，5 太紧） */
     /* 时序（方案 §5 / §10） */
     uint32_t settle_ms;             /* 默认 4000：入水后稳定期 */
     uint32_t settle_min_ms;         /* 默认 1500：最早允许进 MEASURE 的时间（v2.4 自适应） */
@@ -161,6 +161,7 @@ typedef struct st_gate
     uint32_t   last_switch_ms;      /* 最近一次物理换向时刻 */
 
     /* 本 tick 的判据结果 */
+    uint8_t    tds_bad_count;       /* EC 绝对量程连续异常计数（3 tick 去抖，防单点毛刺） */
     bool       sensor_ok;
     bool       baseline_ok;
     bool       immersed;
